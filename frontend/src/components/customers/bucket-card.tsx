@@ -4,9 +4,11 @@ import {
   CalendarDays,
   Ellipsis,
   LoaderCircle,
+  LogIn,
   Pencil,
   Play,
   ShieldCheck,
+  Smartphone,
   Trash2,
 } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
@@ -46,6 +48,8 @@ interface RowCallbacks {
   onDelete: (c: Customer) => void
   onTestSession: (c: Customer) => void
   onMove: (c: Customer, newDate: string) => void
+  onFetchOtp: (c: Customer) => void
+  onLogin: (c: Customer) => void
 }
 
 function RowActions({
@@ -55,8 +59,13 @@ function RowActions({
   onDelete,
   onTestSession,
   onMove,
+  onFetchOtp,
+  onLogin,
 }: RowCallbacks & { customer: Customer; testing: boolean }) {
   const [moveOpen, setMoveOpen] = useState(false)
+  // Customers not created via the account flow have no saved number — they
+  // can't fetch a fresh OTP or be auto-logged-in.
+  const hasNumber = Boolean(customer.number_token)
 
   return (
     <div className="relative flex items-center justify-end">
@@ -110,6 +119,31 @@ function RowActions({
           <DropdownMenuItem onClick={() => onTestSession(customer)}>
             <ShieldCheck />
             Test session
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            disabled={!hasNumber}
+            onClick={() => onFetchOtp(customer)}
+            title={
+              hasNumber
+                ? undefined
+                : "No saved number (not created via the account flow)"
+            }
+          >
+            <Smartphone />
+            Fetch OTP
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={!hasNumber}
+            onClick={() => onLogin(customer)}
+            title={
+              hasNumber
+                ? undefined
+                : "No saved number (not created via the account flow)"
+            }
+          >
+            <LogIn />
+            Log in
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem variant="destructive" onClick={() => onDelete(customer)}>

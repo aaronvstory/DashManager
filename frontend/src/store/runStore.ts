@@ -348,11 +348,15 @@ export const useRunStore = create<RunState>((set) => ({
         case "run_error":
           return { ...base, runActive: false }
 
-        // Login flow + plain log lines: surface via lastEvent / liveLog only.
+        // Login / relogin flow + plain log lines: surface via lastEvent / liveLog only.
         case "log":
         case "login_waiting":
         case "login_captured":
         case "login_failed":
+        case "relogin_started":
+        case "relogin_outcome":
+        case "relogin_done":
+        case "relogin_failed":
           return base
 
         default:

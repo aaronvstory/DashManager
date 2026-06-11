@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { format } from "date-fns"
-import { Plus, Sparkles, UserPlus } from "lucide-react"
+import { Download, Plus, Sparkles, UserPlus } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 import { AddCustomerDialog } from "@/components/customers/add-customer-dialog"
@@ -9,6 +9,9 @@ import { CreateAccountDialog } from "@/components/customers/create-account-dialo
 import { BucketCard } from "@/components/customers/bucket-card"
 import { DeleteCustomerDialog } from "@/components/customers/delete-customer-dialog"
 import { EditCustomerDialog } from "@/components/customers/edit-customer-dialog"
+import { FetchOtpDialog } from "@/components/customers/fetch-otp-dialog"
+import { ImportDaisyDialog } from "@/components/customers/import-daisy-dialog"
+import { LoginCustomerDialog } from "@/components/customers/login-customer-dialog"
 import {
   apiErrorDetail,
   customerName,
@@ -79,8 +82,11 @@ export default function CustomersPage() {
 
   const [addOpen, setAddOpen] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [editing, setEditing] = useState<Customer | null>(null)
   const [deleting, setDeleting] = useState<Customer | null>(null)
+  const [fetchingOtp, setFetchingOtp] = useState<Customer | null>(null)
+  const [loggingIn, setLoggingIn] = useState<Customer | null>(null)
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<number>>(new Set())
   const [testingIds, setTestingIds] = useState<ReadonlySet<number>>(new Set())
   const [strategy, setStrategy] = useState<StrategyName>("scripted")
@@ -192,6 +198,10 @@ export default function CustomersPage() {
         }
         actions={
           <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setImportOpen(true)}>
+              <Download data-icon="inline-start" />
+              Import from CustomerDaisy
+            </Button>
             <Button variant="outline" onClick={() => setCreateOpen(true)}>
               <Sparkles data-icon="inline-start" />
               Create account
@@ -225,6 +235,8 @@ export default function CustomersPage() {
               onDelete={setDeleting}
               onTestSession={(c) => void testSession(c)}
               onMove={(c, newDate) => void moveCustomer(c, newDate)}
+              onFetchOtp={setFetchingOtp}
+              onLogin={setLoggingIn}
             />
           ))}
           {/* Keep the last bucket clear of the floating selection bar. */}
@@ -246,6 +258,24 @@ export default function CustomersPage() {
       <AddCustomerDialog open={addOpen} onOpenChange={setAddOpen} />
 
       <CreateAccountDialog open={createOpen} onOpenChange={setCreateOpen} />
+
+      <ImportDaisyDialog open={importOpen} onOpenChange={setImportOpen} />
+
+      {fetchingOtp ? (
+        <FetchOtpDialog
+          key={fetchingOtp.id}
+          customer={fetchingOtp}
+          onClose={() => setFetchingOtp(null)}
+        />
+      ) : null}
+
+      {loggingIn ? (
+        <LoginCustomerDialog
+          key={loggingIn.id}
+          customer={loggingIn}
+          onClose={() => setLoggingIn(null)}
+        />
+      ) : null}
 
       {editing ? (
         <EditCustomerDialog

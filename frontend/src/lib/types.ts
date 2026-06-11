@@ -50,6 +50,8 @@ export interface Customer {
   session_status: SessionStatus
   created_at: string
   notes: string
+  /** Daisy number token; '' when the customer wasn't created via the account flow. */
+  number_token?: string
 }
 
 /** Raw result of scraping one card on https://www.doordash.com/orders. */
@@ -130,6 +132,10 @@ export type EventType =
   | "otp_resent"
   | "account_created"
   | "account_failed"
+  | "relogin_started"
+  | "relogin_outcome"
+  | "relogin_done"
+  | "relogin_failed"
   | "run_started"
   | "customer_started"
   | "session_invalid"
@@ -167,6 +173,10 @@ export const EVENT_TYPES: readonly EventType[] = [
   "otp_resent",
   "account_created",
   "account_failed",
+  "relogin_started",
+  "relogin_outcome",
+  "relogin_done",
+  "relogin_failed",
   "run_started",
   "customer_started",
   "session_invalid",
