@@ -121,7 +121,10 @@ async def _verify_orders(page, result, refund_cfg) -> tuple[int, int]:
 
     verified = drift = 0
     for o in result.orders:
-        if o.order_status != OrderStatus.completed or not o.receipt_url:
+        # Refunds live on BOTH completed and cancelled orders (a cancelled
+        # order that got refunded is exactly the case we audit). Only skip
+        # in-progress orders (no receipt yet).
+        if o.order_status == OrderStatus.in_progress or not o.receipt_url:
             continue
         try:
             text = await open_receipt(page, o.receipt_url)
