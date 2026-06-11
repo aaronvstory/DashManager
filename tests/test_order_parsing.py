@@ -17,6 +17,7 @@ def test_cancelled_card_verbatim() -> None:
         "items_count": 5,
         "price": 112.34,
         "cancelled": True,
+        "dasher_name": "",
     }
 
 
@@ -63,6 +64,7 @@ def test_empty_text() -> None:
         "items_count": None,
         "price": None,
         "cancelled": False,
+        "dasher_name": "",
     }
 
 

@@ -109,7 +109,14 @@ ALTER TABLE customers ADD COLUMN api_url TEXT NOT NULL DEFAULT '';
 ALTER TABLE customers ADD COLUMN mirror_hosts TEXT NOT NULL DEFAULT '[]';
 """
 
-_MIGRATIONS: list[str] = [SCHEMA_V1, SCHEMA_V2]  # index i -> user_version i+1
+# V3: per-order lifecycle detail — the live status text ("Heading to you")
+# and the assigned dasher name, shown on the live customer view.
+SCHEMA_V3 = """
+ALTER TABLE orders ADD COLUMN status_text TEXT NOT NULL DEFAULT '';
+ALTER TABLE orders ADD COLUMN dasher_name TEXT NOT NULL DEFAULT '';
+"""
+
+_MIGRATIONS: list[str] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3]  # idx i -> version i+1
 
 
 def _connect(db_path: Path | None = None) -> sqlite3.Connection:
@@ -209,21 +216,25 @@ async def upsert_order(customer_id: int, order_uuid: str, receipt_url: str,
                        store_name: str = "", description: str = "",
                        items_count: int | None = None,
                        price: float | None = None,
-                       order_status: str = "active") -> int:
+                       order_status: str = "completed",
+                       status_text: str = "", dasher_name: str = "") -> int:
     """Insert or refresh a scraped order; returns the order id.
 
     Refund fields are NOT touched on re-scrape (a later check owns those).
     """
     await execute(
         """INSERT INTO orders (customer_id, order_uuid, receipt_url, store_name,
-                               description, items_count, price, order_status)
-           VALUES (?,?,?,?,?,?,?,?)
+                               description, items_count, price, order_status,
+                               status_text, dasher_name)
+           VALUES (?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(customer_id, order_uuid) DO UPDATE SET
              receipt_url=excluded.receipt_url, store_name=excluded.store_name,
              description=excluded.description, items_count=excluded.items_count,
-             price=excluded.price, order_status=excluded.order_status""",
+             price=excluded.price, order_status=excluded.order_status,
+             status_text=excluded.status_text,
+             dasher_name=excluded.dasher_name""",
         (customer_id, order_uuid, receipt_url, store_name, description,
-         items_count, price, order_status))
+         items_count, price, order_status, status_text, dasher_name))
     row = await query_one(
         "SELECT id FROM orders WHERE customer_id=? AND order_uuid=?",
         (customer_id, order_uuid))

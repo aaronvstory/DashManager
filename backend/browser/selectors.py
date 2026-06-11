@@ -47,6 +47,24 @@ CANCELLED_BADGE_TEXTS = ["order cancelled", "order canceled"]
 SCROLL_MAX_ITERS = 40       # scroll-until-stable loop bounds (harvest)
 SCROLL_STABLE_ITERS = 2
 
+# ── Order lifecycle signals (verified live 2026-06-12) ──────────────────────
+# Empty account: the orders page literally says this and nothing else.
+ORDERS_EMPTY_TEXT = "no previous deliveries"
+# Active/in-progress orders live under an "In Progress" section with status
+# text like these; they show "View Order" (no receipt UUID yet).
+ORDERS_IN_PROGRESS_HEADER = "in progress"
+IN_PROGRESS_STATUS_TEXTS = [
+    "heading to you", "preparing", "order in progress", "arrives between",
+    "being prepared", "almost there", "on the way", "confirming your order",
+    "finding a dasher", "dasher is", "picked up",
+]
+# Active-order cards (no /orders/<uuid> receipt link).
+ACTIVE_ORDER_CARD_SELECTORS = [
+    '[data-testid="OrderTrackerOrderItem"]',
+    '[data-testid="OrdersInProgressSection"] [role="link"]',
+    'button:has-text("View Order")',
+]
+
 # ── Support chat (user-specified 2026-06 flow + harvested chat machinery) ───
 # Navigation: HELP_ORDERS_URL -> click a[href*="<order-uuid>"] ->
 # /help/orders/<uuid>?deliveryUUID=... -> "Contact support" -> widget.

@@ -18,8 +18,11 @@ class SessionStatus(StrEnum):
 
 
 class OrderStatus(StrEnum):
-    active = "active"
-    cancelled = "cancelled"
+    """Order lifecycle. Refunds are only checked on `completed` orders."""
+    in_progress = "in_progress"  # live order ("Heading to you"/"Preparing")
+    completed = "completed"      # finished, has a receipt — refund-checkable
+    cancelled = "cancelled"      # "Order Cancelled" badge
+    active = "active"            # legacy alias; treated as in_progress
 
 
 class RefundStatus(StrEnum):
@@ -74,14 +77,28 @@ class Customer(BaseModel):
 
 
 class ScrapedOrder(BaseModel):
-    """Raw result of scraping one card on https://www.doordash.com/orders."""
+    """Raw result of scraping one card on https://www.doordash.com/orders.
+
+    In-progress orders have no receipt UUID yet (order_uuid == ""), so they
+    are tracked by store/status only until they complete.
+    """
     order_uuid: str
     receipt_url: str
     store_name: str = ""
     description: str = ""
     items_count: int | None = None
     price: float | None = None
-    order_status: OrderStatus = OrderStatus.active
+    order_status: OrderStatus = OrderStatus.completed
+    status_text: str = ""   # e.g. "Heading to you" for in-progress orders
+    dasher_name: str = ""   # assigned dasher, when shown (e.g. "Erin")
+
+
+class OrdersScrapeResult(BaseModel):
+    """Full classification of a customer's orders page."""
+    state: str  # "none" | "in_progress" | "has_completed"
+    orders: list[ScrapedOrder] = Field(default_factory=list)
+    in_progress_count: int = 0
+    completed_count: int = 0
 
 
 class Order(BaseModel):

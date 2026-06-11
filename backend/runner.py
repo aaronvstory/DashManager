@@ -171,7 +171,17 @@ class RunManager:
                     cid, so.order_uuid, so.receipt_url,
                     store_name=so.store_name, description=so.description,
                     items_count=so.items_count, price=so.price,
-                    order_status=so.order_status.value)
+                    order_status=so.order_status.value,
+                    status_text=so.status_text, dasher_name=so.dasher_name)
+                # Refunds only apply to FINISHED orders — skip in-progress and
+                # cancelled (cancelled refunds are detected on the receipt).
+                if so.order_status.value == "in_progress":
+                    emit("order_checked", {"order_id": oid,
+                                           "refund_status": "unchecked",
+                                           "order_status": "in_progress",
+                                           "status_text": so.status_text,
+                                           "dasher_name": so.dasher_name})
+                    continue
                 emit("order_checking", {"order_id": oid,
                                         "store": so.store_name,
                                         "url": so.receipt_url})
