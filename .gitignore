@@ -39,4 +39,4 @@ Desktop.ini
 logs/
 
 # ── Session state ────────────────────────────────────────────────────
-.claude/session-log.md
+.claude/
