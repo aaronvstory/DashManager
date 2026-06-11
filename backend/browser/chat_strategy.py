@@ -137,9 +137,20 @@ def classify_agent_turn(text: str, cfg: dict[str, Any]) -> str:
         return "dashpass"
     if _contains_any(text, cfg.get("call_offer_patterns", [])):
         return "call"
-    if "?" in (text or ""):
+    # A genuine clarifying question ends a line with "?". Matching any "?"
+    # anywhere is too broad (it fires on "Is there anything else?" pleasantries
+    # and on our own quoted text), so require a trailing question mark on one
+    # of the agent's lines.
+    if _ends_with_question(text):
         return "question"
     return "repush"
+
+
+def _ends_with_question(text: str) -> bool:
+    for line in (text or "").splitlines():
+        if line.rstrip().endswith("?"):
+            return True
+    return False
 
 
 @register

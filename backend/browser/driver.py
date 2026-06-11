@@ -187,9 +187,19 @@ async def handle_cloudflare(page: Page) -> bool:
     deadline = time.monotonic() + CLOUDFLARE_B_MAX_WAIT_S
     while time.monotonic() < deadline:
         await asyncio.sleep(CLOUDFLARE_B_POLL_S)
-        if classify_cloudflare(await _page_text(page)) != "b":
-            return True  # gate cleared on its own (Turnstile solved)
-    # Still stuck — try exactly one fresh navigation (not a reload).
+        variant = classify_cloudflare(await _page_text(page))
+        if variant == "":
+            return True  # fully cleared (no gate of any kind)
+        if variant == "a":
+            # B downgraded to the soft A gate — finish it with A's wait+reload.
+            await asyncio.sleep(CLOUDFLARE_WAIT_S)
+            try:
+                await page.reload(wait_until="domcontentloaded")
+                await asyncio.sleep(3)
+            except Exception:
+                pass
+            return True
+    # Still stuck on B — try exactly one fresh navigation (not a reload).
     try:
         await page.goto(target_url, wait_until="domcontentloaded")
     except Exception:

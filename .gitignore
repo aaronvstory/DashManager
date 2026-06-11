@@ -54,3 +54,7 @@ _recheck.py
 
 # Serena project cache
 .serena/
+
+# Codex review logs
+codex_*.log
+.codex_*

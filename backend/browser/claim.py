@@ -57,15 +57,24 @@ def claim_succeeded(receipt_text: str, cfg: dict[str, Any]) -> ClaimResult:
     """
     lo = (receipt_text or "").lower()
     to_original = any(t in lo for t in CLAIM_SUCCESS_TEXTS)
+    # A refund that landed as CREDITS is NOT a win, even with a Refund line.
+    # detect() does not veto credits (that guard lives in chat.detect_success),
+    # so check here explicitly: credits mentioned without an original-payment
+    # banner means the wrong method was applied.
+    credits_only = (REFUND_METHOD_CREDITS_TEXT in lo) and not to_original
     rr = detect(receipt_text, cfg)
     refunded = rr.status in (RefundStatus.refunded, RefundStatus.partial)
     if refunded and to_original:
         return ClaimResult(outcome="success", amount=rr.refund_amount,
                            to_original_payment=True, confirmed=True)
-    if refunded and not to_original:
-        # Money moved but we can't see the original-payment banner — treat as
-        # success on the refund line (the detector already vetoes credits via
-        # its own logic) but record that the banner wasn't confirmed.
+    if refunded and credits_only:
+        # Money moved, but to credits — surface for a human, don't call it won.
+        return ClaimResult(outcome="wrong_method", amount=rr.refund_amount,
+                           to_original_payment=False, confirmed=False,
+                           error="refund posted as credits, not original card")
+    if refunded:
+        # Money moved and no credits signal — accept the refund line, but note
+        # the original-payment banner wasn't positively confirmed.
         return ClaimResult(outcome="success", amount=rr.refund_amount,
                            to_original_payment=False, confirmed=True)
     return ClaimResult(outcome="failed", amount=rr.total_amount,

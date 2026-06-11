@@ -135,12 +135,15 @@ CLAIM_GET_REFUND_TEXT = "Get refund"
 CLAIM_REMAKE_OFFER_TEXTS = ["can remake your order", "review new order",
                             "remake your order"]
 CLAIM_AVOID_REMAKE_TEXT = "Review new order"  # must NOT be clicked
-# Banner confirming a refund went to the original card (claim success signal).
+# Banner confirming a refund went to the ORIGINAL CARD (claim success signal).
+# Only original-payment phrasing counts — a generic "we've issued a refund"
+# banner also appears for a CREDITS refund, so it must NOT be a success signal
+# here (claim_succeeded checks credits separately).
 CLAIM_SUCCESS_TEXTS = [
     "to your original payment method",
     "to your original payment",
-    "issued a refund",
-    "we've issued",
+    "back to your original",
+    "to your original card",
 ]
 CLAIM_NAV_SETTLE_S = 2.0
 
