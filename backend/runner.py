@@ -56,7 +56,9 @@ class RunManager:
     async def _resolve_customers(self, scope: dict[str, Any]) -> list[dict]:
         customers = await db.list_customers()
         if scope.get("customer_ids"):
-            wanted = set(scope["customer_ids"])
+            # Coerce in case the API client sends IDs as strings — otherwise
+            # the int customer ids never match and the run selects nobody.
+            wanted = {int(cid) for cid in scope["customer_ids"]}
             return [c for c in customers if c["id"] in wanted]
         if scope.get("bucket_date"):
             return [c for c in customers

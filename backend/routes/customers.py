@@ -102,7 +102,9 @@ async def update_customer(cid: int, body: CustomerPatch) -> dict[str, Any]:
     if fields:
         await db.update_customer(cid, **fields)
     row = await db.get_customer(cid)
-    assert row is not None
+    if row is None:  # not assert — must survive `python -O`
+        raise HTTPException(status_code=500,
+                            detail="customer vanished after update")
     return row
 
 

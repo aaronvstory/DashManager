@@ -86,14 +86,22 @@ def _clean_lines(text: str) -> list[str]:
     return out
 
 
-def extract_diff(prev_text: str, curr_text: str) -> str:
+def extract_diff(prev_text: str, curr_text: str, exclude: str = "") -> str:
     """New agent text: lines in curr but not prev, as a line MULTISET diff.
 
     Multiset (not set) so a repeated line ("Thank you" sent twice) still
     surfaces; curr order is preserved. Timestamp/blank noise is stripped first
     so a 'Received just now' -> 'Received 1 minute ago' rewrite is not a diff.
+
+    `exclude` is our own just-sent message: its lines are seeded into the
+    baseline budget so our outgoing bubble never shows up as agent text. This
+    lets the caller snapshot `prev_text` BEFORE sending (closing the timing
+    window where a sub-second agent reply would otherwise land in the baseline
+    and be missed).
     """
     budget = Counter(_clean_lines(prev_text))
+    for line in _clean_lines(exclude):
+        budget[line] += 1
     new: list[str] = []
     for line in _clean_lines(curr_text):
         if budget[line] > 0:
@@ -338,16 +346,18 @@ async def run_chat(page: Page, strategy: ChatStrategy, ctx: ChatContext, *,
         # before the baseline, so wait_for_reply only fires on the reply to
         # THIS message (harvest-proven race fix).
         await asyncio.sleep(1.2)
+        # Baseline captured BEFORE sending. Our own outgoing bubble is then
+        # excluded from the diff explicitly (we know its exact text), so a
+        # very fast agent reply can never slip into the baseline and get
+        # missed — no reliance on a post-send sleep window.
+        prev_text = await _body_text(page)
         before = await count_received(page)
         if not await send_message(page, text):
             return None
         await _rec("out", text)
-        # Snapshot AFTER our own bubble renders so it never appears in the diff.
-        await asyncio.sleep(0.3)
-        prev_text = await _body_text(page)
         if not await wait_for_reply(page, before, max_wait):
             return ""
-        reply = extract_diff(prev_text, await _body_text(page))
+        reply = extract_diff(prev_text, await _body_text(page), exclude=text)
         if reply:
             await _rec("in", reply)
         return reply

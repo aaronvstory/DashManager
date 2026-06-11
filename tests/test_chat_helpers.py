@@ -140,3 +140,20 @@ class TestCreditGuard:
         assert not detect_success(
             "I have added credits and your refund has been processed.",
             phrases)
+
+
+class TestExtractDiffExclude:
+    """Baseline captured before send: our own message must not be agent text."""
+
+    def test_own_message_excluded_even_if_in_curr(self):
+        from backend.browser.chat import extract_diff
+        prev = "Hi Colleen\nWhat can we help with?"
+        # Our outgoing message AND a fast agent reply both appear in curr.
+        curr = ("Hi Colleen\nWhat can we help with?\nremove tip please\n"
+                "Sure, one moment")
+        out = extract_diff(prev, curr, exclude="remove tip please")
+        assert out == "Sure, one moment"
+
+    def test_no_exclude_keeps_prior_behavior(self):
+        from backend.browser.chat import extract_diff
+        assert extract_diff("a\nb", "a\nb\nc") == "c"

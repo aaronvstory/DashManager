@@ -215,7 +215,10 @@ async def upsert_order(customer_id: int, order_uuid: str, receipt_url: str,
     row = await query_one(
         "SELECT id FROM orders WHERE customer_id=? AND order_uuid=?",
         (customer_id, order_uuid))
-    assert row is not None
+    if row is None:  # not assert — must survive `python -O`
+        raise RuntimeError(
+            f"order vanished after upsert (customer={customer_id}, "
+            f"uuid={order_uuid})")
     return row["id"]
 
 
