@@ -105,6 +105,15 @@ Three-way refund classification (detector now implements this):
 6. Human joins: **"You are now connected to our support agent"** — agent echoes the amount + "original payment card"
 7. Answer any clarifying Qs (e.g. "store canceled due to items unavailable"), ask to confirm BOTH today's orders refunded to card + amounts; thank + goodbye. Decline DashPass.
 
+**Cloudflare — TWO variants (2026-06-12):**
+- Variant A (handled): "Verifying you are human" → wait 30s + reload clears it.
+- Variant B (NEW, NOT yet handled): "Performing security verification" /
+  "protect against malicious bots" + a Ray ID — a harder Turnstile gate that
+  did NOT clear with reload or a 20s+ wait on Heidi's session. `handle_cloudflare`
+  must also detect this text; handling likely needs a longer wait, a fresh
+  navigation, or surfacing to the user (per the early VPN/connection note).
+  This is a real robustness gap to design for.
+
 **Detection signals for the automation:**
 - bot vs human: bot says "virtual assistant" / shows quick-reply buttons; human handoff = "Connecting you with an agent" then "connected to our support agent".
 - ⚠️ **Agents time out if you're slow** — "Since you are unresponsive let me call you" after a delay. The automation must reply promptly once a human is engaged (LLM/scripted = near-instant; this is where the speed matters more than the cleverness).
