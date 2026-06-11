@@ -1,0 +1,19 @@
+# Pin LF for all source files so Windows autocrlf never flips whole files.
+* text=auto eol=lf
+*.py text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.css text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+
+# Windows batch scripts MUST be CRLF.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary
+*.png binary
+*.ico binary
+*.gif binary

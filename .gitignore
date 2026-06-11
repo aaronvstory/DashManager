@@ -1,0 +1,42 @@
+# ── Data & secrets (NEVER commit — real customer data) ──────────────
+data/
+*.db
+*.db-wal
+*.db-shm
+*cookies*.json
+*storage*.json
+session_*.json
+profiles/
+ss/
+screenshots/
+.env
+.env.*
+!.env.example
+
+# ── Python ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# ── Node / frontend ──────────────────────────────────────────────────
+node_modules/
+frontend/dist/
+frontend/.vite/
+*.local
+
+# ── OS / editor junk ─────────────────────────────────────────────────
+nul
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.log
+logs/
+
+# ── Session state ────────────────────────────────────────────────────
+.claude/session-log.md
