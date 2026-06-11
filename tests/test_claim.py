@@ -55,6 +55,19 @@ def test_claim_failed_unparseable():
     assert r.confirmed is False
 
 
+def test_claim_refund_to_credits_is_wrong_method():
+    # A Refund line that landed as CREDITS (no original-payment banner) must
+    # NOT be reported as a win — detect() doesn't veto credits, claim does.
+    credits = (
+        "We've issued a $112.24 refund to your DoorDash credits balance\n"
+        "Subtotal\n$95.00\nTotal\n$112.24\nRefund\n-$112.24"
+    )
+    r = claim_succeeded(credits, CFG)
+    assert r.outcome == "wrong_method"
+    assert r.confirmed is False
+    assert r.to_original_payment is False
+
+
 # ── pending_claim TWO variants (live finding, Heidi vs Wendy) ────────────────
 
 def test_remake_offer_variant_detected():

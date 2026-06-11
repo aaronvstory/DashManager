@@ -184,7 +184,10 @@ async def _enter_otp(page: Page, code: str) -> bool:
             await loc.first.click()
             await page.keyboard.press(digits[0])
             if len(digits) > 1:
-                await page.keyboard.type(digits[1:])
+                # Type with a small per-key delay so React/Redux-backed boxes
+                # register each digit + auto-advance focus (a 0ms burst can
+                # drop digits on these controlled inputs).
+                await page.keyboard.type(digits[1:], delay=80)
         # Submit (some flows auto-advance on the last digit).
         for sel in OTP_SUBMIT_SELECTORS:
             btn = page.locator(sel).first

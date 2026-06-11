@@ -140,6 +140,18 @@ def test_classify_agent_turn_pure():
         "refund has been processed as credits", REPUSH_CFG) == "repush"
 
 
+def test_question_requires_trailing_question_mark():
+    from backend.browser.chat_strategy import classify_agent_turn
+    # A "?" buried mid-sentence (not ending a line) must NOT be a question —
+    # only a line that ENDS with "?" counts, so pleasantries don't derail us.
+    assert classify_agent_turn(
+        "I'll check that? for you and process the refund now.",
+        REPUSH_CFG) == "repush"
+    # A real trailing question is detected.
+    assert classify_agent_turn(
+        "Sure.\nWhich card did you use?", REPUSH_CFG) == "question"
+
+
 def test_registry_has_both_strategies():
     assert isinstance(get_strategy("scripted"), ScriptedStrategy)
     assert isinstance(get_strategy("llm"), LlmStrategy)
