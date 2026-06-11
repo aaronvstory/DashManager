@@ -21,6 +21,15 @@ EDIT_PROFILE_URL = "https://www.doordash.com/consumer/edit_profile"
 # URL fragments that mean "we are NOT logged in" (harvest: _scrape_orders).
 LOGIN_URL_MARKERS = ["login", "signin", "identity.doordash"]
 
+# URL fragments that mean login is still mid-flight (2FA/OTP/verification/
+# challenge). The manual-login wait must keep waiting on these — they contain
+# "doordash.com" but are NOT a completed session, so capturing here would save
+# a half-authenticated, useless session.
+LOGIN_PENDING_MARKERS = [
+    "login", "identity", "verification", "verify", "2fa", "otp",
+    "challenge", "captcha",
+]
+
 # ── Cloudflare / bot gate (harvest: _handle_bot) ─────────────────────────────
 CLOUDFLARE_TEXT = "Verifying you are human"
 CLOUDFLARE_WAIT_S = 30

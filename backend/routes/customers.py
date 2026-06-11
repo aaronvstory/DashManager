@@ -113,7 +113,10 @@ async def delete_customer(cid: int) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="customer not found")
     for p in (row.get("storage_state_path"), row.get("cookies_path")):
         if p:
-            Path(p).unlink(missing_ok=True)
+            try:
+                Path(p).unlink(missing_ok=True)
+            except OSError:
+                pass  # locked/permission-denied file must not block DB delete
     await db.delete_customer(cid)
     return {"ok": True}
 

@@ -186,7 +186,8 @@ class RunManager:
                                 [so.price for _, so in problems])
                             try:
                                 opening = chat_cfg["opening_template"].format(
-                                    order_count=len(problems), amounts=amounts)
+                                    order_count=len(problems), amounts=amounts,
+                                    customer_name=cust["first_name"] or name)
                             except (ValueError, KeyError, IndexError):
                                 # The template is user-editable; a typo must
                                 # not kill the customer's run.

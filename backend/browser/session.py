@@ -19,6 +19,7 @@ from backend import config, db
 from backend.browser.selectors import (
     CHROMIUM_ARGS,
     EDIT_PROFILE_URL,
+    LOGIN_PENDING_MARKERS,
     LOGIN_URL,
     ORDERS_URL,
     UA,
@@ -52,11 +53,13 @@ async def login_and_capture(
             await page.goto(LOGIN_URL, wait_until="domcontentloaded")
             if emit:
                 emit("login_waiting", {})
-            # Harvested predicate: any doordash.com URL that is neither the
-            # login page nor the identity.doordash.com flow means logged in.
+            # Logged in = a doordash.com URL with no login/2FA/verification
+            # marker. Excluding the pending markers (not just login/identity)
+            # prevents capturing a session while the user is still on a 2FA or
+            # verification page, which would save a half-authenticated session.
             await page.wait_for_url(
-                lambda u: ("doordash.com" in u and "login" not in u
-                           and "identity" not in u),
+                lambda u: ("doordash.com" in u
+                           and not any(m in u for m in LOGIN_PENDING_MARKERS)),
                 timeout=300_000)
             await asyncio.sleep(3)  # let post-login cookies settle (harvest)
             try:

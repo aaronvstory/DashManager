@@ -154,12 +154,27 @@ def _strip_code_fences(text: str) -> str:
     return text.strip()
 
 
+def _extract_json_object(text: str) -> str:
+    """Slice from the first '{' to the last '}' — recovers JSON wrapped in
+    conversational prose ("Sure, here is the action: {...}") that fence
+    stripping alone leaves unparseable."""
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end > start:
+        return text[start:end + 1]
+    return text
+
+
 def _parse_llm_reply(raw: str) -> ChatAction | None:
     """Strict-JSON protocol -> ChatAction, or None on any deviation."""
-    try:
-        data = json.loads(_strip_code_fences(raw))
-    except (json.JSONDecodeError, TypeError):
-        return None
+    fenced = _strip_code_fences(raw)
+    data: Any = None
+    for candidate in (fenced, _extract_json_object(fenced)):
+        try:
+            data = json.loads(candidate)
+            break
+        except (json.JSONDecodeError, TypeError):
+            continue
     if not isinstance(data, dict):
         return None
     action = data.get("action")

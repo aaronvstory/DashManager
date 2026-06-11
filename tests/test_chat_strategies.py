@@ -217,3 +217,13 @@ async def test_llm_default_client_missing_key_flags_manual(monkeypatch):
     action = await strategy.next_action([])
     assert action.kind == "flag_manual"
     assert "key" in action.reason.lower()
+
+
+def test_parse_llm_reply_recovers_json_from_prose():
+    """LLM wrapping JSON in conversational text must still parse."""
+    from backend.browser.chat_strategy import _parse_llm_reply
+    a = _parse_llm_reply('Sure, here is the action: {"action":"send","message":"hi"}')
+    assert a is not None and a.kind == "send" and a.message == "hi"
+    b = _parse_llm_reply('```json\n{"action":"end","outcome":"success"}\n```')
+    assert b is not None and b.kind == "end_success"
+    assert _parse_llm_reply("no json here at all") is None

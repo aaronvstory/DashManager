@@ -109,6 +109,11 @@ async def scrape_orders(
     chosen: str | None = None
     prev = stable = 0
     for _ in range(SCROLL_MAX_ITERS):
+        # A mid-loop logout redirects to /login; without this check the loop
+        # would burn ~52s and return [] — a false "zero orders" that silently
+        # skips the customer instead of flagging the dead session.
+        if any(marker in page.url for marker in LOGIN_URL_MARKERS):
+            raise SessionExpiredError(f"redirected to {page.url} during scroll")
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         await asyncio.sleep(0.55)  # legacy-tuned lazy-load waits: shorter and
         await page.keyboard.press("End")

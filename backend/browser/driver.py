@@ -76,13 +76,20 @@ async def new_customer_context(
 
 async def handle_cloudflare(page: Page) -> bool:
     """Wait out the 'Verifying you are human' gate; True if it was present."""
-    text = await page.evaluate(
-        "() => document.body ? document.body.innerText : ''")
+    try:
+        text = await page.evaluate(
+            "() => document.body ? document.body.innerText : ''")
+    except Exception:
+        # Page mid-navigation / context destroyed — no gate we can act on.
+        return False
     if CLOUDFLARE_TEXT not in text:
         return False
     await asyncio.sleep(CLOUDFLARE_WAIT_S)
-    await page.reload(wait_until="domcontentloaded")
-    await asyncio.sleep(3)
+    try:
+        await page.reload(wait_until="domcontentloaded")
+        await asyncio.sleep(3)
+    except Exception:
+        pass
     return True
 
 
