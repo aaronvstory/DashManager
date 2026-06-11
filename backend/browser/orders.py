@@ -216,25 +216,28 @@ async def scrape_orders_full(
         return OrdersScrapeResult(state="none")
 
     # ── Completed orders (UUID-keyed) ──
-    chosen: str | None = None
+    # Skip the (up to ~52s) scroll loop entirely when no completed-order cards
+    # are present — e.g. an account with ONLY in-progress orders.
+    chosen = await _pick_card_selector(page)
     prev = stable = 0
-    for _ in range(SCROLL_MAX_ITERS):
-        if any(marker in page.url for marker in LOGIN_URL_MARKERS):
-            raise SessionExpiredError(f"redirected to {page.url} during scroll")
-        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        await asyncio.sleep(0.55)
-        await page.keyboard.press("End")
-        await asyncio.sleep(0.75)
-        if chosen is None:
-            chosen = await _pick_card_selector(page)
-        count = await page.locator(chosen).count() if chosen else 0
-        if count == prev and count > 0:
-            stable += 1
-            if stable >= SCROLL_STABLE_ITERS:
-                break
-        else:
-            stable = 0
-        prev = count
+    if chosen is not None:
+        for _ in range(SCROLL_MAX_ITERS):
+            if any(marker in page.url for marker in LOGIN_URL_MARKERS):
+                raise SessionExpiredError(
+                    f"redirected to {page.url} during scroll")
+            await page.evaluate(
+                "window.scrollTo(0, document.body.scrollHeight)")
+            await asyncio.sleep(0.55)
+            await page.keyboard.press("End")
+            await asyncio.sleep(0.75)
+            count = await page.locator(chosen).count()
+            if count == prev and count > 0:
+                stable += 1
+                if stable >= SCROLL_STABLE_ITERS:
+                    break
+            else:
+                stable = 0
+            prev = count
 
     seen: set[str] = set()
     if chosen is not None:

@@ -319,10 +319,11 @@ async def delete_customer(cid: int) -> dict[str, Any]:
                 Path(p).unlink(missing_ok=True)
             except OSError:
                 pass  # locked/permission-denied file must not block DB delete
-    # Remove the customer's persistent Chromium profile dir too.
+    # Remove the customer's persistent Chromium profile dir too. rmtree on a
+    # large profile can block for seconds, so off-load it from the event loop.
     from backend.browser.driver import remove_profile
     try:
-        remove_profile(cid)
+        await asyncio.to_thread(remove_profile, cid)
     except Exception:
         pass
     await db.delete_customer(cid)

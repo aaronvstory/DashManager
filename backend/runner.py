@@ -148,15 +148,19 @@ class RunManager:
         from backend.browser.orders import open_receipt, scrape_orders
         from backend.browser.refund_detector import detect
 
-        cid = cust["id"]
-        name = (f"{cust['first_name']} {cust['last_name']}".strip()
-                or f"Customer {cid}")
-        emit("customer_started", {"customer_id": cid, "name": name,
-                                  "position": pos, "total": total})
-        await self._bump(stats, "customers")
-        browser_cfg = cfg["browser"]
+        # Everything is inside the try so a KeyError on cust/cfg (or any
+        # setup error) is logged, not silently swallowed by gather(
+        # return_exceptions=True).
+        cid = cust.get("id")
+        name = f"Customer {cid}"
         ctx = None
         try:
+            name = (f"{cust['first_name']} {cust['last_name']}".strip()
+                    or f"Customer {cid}")
+            emit("customer_started", {"customer_id": cid, "name": name,
+                                      "position": pos, "total": total})
+            await self._bump(stats, "customers")
+            browser_cfg = cfg["browser"]
             try:
                 # Each customer drives its OWN persistent profile — fully
                 # isolated, so concurrent customers never share cookies.

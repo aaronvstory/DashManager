@@ -58,7 +58,12 @@ class DaisyBridge:
             return
         try:
             if self._proc.stdin:
-                self._proc.stdin.close()
+                # A crashed worker makes close() raise BrokenPipeError, which
+                # would skip the wait/kill below — guard it so we still reap.
+                try:
+                    self._proc.stdin.close()
+                except Exception:
+                    pass
             await asyncio.wait_for(self._proc.wait(), timeout=5)
         except (asyncio.TimeoutError, ProcessLookupError):
             try:

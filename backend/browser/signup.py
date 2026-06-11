@@ -134,10 +134,14 @@ async def _enter_otp(page: Page, code: str) -> bool:
         if kind == "single":
             await loc.click()
             await loc.fill(code)
-        else:  # split digit boxes — type one char per input
+        else:  # split digit boxes — click + key-press per box
+            # fill() can skip the keypress handlers these widgets use to
+            # auto-advance focus / update state, so type each digit as a key.
             n = await loc.count()
             for i, ch in enumerate(code[:n]):
-                await loc.nth(i).fill(ch)
+                box = loc.nth(i)
+                await box.click()
+                await box.press(ch)
         # Submit (some flows auto-advance on the last digit).
         for sel in OTP_SUBMIT_SELECTORS:
             btn = page.locator(sel).first
