@@ -47,16 +47,30 @@ async def new_customer_context(
     """
     vp = {"width": viewport[0], "height": viewport[1]}
     if storage_state_path and Path(storage_state_path).exists():
-        return await browser.new_context(
-            viewport=vp, user_agent=UA, storage_state=storage_state_path)
+        try:
+            return await browser.new_context(
+                viewport=vp, user_agent=UA, storage_state=storage_state_path)
+        except Exception:
+            # Corrupted/truncated storage_state (e.g. capture killed
+            # mid-write) — treat like any dead session: try cookies next.
+            pass
     if not cookies_path or not Path(cookies_path).exists():
         raise SessionExpiredError(
             "no usable session files (missing storage state and cookies)")
-    cookies = json.loads(Path(cookies_path).read_text("utf-8"))
+    try:
+        cookies = json.loads(Path(cookies_path).read_text("utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise SessionExpiredError(
+            f"corrupted cookie file {cookies_path}: {exc}") from exc
     if not cookies:
         raise SessionExpiredError(f"empty cookie file: {cookies_path}")
     ctx = await browser.new_context(viewport=vp, user_agent=UA)
-    await ctx.add_cookies(cookies)
+    try:
+        await ctx.add_cookies(cookies)
+    except Exception as exc:
+        await ctx.close()
+        raise SessionExpiredError(
+            f"cookie replay rejected ({cookies_path}): {exc}") from exc
     return ctx
 
 

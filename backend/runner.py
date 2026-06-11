@@ -182,10 +182,20 @@ class RunManager:
                                              "message": f"throttle: waiting {throttle_s:.0f}s"})
                                 await asyncio.sleep(throttle_s)
 
-                            opening = chat_cfg["opening_template"].format(
-                                order_count=len(problems),
-                                amounts=_amounts_text(
-                                    [so.price for _, so in problems]))
+                            amounts = _amounts_text(
+                                [so.price for _, so in problems])
+                            try:
+                                opening = chat_cfg["opening_template"].format(
+                                    order_count=len(problems), amounts=amounts)
+                            except (ValueError, KeyError, IndexError):
+                                # The template is user-editable; a typo must
+                                # not kill the customer's run.
+                                opening = (
+                                    f"Hi, I placed {len(problems)} order(s) "
+                                    f"for {amounts} and they are not showing "
+                                    "as refunded. Please ensure they are "
+                                    "REFUNDED back to my original payment "
+                                    "card (not credits).")
                             order_ids = [oid for oid, _ in problems]
                             chat_id = await db.create_chat(
                                 run_id, cust["id"], order_ids, opening)

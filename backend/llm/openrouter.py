@@ -43,8 +43,14 @@ class OpenRouterClient:
                     resp = await client.post(url, headers=headers,
                                              json=payload)
                 except httpx.HTTPError as exc:
+                    # Transient network failures (timeouts, resets, DNS)
+                    # deserve the same retries as 429/5xx responses.
+                    if attempt < len(_RETRY_DELAYS):
+                        await asyncio.sleep(_RETRY_DELAYS[attempt])
+                        continue
                     raise LlmError(
-                        f"OpenRouter request failed: {exc}") from exc
+                        f"OpenRouter request failed after {attempts} "
+                        f"attempts: {exc}") from exc
                 if resp.status_code == 429 or resp.status_code >= 500:
                     if attempt < len(_RETRY_DELAYS):
                         await asyncio.sleep(_RETRY_DELAYS[attempt])

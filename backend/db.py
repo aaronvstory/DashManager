@@ -152,6 +152,9 @@ async def execute(sql: str, params: tuple = ()) -> int:
 # ── Customers ────────────────────────────────────────────────────────────────
 
 async def create_customer(bucket_date: str, **fields: Any) -> int:
+    bad = set(fields) - _CUSTOMER_FIELDS
+    if bad:
+        raise ValueError(f"unknown customer fields: {bad}")
     cols = ["bucket_date"] + list(fields.keys())
     vals = [bucket_date] + list(fields.values())
     sql = (f"INSERT INTO customers ({', '.join(cols)}) "
