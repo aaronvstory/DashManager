@@ -154,6 +154,7 @@ EVENT_TYPES = (
     "otp_waiting",
     "otp_received",
     "otp_resent",
+    "address_set",
     "account_created",
     "account_failed",
     "run_started",

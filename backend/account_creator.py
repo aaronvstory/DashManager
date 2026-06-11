@@ -87,7 +87,10 @@ async def create_account(*, location_origin: str | None,
                 page = await ctx.new_page()
                 await fill_signup_form(page, identity, emit=_emit)
                 _emit("signup_submitting", {})
-                outcome = await submit_and_verify(page, poll_otp, emit=_emit)
+                outcome = await submit_and_verify(
+                    page, poll_otp,
+                    address={"full_address": identity.get("full_address")},
+                    emit=_emit)
                 _emit("signup_outcome", {"outcome": outcome})
 
                 if outcome == "created":

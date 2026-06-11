@@ -38,28 +38,36 @@ FIELD_MOBILE = "Mobile Number"
 FIELD_PASSWORD = "Password"
 SUBMIT_BUTTON = "Sign Up"
 
-# OTP-verification modal. DoorDash texts a code after Sign Up; the modal may
-# render a single input or split digit boxes. Tried in order; first visible
-# wins. Extend with the exact selector captured on the first live run.
+# OTP "Phone Number Verification" modal — VERIFIED LIVE 2026-06-12.
+# A single numeric input inside a dialog, aria-label "Enter your 6-digit code".
+# The cascade keeps fallbacks first in case DoorDash A/B-tests a split variant.
 OTP_INPUT_SELECTORS = [
+    "div[role='dialog'] input[aria-label*='digit' i]",  # exact live match
+    "input[aria-label*='digit code' i]",
+    "div[role='dialog'] input[type='number']",
     "input[autocomplete='one-time-code']",
-    "input[name*='code' i]",
     "input[aria-label*='code' i]",
-    "input[placeholder*='code' i]",
     "input[inputmode='numeric']",
-    "input[type='tel']",
 ]
-# Split 6-box variant: many DoorDash flows use individual digit inputs.
+# Split 6-box variant (not seen 2026-06-12, kept as a fallback).
 OTP_DIGIT_SELECTOR = "input[maxlength='1']"
+# The verify button is literally labelled "Submit" in the live modal.
 OTP_SUBMIT_SELECTORS = [
+    "div[role='dialog'] button:has-text('Submit')",
+    "button:has-text('Submit')",
     "button:has-text('Verify')",
     "button:has-text('Continue')",
-    "button:has-text('Submit')",
-    "button[type='submit']",
 ]
 OTP_RESEND_SELECTORS = [
     "button:has-text('Resend')",
-    "text=/resend/i",
+    "text=/resend code/i",
+]
+# Post-OTP "Unlock $0 delivery" address modal — VERIFIED LIVE 2026-06-12.
+# A combobox; type the address, then click the matching autocomplete row.
+ADDRESS_INPUT_SELECTORS = [
+    "div[role='dialog'] input[placeholder*='delivery address' i]",
+    "input[placeholder*='delivery address' i]",
+    "input[aria-label*='delivery address' i]",
 ]
 # Logged-in success markers in the post-signup URL.
 SUCCESS_URL_MARKERS = ["/post-login", "doordash.com/home", "/orders"]
@@ -145,13 +153,15 @@ async def fill_signup_form(page: Page, identity: dict[str, Any],
 
 
 async def submit_and_verify(page: Page, poll_otp: OtpPoller, *,
+                            address: dict[str, Any] | None = None,
                             emit: Emit | None = None,
                             otp_total_wait_s: float = 180,
                             resend_after_s: float = 75) -> str:
     """Click Sign Up, wait for the OTP modal, poll + enter the code.
 
     Returns 'created' | 'otp_timeout' | 'otp_failed' | 'blocked' | 'failed'.
-    poll_otp() returns the current code ('' = not arrived yet).
+    poll_otp() returns the current code ('' = not arrived yet). On success the
+    post-signup delivery-address modal is filled from `address` (best effort).
     """
     await page.get_by_role("button", name=SUBMIT_BUTTON).first.click()
     await asyncio.sleep(2.5)
@@ -172,33 +182,103 @@ async def submit_and_verify(page: Page, poll_otp: OtpPoller, *,
 
     _notify(emit, "otp_waiting", {})
     started = time.monotonic()
-    resent = False
+    tried_codes: set[str] = set()
+    last_resend = 0.0
+    # Live-observed failure mode: a code can EXPIRE between arrival and submit,
+    # leaving the modal in place (no logged-in redirect). The fix proven live
+    # is to resend (free) and submit the next code fast. So: on a submitted
+    # code that doesn't reach success, resend and wait for a fresh code.
     while time.monotonic() - started < otp_total_wait_s:
         code = await poll_otp()
-        if code:
+        if code and code not in tried_codes:
+            tried_codes.add(code)
             _notify(emit, "otp_received", {"code": code})
             if await _enter_otp(page, code):
-                await asyncio.sleep(3.0)
-                await handle_cloudflare(page)
-                if any(m in page.url for m in SUCCESS_URL_MARKERS):
-                    return "created"
-                # Code entered but not obviously logged in — give it a moment.
-                await asyncio.sleep(3.0)
-                if any(m in page.url for m in SUCCESS_URL_MARKERS):
-                    return "created"
-                return "otp_failed"
+                for _ in range(3):  # success can take a beat to redirect
+                    await asyncio.sleep(2.0)
+                    await handle_cloudflare(page)
+                    if any(m in page.url for m in SUCCESS_URL_MARKERS):
+                        await _fill_address_if_present(page, address, emit=emit)
+                        return "created"
+                # Submitted but not logged in (expired/rejected) → resend.
+                if await _resend(page, emit):
+                    last_resend = time.monotonic()
+                continue
             return "otp_failed"
-        # Free resend if the first code is slow.
-        if not resent and time.monotonic() - started > resend_after_s:
-            for sel in OTP_RESEND_SELECTORS:
-                try:
-                    btn = page.locator(sel).first
-                    if await btn.is_visible():
-                        await btn.click()
-                        resent = True
-                        _notify(emit, "otp_resent", {})
-                        break
-                except Exception:
-                    continue
+        # No fresh code yet; resend if the wait is dragging.
+        if (time.monotonic() - started > resend_after_s
+                and time.monotonic() - last_resend > resend_after_s):
+            if await _resend(page, emit):
+                last_resend = time.monotonic()
         await asyncio.sleep(3.0)
     return "otp_timeout"
+
+
+async def _resend(page: Page, emit: Emit | None) -> bool:
+    for sel in OTP_RESEND_SELECTORS:
+        try:
+            btn = page.locator(sel).first
+            if await btn.is_visible():
+                await btn.click()
+                _notify(emit, "otp_resent", {})
+                return True
+        except Exception:
+            continue
+    return False
+
+
+async def _fill_address_if_present(page: Page, address: dict[str, Any] | None,
+                                   emit: Emit | None = None) -> None:
+    """Post-OTP 'Unlock $0 delivery' address modal (verified live 2026-06-12).
+
+    Type the full address, then click the matching autocomplete row. Best
+    effort: the account is already created, so a missed address never fails
+    the flow (it can be set on first use). Skipped when no address is given.
+    """
+    full = (address or {}).get("full_address")
+    if not full:
+        return
+    inp = None
+    deadline = time.monotonic() + 8
+    while time.monotonic() < deadline:
+        for sel in ADDRESS_INPUT_SELECTORS:
+            loc = page.locator(sel).first
+            try:
+                if await loc.is_visible():
+                    inp = loc
+                    break
+            except Exception:
+                continue
+        if inp:
+            break
+        await asyncio.sleep(0.5)
+    if inp is None:
+        return  # no modal this run — fine
+    try:
+        await inp.click()
+        await inp.fill(full)
+        await asyncio.sleep(2.0)  # let autocomplete populate
+        # Click the suggestion row that matches our street number.
+        street_no = re.match(r"\d+", full)
+        option = page.locator(
+            "div[role='dialog'] [role='option'], "
+            "div[role='dialog'] li, div[role='dialog'] a")
+        n = await option.count()
+        for i in range(min(n, 8)):
+            row = option.nth(i)
+            try:
+                txt = (await row.inner_text()).strip()
+            except Exception:
+                continue
+            if street_no and txt.startswith(street_no.group()):
+                await row.click()
+                _notify(emit, "address_set", {"address": full})
+                return
+        # Fallback: first suggestion, else Enter.
+        if n:
+            await option.first.click()
+        else:
+            await page.keyboard.press("Enter")
+        _notify(emit, "address_set", {"address": full})
+    except Exception:
+        pass  # account exists regardless

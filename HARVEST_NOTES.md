@@ -58,3 +58,22 @@ and when each selector was last verified against the live site.
 | Bot-vs-human detection patterns | ⏳ untested | 2026-06-11 | `bot_patterns` setting; expect live tuning during supervised chats. |
 
 Update this table whenever a selector is re-verified or fixed.
+
+## Account creation (CustomerDaisy signup) — verified live 2026-06-12
+
+Full end-to-end account creation succeeded (account: a real DoorDash consumer,
+Edenton NC identity from CustomerDaisy). Confirmed working:
+
+| Step | Selector / detail | Status |
+|---|---|---|
+| Signup form | direct URL `identity.doordash.com/auth/user/signup`; fields by `get_by_role("textbox", name=...)` First/Last/Email/Mobile/Password; submit `button "Sign Up"` | ✅ verified |
+| Phone field | type 10 bare digits; DoorDash auto-formats to `(NPA) NXX-XXXX` | ✅ verified |
+| OTP modal | `div[role='dialog'] input` aria-label "Enter your 6-digit code", `type=number`, single box (NOT split); submit button labelled "Submit" | ✅ verified |
+| api.cc live OTP | `fetch_code_once` extracted the code from the real SMS first poll | ✅ verified |
+| OTP expiry | a code can EXPIRE between arrival and submit → modal stays, no redirect. Resend (free) + submit next code works. `signup.py` now auto-resends on a non-success submit | ✅ verified + handled |
+| Success | redirect to `doordash.com/home` (then `?newUser=true` after address) | ✅ verified |
+| Address modal | post-OTP "Unlock $0 delivery" — `combobox`/input placeholder "Enter delivery address"; type full address → click matching autocomplete row | ✅ verified |
+| Cloudflare on signup | same "Verifying you are human" gate; existing `handle_cloudflare` clears it | ✅ verified |
+
+Bridge (subprocess under CustomerDaisy venv): balance/locations/generate_identity/
+rent_number/fetch_otp/save_customer all verified live. api.cc balance read $12.74.
