@@ -28,14 +28,14 @@ async def test_start_rejects_bad_strategy(client):
 
 
 async def test_start_conflict_while_running(client, monkeypatch):
-    async def fake_start(scope, strategy):
+    async def fake_start(scope, strategy, headless=None):
         return 1
     monkeypatch.setattr(manager, "start", fake_start)
     r = await client.post("/api/runs", json={
         "scope": {"bucket_date": "2026-06-11"}})
     assert r.status_code == 200 and r.json()["run_id"] == 1
 
-    async def busy_start(scope, strategy):
+    async def busy_start(scope, strategy, headless=None):
         raise RuntimeError("a run is already active")
     monkeypatch.setattr(manager, "start", busy_start)
     r = await client.post("/api/runs", json={

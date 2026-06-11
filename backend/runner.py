@@ -43,14 +43,15 @@ class RunManager:
     def is_running(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    async def start(self, scope: dict[str, Any], chat_strategy: str) -> int:
+    async def start(self, scope: dict[str, Any], chat_strategy: str,
+                    headless: bool | None = None) -> int:
         if self.is_running:
             raise RuntimeError("a run is already active")
         run_id = await db.create_run(scope, chat_strategy)
         self.current_run_id = run_id
         self._stop = asyncio.Event()
         self._task = asyncio.create_task(
-            self._run(run_id, scope, chat_strategy))
+            self._run(run_id, scope, chat_strategy, headless))
         return run_id
 
     def stop(self) -> None:
@@ -69,7 +70,7 @@ class RunManager:
         return []
 
     async def _run(self, run_id: int, scope: dict[str, Any],
-                   strategy_name: str) -> None:
+                   strategy_name: str, headless: bool | None = None) -> None:
         def emit(type: str, data: dict | None = None) -> None:
             bus.publish(type, data or {}, run_id=run_id)
 
@@ -85,15 +86,18 @@ class RunManager:
             from playwright.async_api import async_playwright  # lazy
 
             customers = await self._resolve_customers(scope)
+            browser_cfg = await db.get_setting("browser")
             cfg = {
                 "chat": await db.get_setting("chat"),
                 "refund": await db.get_setting("refund_signal"),
                 "llm": await db.get_setting("llm"),
-                "browser": await db.get_setting("browser"),
+                "browser": browser_cfg,
                 "api_key": await db.get_setting("openrouter_api_key"),
+                # Per-run headless override (None -> use the setting).
+                "headless": (headless if headless is not None
+                             else bool(browser_cfg.get("headless", False))),
             }
-            max_conc = int((await db.get_setting("browser"))
-                           .get("max_concurrent", 3))
+            max_conc = int(browser_cfg.get("max_concurrent", 3))
             sem = asyncio.Semaphore(max(1, max_conc))
 
             emit("run_started", {"scope": scope, "chat_strategy": strategy_name,
@@ -150,7 +154,7 @@ class RunManager:
                 # Each customer drives its OWN persistent profile — fully
                 # isolated, so concurrent customers never share cookies.
                 ctx = await open_customer_profile(
-                    p, cid, bool(browser_cfg.get("headless", False)),
+                    p, cid, bool(cfg["headless"]),
                     seed_storage_state=cust.get("storage_state_path") or None,
                     viewport=tuple(browser_cfg.get("viewport", [1400, 900])))
                 page = ctx.pages[0] if ctx.pages else await ctx.new_page()

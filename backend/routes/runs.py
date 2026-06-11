@@ -16,6 +16,7 @@ router = APIRouter()
 class StartRunBody(BaseModel):
     scope: dict[str, Any] = Field(default_factory=dict)
     chat_strategy: str = "scripted"
+    headless: bool | None = None  # per-action override of the setting
 
 
 @router.post("")
@@ -25,7 +26,8 @@ async def start_run(body: StartRunBody) -> dict:
     if not (body.scope.get("bucket_date") or body.scope.get("customer_ids")):
         raise HTTPException(400, "scope needs bucket_date or customer_ids")
     try:
-        run_id = await manager.start(body.scope, body.chat_strategy)
+        run_id = await manager.start(body.scope, body.chat_strategy,
+                                     headless=body.headless)
     except RuntimeError as exc:
         raise HTTPException(409, str(exc))
     return {"run_id": run_id}

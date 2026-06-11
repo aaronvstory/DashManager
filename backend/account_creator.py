@@ -31,11 +31,13 @@ def _emit(type: str, data: dict | None = None) -> None:
 
 async def create_account(*, location_origin: str | None,
                          radius_miles: float, bucket_date: str | None,
-                         daisy_root: str | None = None) -> dict[str, Any]:
+                         daisy_root: str | None = None,
+                         headless: bool | None = None) -> dict[str, Any]:
     """Run the full create-account flow. Returns a summary dict.
 
-    Raises on fatal failure (caller emits account_failed); partial progress is
-    reported via events so the UI shows where it stopped.
+    `headless` overrides the browser setting for this one run (None = use the
+    setting). Raises on fatal failure (caller emits account_failed); partial
+    progress is reported via events.
     """
     from playwright.async_api import async_playwright
 
@@ -44,6 +46,8 @@ async def create_account(*, location_origin: str | None,
 
     bucket = bucket_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     browser_cfg = await db.get_setting("browser")
+    headless = (headless if headless is not None
+                else bool(browser_cfg.get("headless", False)))
 
     async with DaisyBridge(root=daisy_root) as daisy:
         bal = await daisy.balance()
@@ -88,7 +92,7 @@ async def create_account(*, location_origin: str | None,
             try:
                 ctx = await p.chromium.launch_persistent_context(
                     str(temp_profile),
-                    headless=bool(browser_cfg.get("headless", False)),
+                    headless=headless,
                     args=CHROMIUM_ARGS, user_agent=UA,
                     viewport={"width": 1400, "height": 900})
                 page = ctx.pages[0] if ctx.pages else await ctx.new_page()

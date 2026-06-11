@@ -33,6 +33,7 @@ class CreateAccountBody(BaseModel):
     bucket_date: str | None = None
     location_origin: str | None = None  # falls back to daisy settings default
     radius_miles: float | None = None
+    headless: bool | None = None        # per-action override of the setting
 
 
 _create_lock = asyncio.Lock()
@@ -127,7 +128,8 @@ async def _run_create_account(body: CreateAccountBody) -> None:
                   else float(daisy_cfg.get("radius_miles", 5.0)))
         await create_account(
             location_origin=origin, radius_miles=radius,
-            bucket_date=body.bucket_date, daisy_root=daisy_cfg.get("root"))
+            bucket_date=body.bucket_date, daisy_root=daisy_cfg.get("root"),
+            headless=body.headless)
     except Exception as e:  # surfaced to the UI as an event
         bus.publish("account_failed", {"error": str(e)})
     finally:
@@ -222,10 +224,14 @@ async def fetch_otp(cid: int) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(e))
 
 
-async def _run_relogin(cid: int) -> None:
+class ReloginBody(BaseModel):
+    headless: bool | None = None  # per-action override of the setting
+
+
+async def _run_relogin(cid: int, headless: bool | None) -> None:
     try:
         from backend.relogin import relogin_customer
-        await relogin_customer(cid)
+        await relogin_customer(cid, headless=headless)
     except Exception as e:
         bus.publish("relogin_failed", {"customer_id": cid, "error": str(e)})
     finally:
@@ -233,15 +239,16 @@ async def _run_relogin(cid: int) -> None:
 
 
 @router.post("/{cid}/relogin")
-async def relogin(cid: int) -> dict[str, Any]:
-    """Headed fresh login (email+password+OTP) and capture a new session."""
+async def relogin(cid: int, body: ReloginBody | None = None) -> dict[str, Any]:
+    """Fresh login (email+password+OTP) and capture a new session."""
     global _relogin_task
     if await db.get_customer(cid) is None:
         raise HTTPException(status_code=404, detail="customer not found")
     if _relogin_lock.locked():
         raise HTTPException(status_code=409, detail="a login is already running")
     await _relogin_lock.acquire()
-    _relogin_task = asyncio.create_task(_run_relogin(cid))
+    _relogin_task = asyncio.create_task(
+        _run_relogin(cid, (body or ReloginBody()).headless))
     return {"started": True}
 
 
@@ -281,13 +288,16 @@ async def delete_customer(cid: int) -> dict[str, Any]:
 
 
 @router.post("/{cid}/test-session")
-async def test_session(cid: int) -> dict[str, Any]:
+async def test_session(cid: int, body: ReloginBody | None = None
+                       ) -> dict[str, Any]:
+    """Replay the session, scrape orders, report state. Persists order rows."""
+    import json as _json
+
     row = await db.get_customer(cid)
     if row is None:
         raise HTTPException(status_code=404, detail="customer not found")
 
-    # Lazy: Playwright + browser modules load only when actually testing.
-    from playwright.async_api import async_playwright
+    from playwright.async_api import async_playwright  # lazy
 
     from backend.browser import orders
     from backend.browser.driver import (SessionExpiredError,
@@ -295,17 +305,19 @@ async def test_session(cid: int) -> dict[str, Any]:
                                         open_customer_profile)
 
     browser_cfg = await db.get_setting("browser")
-    scraped = []
+    override = (body or ReloginBody()).headless
+    headless = override if override is not None else bool(browser_cfg["headless"])
+    result = None
     try:
         async with async_playwright() as p:
             ctx = None
             try:
                 ctx = await open_customer_profile(
-                    p, cid, headless=bool(browser_cfg["headless"]),
+                    p, cid, headless=headless,
                     seed_storage_state=row.get("storage_state_path") or None,
                     viewport=tuple(browser_cfg["viewport"]))
                 page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-                scraped = await orders.scrape_orders(page)
+                result = await orders.scrape_orders_full(page)
                 await export_storage_state(ctx, cid)
             finally:
                 if ctx is not None:
@@ -314,5 +326,17 @@ async def test_session(cid: int) -> dict[str, Any]:
         await db.update_customer(cid, session_status="expired")
         return {"ok": False, "error": "session_expired"}
 
+    # Persist scraped orders so the DB viewer reflects current state.
+    for so in result.orders:
+        await db.upsert_order(
+            cid, so.order_uuid, so.receipt_url, store_name=so.store_name,
+            description=so.description, items_count=so.items_count,
+            price=so.price, order_status=so.order_status.value,
+            status_text=so.status_text, dasher_name=so.dasher_name)
     await db.update_customer(cid, session_status="active")
-    return {"ok": True, "orders_count": len(scraped)}
+    return {"ok": True, "orders_count": len(result.orders),
+            "state": result.state,
+            "in_progress_count": result.in_progress_count,
+            "completed_count": result.completed_count,
+            "orders": _json.loads(
+                _json.dumps([o.model_dump() for o in result.orders]))}

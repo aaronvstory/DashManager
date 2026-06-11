@@ -67,8 +67,12 @@ def _emit(type: str, data: dict | None = None) -> None:
     bus.publish(type, data or {})
 
 
-async def relogin_customer(customer_id: int) -> dict[str, Any]:
-    """Headed fresh login + OTP + session capture for one customer."""
+async def relogin_customer(customer_id: int,
+                           headless: bool | None = None) -> dict[str, Any]:
+    """Fresh login + OTP + session capture for one customer.
+
+    `headless` overrides the browser setting for this login (None = setting).
+    """
     from playwright.async_api import async_playwright
 
     from backend.browser.driver import (export_storage_state,
@@ -87,6 +91,8 @@ async def relogin_customer(customer_id: int) -> dict[str, Any]:
 
     browser_cfg = await db.get_setting("browser")
     daisy_cfg = await db.get_setting("daisy")
+    headless = (headless if headless is not None
+                else bool(browser_cfg.get("headless", False)))
     address = {"full_address": (customer.get("notes") or "")}  # best effort
     _emit("relogin_started", {"customer_id": customer_id})
 
@@ -102,8 +108,7 @@ async def relogin_customer(customer_id: int) -> dict[str, Any]:
                 # Log into the customer's OWN persistent profile so the session
                 # lives on disk and isolates from other customers.
                 ctx = await open_customer_profile(
-                    p, customer_id,
-                    bool(browser_cfg.get("headless", False)),
+                    p, customer_id, headless,
                     seed_storage_state=customer.get("storage_state_path")
                     or None,
                     viewport=tuple(browser_cfg.get("viewport", [1400, 900])))
