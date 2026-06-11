@@ -38,6 +38,13 @@ class RunManager:
         self.current_run_id: int | None = None
         self._throttle_s = 0.0     # shared chat backoff across customers
         self._last_block_t = 0.0
+        # Concurrent workers mutate stats/throttle; `+= 1` spans multiple
+        # bytecodes and the workers interleave at await points, so guard them.
+        self._stats_lock = asyncio.Lock()
+
+    async def _bump(self, stats: dict[str, Any], key: str, n: int = 1) -> None:
+        async with self._stats_lock:
+            stats[key] = stats.get(key, 0) + n
 
     @property
     def is_running(self) -> bool:
@@ -146,7 +153,7 @@ class RunManager:
                 or f"Customer {cid}")
         emit("customer_started", {"customer_id": cid, "name": name,
                                   "position": pos, "total": total})
-        stats["customers"] += 1
+        await self._bump(stats, "customers")
         browser_cfg = cfg["browser"]
         ctx = None
         try:
@@ -160,13 +167,16 @@ class RunManager:
                 page = ctx.pages[0] if ctx.pages else await ctx.new_page()
                 scraped = await scrape_orders(page, emit=emit)
             except SessionExpiredError:
-                stats["sessions_expired"] += 1
+                await self._bump(stats, "sessions_expired")
                 await db.update_customer(cid, session_status="expired")
                 emit("session_invalid", {"customer_id": cid})
                 return
             await export_storage_state(ctx, cid)  # refresh portable backup
             emit("orders_found", {"customer_id": cid, "count": len(scraped)})
 
+            # Replace prior in-progress rows (no stable identity) so phantoms
+            # from completed/vanished live orders don't accumulate.
+            await db.clear_in_progress_orders(cid)
             problems: list[tuple[int, Any]] = []
             for so in scraped:
                 if self._stop.is_set():
@@ -193,7 +203,7 @@ class RunManager:
                     text = await open_receipt(page, so.receipt_url)
                     rr = detect(text, cfg["refund"])
                 except Exception as exc:  # one bad receipt ≠ dead customer
-                    stats["errors"] += 1
+                    await self._bump(stats, "errors")
                     await db.add_run_order(run_id, oid, cid, error=str(exc))
                     emit("log", {"level": "error",
                                  "message": f"receipt check failed: {exc}"})
@@ -206,10 +216,10 @@ class RunManager:
                                        "refund_status": rr.status.value,
                                        "total_amount": rr.total_amount,
                                        "refund_amount": rr.refund_amount})
-                stats["checked"] += 1
+                await self._bump(stats, "checked")
                 if rr.status in (RefundStatus.not_refunded,
                                  RefundStatus.partial):
-                    stats["not_refunded"] += 1
+                    await self._bump(stats, "not_refunded")
                     problems.append((oid, so))
 
             if problems and strategy_name != "none" and not self._stop.is_set():
@@ -218,7 +228,7 @@ class RunManager:
                                            emit, run_chat, ChatContext,
                                            ProblemOrder, get_strategy)
         except Exception as exc:
-            stats["errors"] += 1
+            await self._bump(stats, "errors")
             emit("log", {"level": "error",
                          "message": f"customer {name} failed: {exc}"})
         finally:
@@ -254,7 +264,7 @@ class RunManager:
         chat_id = await db.create_chat(run_id, cid, order_ids, opening)
         emit("chat_opened", {"chat_id": chat_id, "customer_id": cid,
                              "order_ids": order_ids})
-        stats["chats_started"] += 1
+        await self._bump(stats, "chats_started")
 
         async def record(direction: str, content: str,
                          _cid: int = chat_id) -> None:
@@ -284,14 +294,14 @@ class RunManager:
         emit("chat_outcome", {"chat_id": chat_id, "outcome": outcome,
                               "agent_reached": agent_reached})
         if outcome == "success":
-            stats["chats_won"] += 1
+            await self._bump(stats, "chats_won")
         elif outcome in ("blocked", "review_blocked"):
-            stats["blocked"] += 1
+            await self._bump(stats, "blocked")
             self._last_block_t = time.monotonic()
             self._throttle_s = min(self._throttle_s + THROTTLE_STEP_S,
                                    THROTTLE_CAP_S)
         elif outcome == "manual_flag":
-            stats["manual"] += 1
+            await self._bump(stats, "manual")
 
 
 manager = RunManager()

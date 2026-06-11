@@ -65,7 +65,7 @@ async def test_login_starts_then_409_then_captures(client, monkeypatch,
                                                    tmp_path):
     from backend.routes import customers as customers_routes
 
-    monkeypatch.setattr(customers_routes, "_login_lock", asyncio.Lock())
+    monkeypatch.setattr(customers_routes, "_login_task", None)
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
     monkeypatch.setattr(config, "SESSIONS_DIR", sessions_dir)
@@ -134,8 +134,8 @@ async def test_login_starts_then_409_then_captures(client, monkeypatch,
     assert (sessions_dir / f"{cid}_cookies.json").exists()
     assert not pending_storage.exists()  # renamed, not copied
 
-    # Lock released -> a new login can start again later.
-    assert not customers_routes._login_lock.locked()
+    # Task done -> a new login can start again later (no leaked lock).
+    assert not customers_routes._task_running(customers_routes._login_task)
 
 
 async def test_patch_and_delete_customer(client, monkeypatch, tmp_path):

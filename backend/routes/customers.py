@@ -19,9 +19,8 @@ from backend.events import bus
 router = APIRouter()
 
 # Single login capture at a time: acquired in the endpoint (so a second POST
-# 409s immediately) and released by the background task when it finishes.
-_login_lock = asyncio.Lock()
-# Strong reference so the background task is never garbage-collected mid-run.
+# 409s immediately). Strong reference so the background task is never
+# garbage-collected mid-run; its done-ness is the single source of "running".
 _login_task: asyncio.Task | None = None
 
 
@@ -36,10 +35,18 @@ class CreateAccountBody(BaseModel):
     headless: bool | None = None        # per-action override of the setting
 
 
-_create_lock = asyncio.Lock()
 _create_task: asyncio.Task | None = None
-_relogin_lock = asyncio.Lock()
 _relogin_task: asyncio.Task | None = None
+
+
+def _task_running(task: asyncio.Task | None) -> bool:
+    """A task is 'running' only while it actually exists and isn't done.
+
+    Using the live task (not a Lock acquired outside it) avoids the failure
+    mode where create_task's coroutine never reaches a finally and a Lock
+    stays held forever — a done/None task is simply not running.
+    """
+    return task is not None and not task.done()
 
 
 class CustomerPatch(BaseModel):
@@ -143,17 +150,17 @@ async def _run_login(bucket_date: str | None) -> None:
         })
     except Exception as e:  # noqa: BLE001 — surfaced to the UI as an event
         bus.publish("login_failed", {"error": str(e)})
-    finally:
-        _login_lock.release()
 
 
 @router.post("/login")
 async def start_login(body: LoginBody | None = None) -> dict[str, Any]:
     global _login_task
-    if _login_lock.locked():
+    # Synchronous check-then-create: no await between the check and
+    # create_task, so two requests can't both pass; and a done/None task is
+    # never "running" (no lock to leak if a task fails to start).
+    if _task_running(_login_task):
         raise HTTPException(status_code=409,
                             detail="a login capture is already running")
-    await _login_lock.acquire()
     _login_task = asyncio.create_task(
         _run_login(body.bucket_date if body else None))
     return {"started": True}
@@ -173,18 +180,15 @@ async def _run_create_account(body: CreateAccountBody) -> None:
             headless=body.headless)
     except Exception as e:  # surfaced to the UI as an event
         bus.publish("account_failed", {"error": str(e)})
-    finally:
-        _create_lock.release()
 
 
 @router.post("/create-account")
 async def create_account_route(body: CreateAccountBody | None = None
                                ) -> dict[str, Any]:
     global _create_task
-    if _create_lock.locked():
+    if _task_running(_create_task):
         raise HTTPException(status_code=409,
                             detail="an account creation is already running")
-    await _create_lock.acquire()
     _create_task = asyncio.create_task(
         _run_create_account(body or CreateAccountBody()))
     return {"started": True}
@@ -275,8 +279,6 @@ async def _run_relogin(cid: int, headless: bool | None) -> None:
         await relogin_customer(cid, headless=headless)
     except Exception as e:
         bus.publish("relogin_failed", {"customer_id": cid, "error": str(e)})
-    finally:
-        _relogin_lock.release()
 
 
 @router.post("/{cid}/relogin")
@@ -285,9 +287,8 @@ async def relogin(cid: int, body: ReloginBody | None = None) -> dict[str, Any]:
     global _relogin_task
     if await db.get_customer(cid) is None:
         raise HTTPException(status_code=404, detail="customer not found")
-    if _relogin_lock.locked():
+    if _task_running(_relogin_task):
         raise HTTPException(status_code=409, detail="a login is already running")
-    await _relogin_lock.acquire()
     _relogin_task = asyncio.create_task(
         _run_relogin(cid, (body or ReloginBody()).headless))
     return {"started": True}
@@ -367,7 +368,9 @@ async def test_session(cid: int, body: ReloginBody | None = None
         await db.update_customer(cid, session_status="expired")
         return {"ok": False, "error": "session_expired"}
 
-    # Persist scraped orders so the DB viewer reflects current state.
+    # Replace in-progress orders (no stable identity) before re-persisting, so
+    # phantom rows from completed/vanished live orders don't accumulate.
+    await db.clear_in_progress_orders(cid)
     for so in result.orders:
         await db.upsert_order(
             cid, so.order_uuid, so.receipt_url, store_name=so.store_name,

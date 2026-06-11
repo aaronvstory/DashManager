@@ -254,6 +254,18 @@ async def update_order_refund(order_id: int, refund_status: str,
         (refund_status, total_amount, refund_amount, now_iso(), order_id))
 
 
+async def clear_in_progress_orders(customer_id: int) -> None:
+    """Drop a customer's in-progress orders before re-scraping.
+
+    In-progress orders have no stable identity (synthetic 'inprogress:*' uuid
+    keyed by list position), so a fresh scrape must replace, not accumulate —
+    otherwise a completed/vanished live order leaves a phantom row forever.
+    """
+    await execute(
+        "DELETE FROM orders WHERE customer_id=? AND order_status='in_progress'",
+        (customer_id,))
+
+
 async def list_orders(customer_id: int | None = None) -> list[dict[str, Any]]:
     if customer_id is None:
         return await query("SELECT * FROM orders ORDER BY id")

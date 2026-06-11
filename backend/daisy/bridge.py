@@ -79,6 +79,9 @@ class DaisyBridge:
         assert self._proc and self._proc.stdout
         raw = await self._proc.stdout.readline()
         if not raw:
+            # EOF = the worker died. Drop the handle so the next _call()
+            # restarts it instead of writing to a closed stdin (BrokenPipe).
+            self._proc = None
             raise DaisyError("CustomerDaisy worker exited unexpectedly")
         return json.loads(raw.decode("utf-8"))
 

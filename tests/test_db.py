@@ -118,3 +118,19 @@ async def test_settings_partial_dict_shallow_merges():
 async def test_settings_unknown_key_raises():
     with pytest.raises(ValueError):
         await db.set_setting("definitely_not_a_key", 1)
+
+
+async def test_clear_in_progress_orders():
+    """Re-scrape replaces in-progress rows, never accumulates phantoms."""
+    cid = await db.create_customer("2026-06-12", first_name="P")
+    # two in-progress + one completed
+    await db.upsert_order(cid, "inprogress:DQ:0", "", store_name="DQ",
+                          order_status="in_progress")
+    await db.upsert_order(cid, "inprogress:DQ:1", "", store_name="DQ",
+                          order_status="in_progress")
+    await db.upsert_order(cid, "real-uuid", "https://x/orders/real-uuid",
+                          store_name="DQ", order_status="completed")
+    await db.clear_in_progress_orders(cid)
+    rows = await db.list_orders(cid)
+    assert len(rows) == 1
+    assert rows[0]["order_status"] == "completed"
