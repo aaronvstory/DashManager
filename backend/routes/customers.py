@@ -37,6 +37,8 @@ class CreateAccountBody(BaseModel):
 
 _create_lock = asyncio.Lock()
 _create_task: asyncio.Task | None = None
+_relogin_lock = asyncio.Lock()
+_relogin_task: asyncio.Task | None = None
 
 
 class CustomerPatch(BaseModel):
@@ -134,6 +136,55 @@ async def create_account_route(body: CreateAccountBody | None = None
     return {"started": True}
 
 
+class ImportBody(BaseModel):
+    customer_ids: list[str]  # CustomerDaisy customer_id (UUID) values
+    bucket_date: str | None = None
+
+
+@router.get("/daisy/recent")
+async def daisy_recent(limit: int = 20) -> dict[str, Any]:
+    """Recent CustomerDaisy accounts available to import (with OTP tokens)."""
+    from backend.daisy.bridge import DaisyBridge
+
+    daisy_cfg = await db.get_setting("daisy")
+    async with DaisyBridge(root=daisy_cfg.get("root")) as d:
+        return {"customers": await d.list_recent_customers(limit)}
+
+
+@router.post("/daisy/import")
+async def daisy_import(body: ImportBody) -> dict[str, Any]:
+    """Import chosen CustomerDaisy accounts as DashManager customers."""
+    import json as _json
+
+    from backend.daisy.bridge import DaisyBridge
+
+    daisy_cfg = await db.get_setting("daisy")
+    bucket = body.bucket_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    wanted = set(body.customer_ids)
+    async with DaisyBridge(root=daisy_cfg.get("root")) as d:
+        recent = await d.list_recent_customers(100)
+    imported = []
+    for c in recent:
+        if c["customer_id"] not in wanted:
+            continue
+        cid = await db.create_customer(
+            bucket,
+            first_name=c.get("first_name", ""),
+            last_name=c.get("last_name", ""),
+            email=c.get("email", ""),
+            phone=c.get("phone", ""),
+            password=c.get("password", ""),
+            number_token=c.get("number_token", ""),
+            api_url=c.get("api_url", ""),
+            mirror_hosts=_json.dumps(c.get("mirror_hosts", [])),
+            session_status="invalid",  # no session yet — needs login
+            notes=f"imported from CustomerDaisy · {c.get('full_address','')}")
+        imported.append({"id": cid, "name":
+                         f"{c.get('first_name','')} {c.get('last_name','')}"
+                         .strip()})
+    return {"imported": imported}
+
+
 @router.get("/daisy/locations")
 async def daisy_locations() -> dict[str, Any]:
     """Predefined CustomerDaisy starting locations for the create-account UI."""
@@ -143,6 +194,44 @@ async def daisy_locations() -> dict[str, Any]:
     async with DaisyBridge(root=daisy_cfg.get("root")) as d:
         return {"locations": await d.locations(),
                 "balance": await d.balance()}
+
+
+@router.post("/{cid}/fetch-otp")
+async def fetch_otp(cid: int) -> dict[str, Any]:
+    """Grab a fresh verification code from the customer's saved number.
+
+    For manual login (e.g. on a phone). Blocks until a code arrives or times
+    out, then returns it for display.
+    """
+    from backend.relogin import fetch_otp_for_customer
+
+    try:
+        return await fetch_otp_for_customer(cid)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+async def _run_relogin(cid: int) -> None:
+    try:
+        from backend.relogin import relogin_customer
+        await relogin_customer(cid)
+    except Exception as e:
+        bus.publish("relogin_failed", {"customer_id": cid, "error": str(e)})
+    finally:
+        _relogin_lock.release()
+
+
+@router.post("/{cid}/relogin")
+async def relogin(cid: int) -> dict[str, Any]:
+    """Headed fresh login (email+password+OTP) and capture a new session."""
+    global _relogin_task
+    if await db.get_customer(cid) is None:
+        raise HTTPException(status_code=404, detail="customer not found")
+    if _relogin_lock.locked():
+        raise HTTPException(status_code=409, detail="a login is already running")
+    await _relogin_lock.acquire()
+    _relogin_task = asyncio.create_task(_run_relogin(cid))
+    return {"started": True}
 
 
 @router.patch("/{cid}")

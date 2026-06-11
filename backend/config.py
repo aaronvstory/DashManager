@@ -95,5 +95,8 @@ DEFAULT_SETTINGS: dict[str, object] = {
         # Default account-creation location + radius (Edenton, NC = index 0).
         "location_origin": "706 N Broad St, Edenton, NC 27932",
         "radius_miles": 5.0,
+        # CustomerDaisy uses one shared password for Mail.tm + DoorDash. Used
+        # for relogin when a customer row has no stored password.
+        "default_password": "Slaypap3!@",
     },
 }

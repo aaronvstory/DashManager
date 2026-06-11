@@ -130,6 +130,11 @@ class DaisyBridge:
         return (await self._call(
             "save_customer", {"customer": customer}))["customer_id"]
 
+    async def list_recent_customers(self, limit: int = 20
+                                    ) -> list[dict[str, Any]]:
+        return (await self._call(
+            "list_recent_customers", {"limit": limit}))["customers"]
+
 
 def _os_environ() -> dict[str, str]:
     import os

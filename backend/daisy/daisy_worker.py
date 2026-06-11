@@ -107,6 +107,46 @@ def _load_locations() -> list[dict]:
     return out
 
 
+def _list_recent_customers(limit: int) -> list[dict]:
+    """Read CustomerDaisy's customers.db (identity + api.cc token per row)."""
+    import sqlite3
+
+    db_path = DAISY_ROOT / "data" / "customers.db"
+    if not db_path.exists():
+        return []
+    con = sqlite3.connect(str(db_path))
+    con.row_factory = sqlite3.Row
+    try:
+        rows = con.execute(
+            "SELECT * FROM customers ORDER BY created_at DESC LIMIT ?",
+            (limit,)).fetchall()
+    finally:
+        con.close()
+    out = []
+    for r in rows:
+        r = dict(r)
+        try:
+            meta = json.loads(r.get("metadata") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            meta = {}
+        hosts = meta.get("apicc_mirror_hosts") or ""
+        out.append({
+            "customer_id": r.get("customer_id", ""),
+            "first_name": r.get("first_name", ""),
+            "last_name": r.get("last_name", ""),
+            "email": r.get("email", ""),
+            "password": r.get("password", ""),
+            "phone": r.get("primary_phone", ""),
+            "full_address": r.get("full_address", ""),
+            "number_token": (meta.get("apicc_number_token")
+                             or r.get("primary_verification_id") or ""),
+            "api_url": meta.get("apicc_api_url", ""),
+            "mirror_hosts": [h for h in hosts.split(",") if h] if hosts else [],
+            "created_at": r.get("created_at", ""),
+        })
+    return out
+
+
 def handle(mgr: Managers, cmd: str, args: dict) -> dict:
     if cmd == "ping":
         return {"pong": True}
@@ -161,6 +201,12 @@ def handle(mgr: Managers, cmd: str, args: dict) -> dict:
     if cmd == "save_customer":
         cid = mgr.db.save_customer(dict(args["customer"]))
         return {"customer_id": cid}
+
+    if cmd == "list_recent_customers":
+        # Read CustomerDaisy's own DB so DashManager can import existing
+        # accounts (identity + api.cc token for later OTP fetch).
+        limit = int(args.get("limit", 20))
+        return {"customers": _list_recent_customers(limit)}
 
     raise ValueError(f"unknown command: {cmd}")
 

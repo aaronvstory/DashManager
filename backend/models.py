@@ -60,6 +60,13 @@ class Customer(BaseModel):
     session_status: SessionStatus = SessionStatus.active
     created_at: str = ""
     notes: str = ""
+    # Credentials for re-login / on-demand OTP (see db SCHEMA_V2). password is
+    # the account password; number_token/api_url/mirror_hosts address the
+    # rented api.cc number so a fresh verification code can be fetched.
+    password: str = ""
+    number_token: str = ""
+    api_url: str = ""
+    mirror_hosts: str = "[]"  # JSON-encoded list[str]
 
     @property
     def display_name(self) -> str:
@@ -157,6 +164,10 @@ EVENT_TYPES = (
     "address_set",
     "account_created",
     "account_failed",
+    "relogin_started",
+    "relogin_outcome",
+    "relogin_done",
+    "relogin_failed",
     "run_started",
     "customer_started",
     "session_invalid",

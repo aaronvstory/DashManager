@@ -98,7 +98,18 @@ CREATE TABLE settings (
 );
 """
 
-_MIGRATIONS: list[str] = [SCHEMA_V1]  # index 0 -> user_version 1
+# V2: credentials needed to re-login an account and fetch fresh OTPs later.
+# A rented api.cc number stays reachable for ~60-80 days, so storing its token
+# lets DashManager grab a verification code on demand (manual phone login) or
+# drive a fresh headed login when cookies expire.
+SCHEMA_V2 = """
+ALTER TABLE customers ADD COLUMN password TEXT NOT NULL DEFAULT '';
+ALTER TABLE customers ADD COLUMN number_token TEXT NOT NULL DEFAULT '';
+ALTER TABLE customers ADD COLUMN api_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE customers ADD COLUMN mirror_hosts TEXT NOT NULL DEFAULT '[]';
+"""
+
+_MIGRATIONS: list[str] = [SCHEMA_V1, SCHEMA_V2]  # index i -> user_version i+1
 
 
 def _connect(db_path: Path | None = None) -> sqlite3.Connection:
@@ -173,7 +184,8 @@ async def list_customers() -> list[dict[str, Any]]:
 
 _CUSTOMER_FIELDS = {"first_name", "last_name", "email", "phone", "bucket_date",
                     "storage_state_path", "cookies_path", "session_status",
-                    "notes"}
+                    "notes", "password", "number_token", "api_url",
+                    "mirror_hosts"}
 
 
 async def update_customer(customer_id: int, **fields: Any) -> None:

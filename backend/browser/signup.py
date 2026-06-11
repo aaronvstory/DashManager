@@ -69,6 +69,16 @@ ADDRESS_INPUT_SELECTORS = [
     "input[placeholder*='delivery address' i]",
     "input[aria-label*='delivery address' i]",
 ]
+# Post-address DashPass upsell ("Start 30-day free trial") — we always Skip
+# (starting the trial would attempt a charge). Appears ~30s after the address;
+# verified live 2026-06-12. Also covers a generic modal close as a fallback.
+DASHPASS_SKIP_SELECTORS = [
+    "button:has-text('Skip')",
+    "text=/^Skip$/",
+    "[aria-label='Close']",
+    "button[aria-label*='close' i]",
+]
+
 # Logged-in success markers in the post-signup URL.
 SUCCESS_URL_MARKERS = ["/post-login", "doordash.com/home", "/orders"]
 
@@ -239,7 +249,9 @@ async def _fill_address_if_present(page: Page, address: dict[str, Any] | None,
     if not full:
         return
     inp = None
-    deadline = time.monotonic() + 8
+    # The "Unlock $0 delivery" modal can take up to ~30s to appear after OTP
+    # (verified live 2026-06-12) — wait generously, the account is already in.
+    deadline = time.monotonic() + 35
     while time.monotonic() < deadline:
         for sel in ADDRESS_INPUT_SELECTORS:
             loc = page.locator(sel).first
@@ -251,34 +263,66 @@ async def _fill_address_if_present(page: Page, address: dict[str, Any] | None,
                 continue
         if inp:
             break
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(1.0)
     if inp is None:
         return  # no modal this run — fine
     try:
         await inp.click()
         await inp.fill(full)
-        await asyncio.sleep(2.0)  # let autocomplete populate
-        # Click the suggestion row that matches our street number.
-        street_no = re.match(r"\d+", full)
-        option = page.locator(
-            "div[role='dialog'] [role='option'], "
-            "div[role='dialog'] li, div[role='dialog'] a")
-        n = await option.count()
-        for i in range(min(n, 8)):
-            row = option.nth(i)
+        await asyncio.sleep(2.5)  # let autocomplete populate
+        # Pressing Enter accepts the top suggestion and works ~9/10 times when
+        # the address exists (user-confirmed) — simpler and more reliable than
+        # clicking a row by text. Fall back to clicking the matching row.
+        await page.keyboard.press("Enter")
+        await asyncio.sleep(1.5)
+        for sel in ADDRESS_INPUT_SELECTORS:
             try:
-                txt = (await row.inner_text()).strip()
+                if await page.locator(sel).first.is_visible():
+                    # Still on the modal — Enter didn't take; click a row.
+                    street_no = re.match(r"\d+", full)
+                    option = page.locator(
+                        "div[role='dialog'] [role='option'], "
+                        "div[role='dialog'] li, div[role='dialog'] a")
+                    n = await option.count()
+                    for i in range(min(n, 8)):
+                        row = option.nth(i)
+                        try:
+                            txt = (await row.inner_text()).strip()
+                        except Exception:
+                            continue
+                        if street_no and txt.startswith(street_no.group()):
+                            await row.click()
+                            break
+                    else:
+                        if n:
+                            await option.first.click()
+                    break
             except Exception:
                 continue
-            if street_no and txt.startswith(street_no.group()):
-                await row.click()
-                _notify(emit, "address_set", {"address": full})
-                return
-        # Fallback: first suggestion, else Enter.
-        if n:
-            await option.first.click()
-        else:
-            await page.keyboard.press("Enter")
         _notify(emit, "address_set", {"address": full})
     except Exception:
         pass  # account exists regardless
+    await _dismiss_dashpass(page, emit)
+
+
+async def _dismiss_dashpass(page: Page, emit: Emit | None = None,
+                            wait_s: float = 35) -> None:
+    """Skip the post-address DashPass trial upsell if it appears.
+
+    We never start the trial (it would attempt a charge) — click Skip/close.
+    The modal can take ~30s to render, so poll up to wait_s, but return the
+    instant we find and click it. Silent no-op when it never appears.
+    """
+    deadline = time.monotonic() + wait_s
+    while time.monotonic() < deadline:
+        for sel in DASHPASS_SKIP_SELECTORS:
+            try:
+                btn = page.locator(sel).first
+                if await btn.is_visible():
+                    await btn.click()
+                    _notify(emit, "log",
+                            {"message": "skipped DashPass upsell"})
+                    return
+            except Exception:
+                continue
+        await asyncio.sleep(2.0)

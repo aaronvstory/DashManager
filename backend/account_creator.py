@@ -128,6 +128,10 @@ async def create_account(*, location_origin: str | None,
             last_name=identity.get("last_name", ""),
             email=identity.get("email", ""),
             phone=identity.get("phone_number", ""),
+            password=identity.get("password", ""),
+            number_token=identity.get("number_token", ""),
+            api_url=identity.get("api_url", ""),
+            mirror_hosts=json.dumps(identity.get("mirror_hosts", [])),
             notes=_notes(identity, daisy_id))
         # Rename pending session files to the customer-scoped names.
         final_storage = config.SESSIONS_DIR / f"{cid}_storage.json"
