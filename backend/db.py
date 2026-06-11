@@ -168,14 +168,38 @@ def _connect(db_path: Path | None = None) -> sqlite3.Connection:
     return conn
 
 
+def _already_applied(exc: sqlite3.OperationalError) -> bool:
+    """Is this OperationalError just 'this migration already ran'?
+
+    executescript() issues an implicit COMMIT before running, so the
+    user_version bump that follows it lands in a SEPARATE transaction. If the
+    process dies in that gap, a migration's DDL is on disk but user_version is
+    still behind — the next init_db re-runs the migration and SQLite raises
+    "duplicate column name" / "table ... already exists". We treat those as a
+    completed migration and let init_db advance the version, instead of
+    crashing the app on every subsequent boot.
+    """
+    msg = str(exc).lower()
+    return ("duplicate column name" in msg
+            or "already exists" in msg)
+
+
 def init_db(db_path: Path | None = None) -> None:
-    """Create/upgrade the schema. Safe to call repeatedly."""
+    """Create/upgrade the schema. Safe to call repeatedly (and crash-safe:
+    a half-applied migration left by a power loss is recovered, not re-crashed).
+    """
     with _connect(db_path) as conn:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         for i in range(version, len(_MIGRATIONS)):
-            conn.executescript(_MIGRATIONS[i])
+            try:
+                conn.executescript(_MIGRATIONS[i])
+            except sqlite3.OperationalError as exc:
+                if not _already_applied(exc):
+                    raise
+                # DDL already on disk from a previous interrupted run — just
+                # advance the version below.
             conn.execute(f"PRAGMA user_version = {i + 1}")
-        conn.commit()
+            conn.commit()
 
 
 def now_iso() -> str:

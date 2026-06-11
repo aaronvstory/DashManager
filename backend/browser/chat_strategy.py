@@ -199,7 +199,10 @@ class ScriptedStrategy(ChatStrategy):
             return ChatAction(kind="send",
                               message=f"{self._dashpass_decline} {self._repush}")
         if kind == "call":
-            return ChatAction(kind="send", message=self._call_decline)
+            # Decline the call AND re-push, same as DashPass — keep the agent
+            # on the refund task rather than letting the thread drift to a call.
+            return ChatAction(kind="send",
+                              message=f"{self._call_decline} {self._repush}")
         if kind == "question":
             return ChatAction(kind="send",
                               message=f"{self._offscript} {self._repush}")

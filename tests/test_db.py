@@ -175,6 +175,32 @@ def test_v5_backfills_legacy_chat_order_id(tmp_path):
     assert row["attempt_no"] == 1
 
 
+def test_init_db_recovers_from_interrupted_migration(tmp_path):
+    """Simulate a power loss between a V5 ALTER and the user_version bump:
+    the columns/table exist but user_version is still 4. init_db must NOT
+    crash on the re-run; it should detect 'already applied' and advance."""
+    import sqlite3
+
+    db_path = tmp_path / "interrupted.db"
+    db.init_db(db_path)  # fully migrate to the latest version
+
+    # Roll user_version back to 4 WITHOUT undoing V5's DDL — exactly the state
+    # a crash in the executescript→pragma gap would leave behind.
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA user_version = 4")
+    conn.commit()
+    conn.close()
+
+    # Re-running init_db would re-execute SCHEMA_V5 (ALTER TABLE ... ADD
+    # order_id), which raises "duplicate column name" — must be swallowed.
+    db.init_db(db_path)  # must not raise
+
+    conn = sqlite3.connect(db_path)
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    conn.close()
+    assert version == len(db._MIGRATIONS)
+
+
 async def test_claims_roundtrip():
     cid = await db.create_customer("2026-06-12", first_name="P")
     oid = await db.upsert_order(cid, "u1", "https://x/orders/u1",
