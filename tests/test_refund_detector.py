@@ -197,3 +197,38 @@ def test_canceled_no_refund_no_pending_is_chat():
     txt = ("Your order was canceled, we'll help you find a replacement\n"
            "Subtotal\n$50.95\nTotal\n$106.71\nPayment\nVisa")
     assert detect(txt, CFG_FULL).status == RefundStatus.not_refunded
+
+
+def test_remake_no_refund_is_remake_status():
+    # A remade order with no refund line -> remake (routed to chat, flagged).
+    txt = ("We remade your order\nSubtotal\n$50.95\nTotal\n$62.54\n"
+           "Paid with Visa")
+    r = detect(txt, CFG)
+    assert r.status == RefundStatus.remake
+    assert r.remake_seen is True
+
+
+def test_remake_with_refund_line_is_refunded():
+    # A real Refund line still wins over the remake flag — but remake_seen
+    # is preserved for the audit.
+    txt = ("We remade your order\nSubtotal\n$50.95\nTotal\n$62.54\n"
+           "Refund\n-$62.54")
+    r = detect(txt, CFG)
+    assert r.status == RefundStatus.refunded
+    assert r.remake_seen is True
+
+
+def test_remake_flag_off_by_default():
+    r = detect(NOT_REFUNDED_PLAIN, CFG)
+    assert r.status == RefundStatus.not_refunded
+    assert r.remake_seen is False
+
+
+def test_remake_pending_claim_still_claimable():
+    # A remade order that ALSO offers a self-claim screen -> pending_claim
+    # (self-claim beats chatting); remake_seen still recorded.
+    txt = ("We remade your order\nChoose your refund method\n"
+           "Subtotal\n$50.95\nTotal\n$62.54")
+    r = detect(txt, CFG)
+    assert r.status == RefundStatus.pending_claim
+    assert r.remake_seen is True

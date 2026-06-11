@@ -51,3 +51,6 @@ _login4.py
 _walk.py
 _walk_shot.png
 _recheck.py
+
+# Serena project cache
+.serena/

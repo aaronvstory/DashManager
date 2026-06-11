@@ -30,9 +30,25 @@ LOGIN_PENDING_MARKERS = [
     "challenge", "captcha",
 ]
 
-# ── Cloudflare / bot gate (harvest: _handle_bot) ─────────────────────────────
+# ── Cloudflare / bot gate (harvest: _handle_bot + 2026-06-12 variant B) ─────
+# Variant A (handled since the old app): the soft "Verifying you are human"
+# interstitial — a wait + reload clears it.
 CLOUDFLARE_TEXT = "Verifying you are human"
 CLOUDFLARE_WAIT_S = 30
+# Variant B (NEW, harder Turnstile gate seen live on Heidi's session): does NOT
+# clear on a reload or a short wait. Any of these phrases marks it. Handling:
+# wait longer (Turnstile can take 30-60s) polling until the challenge text is
+# gone, then ONE fresh navigation, else surface to the caller (relogin/manual).
+CLOUDFLARE_B_TEXTS = [
+    "performing security verification",
+    "protect against malicious bots",
+    "needs to review the security of your connection",
+    "checking if the site connection is secure",
+]
+# Marker that we're still ON a challenge page (used while polling variant B).
+CLOUDFLARE_RAY_ID_TEXT = "ray id"
+CLOUDFLARE_B_MAX_WAIT_S = 60   # Turnstile can take this long to auto-solve
+CLOUDFLARE_B_POLL_S = 3        # how often to re-check the challenge text
 
 # ── Order list page (harvest: _scrape_orders + 2026-06 inspector findings) ──
 # Old testid first; the live page now shows OrdersV2/OrdersCompletedSection
@@ -44,6 +60,9 @@ ORDER_CARD_SELECTORS = [
 ]
 ORDER_LINK_SELECTOR = 'a[href*="/orders/"]'
 CANCELLED_BADGE_TEXTS = ["order cancelled", "order canceled"]
+# A remade/redelivered order's card may carry a remake badge — a remake
+# usually doesn't auto-refund, so flag it for the chat to call out.
+REMAKE_BADGE_TEXTS = ["remade", "remake", "reordered for you"]
 SCROLL_MAX_ITERS = 40       # scroll-until-stable loop bounds (harvest)
 SCROLL_STABLE_ITERS = 2
 
@@ -97,6 +116,34 @@ STATUS_DISPLAY = {
 IN_PROGRESS_SECTION = '[data-testid="OrdersInProgressSection"]'
 VIEW_ORDER_BUTTON = '[data-anchor-id="ViewOrderButton"]'
 
+# ── Pending-claim self-claim (verified live 2026-06-12, Wendy $112.24) ──────
+# Orders page -> "Resolution" button opens "Choose your refund method", where
+# CREDITS is default-selected (BAD). Pick the original-payment radio by its
+# visible text, VERIFY it, then Confirm. The receipt then gains a Refund line
+# + a "we've issued ... to your original payment method" banner.
+RESOLUTION_BUTTON = "Resolution"            # get_by_role("button", name=...)
+REFUND_METHOD_ORIGINAL_TEXT = "to original payment method"
+REFUND_METHOD_CREDITS_TEXT = "credits"
+CLAIM_CONFIRM_BUTTON = "Confirm"            # get_by_role("button", name=...)
+# pending_claim has TWO variants (verified live 2026-06-12):
+#   • DIRECT (Wendy): Resolution -> straight to the credits-vs-card screen.
+#   • REMAKE-OFFER (Heidi): Resolution -> a remake offer page first ("<store>
+#     can remake your order", a red "Review new order" button + a "Get refund"
+#     link). Click "Get refund" to reach the SAME credits-vs-card screen.
+# NEVER click "Review new order" — that accepts the remake instead of refunding.
+CLAIM_GET_REFUND_TEXT = "Get refund"
+CLAIM_REMAKE_OFFER_TEXTS = ["can remake your order", "review new order",
+                            "remake your order"]
+CLAIM_AVOID_REMAKE_TEXT = "Review new order"  # must NOT be clicked
+# Banner confirming a refund went to the original card (claim success signal).
+CLAIM_SUCCESS_TEXTS = [
+    "to your original payment method",
+    "to your original payment",
+    "issued a refund",
+    "we've issued",
+]
+CLAIM_NAV_SETTLE_S = 2.0
+
 # ── Support chat (user-specified 2026-06 flow + harvested chat machinery) ───
 # Navigation: HELP_ORDERS_URL -> click a[href*="<order-uuid>"] ->
 # /help/orders/<uuid>?deliveryUUID=... -> "Contact support" -> widget.
@@ -124,6 +171,16 @@ RECEIVED_RE = r"\bReceived\s+(just now|a |an |\d|moment)"
 END_BUTTON_SELECTORS = ["button:has-text('End'):not(:has-text('chat'))",
                         "text=/^End$/"]
 END_CHAT_CONFIRM = "text=End Chat"
+
+# After an agent times out / ends the chat, a reconnect affordance usually
+# appears. Click it to resume the SAME session before reopening a fresh chat.
+RECONNECT_SELECTORS = [
+    "button:has-text('Reconnect')",
+    "text=Reconnect",
+    "button:has-text('Chat again')",
+    "button:has-text('Start a new chat')",
+    "text=Resume chat",
+]
 
 # Silent rate-limit block: page text unchanged or shorter than this after the
 # Contact-support click (harvest: _open_chat).
