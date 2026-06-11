@@ -42,59 +42,100 @@ def make_ctx(*, config: dict[str, Any] | None = None,
     return ChatContext(**fields)
 
 
-# ── ScriptedStrategy ─────────────────────────────────────────────────────────
+# ── ScriptedStrategy (re-push model) ─────────────────────────────────────────
 
-async def test_scripted_sequencing_send_reply_send_exhausted():
+# A config close to DEFAULT_SETTINGS["chat"] so the re-push model has the
+# offer-decline + question patterns it keys on.
+REPUSH_CFG = {
+    "repush_template": "Please refund {amounts} to my original card.",
+    "remake_note": " This was an automatic remake I never asked for.",
+    "success_phrases": ["refund has been processed", "back to your card"],
+    "dashpass_patterns": ["dashpass"],
+    "dashpass_decline": "No thank you, I don't want DashPass.",
+    "call_offer_patterns": ["give you a call", "call you"],
+    "call_decline": "I can't take a call right now, refund to my card please.",
+    "offscript_answer": "The store canceled it because items were unavailable.",
+}
+
+
+async def test_scripted_repushes_on_neutral_reply():
     strategy = ScriptedStrategy()
-    strategy.start(make_ctx())
-    transcript: list[ChatTurn] = []
-
-    first = await strategy.next_action(transcript)
-    assert first.kind == "send"
-    assert "2 order(s)" in first.message
-    assert "$23.45, $10.00" in first.message
-
-    transcript += [ChatTurn("out", first.message),
-                   ChatTurn("in", "Let me look into that for you.")]
-    second = await strategy.next_action(transcript)
-    assert second.kind == "send"
-    assert second.message == "Thank you for confirming."
-
-    transcript += [ChatTurn("out", second.message),
-                   ChatTurn("in", "Is there anything else?")]
-    final = await strategy.next_action(transcript)
-    assert final.kind != "send"  # exhausted
+    strategy.start(make_ctx(config=REPUSH_CFG))
+    action = await strategy.next_action(
+        [ChatTurn("out", "opening"),
+         ChatTurn("in", "Let me look into that for you.")])
+    assert action.kind == "send"
+    assert "$23.45, $10.00" in action.message
+    assert "original card" in action.message
 
 
 async def test_scripted_success_phrase_ends_success():
     strategy = ScriptedStrategy()
-    strategy.start(make_ctx(config={"scripted_followups": []}))
-    transcript = [
-        ChatTurn("out", "opening"),
-        ChatTurn("in", "Good news — your REFUND HAS BEEN PROCESSED back to "
-                       "your card."),
-    ]
-    action = await strategy.next_action(transcript)
+    strategy.start(make_ctx(config=REPUSH_CFG))
+    action = await strategy.next_action(
+        [ChatTurn("out", "opening"),
+         ChatTurn("in", "Good news — your REFUND HAS BEEN PROCESSED.")])
     assert action.kind == "end_success"
 
 
-async def test_scripted_no_phrase_flags_manual():
+async def test_scripted_credits_is_not_success():
+    # A refund phrase paired with "credits" must NOT end the chat as success.
     strategy = ScriptedStrategy()
-    strategy.start(make_ctx(config={"scripted_followups": []}))
-    transcript = [ChatTurn("out", "opening"),
-                  ChatTurn("in", "We can offer you DoorDash credits.")]
-    action = await strategy.next_action(transcript)
-    assert action.kind == "flag_manual"
-    assert action.reason
+    strategy.start(make_ctx(config=REPUSH_CFG))
+    action = await strategy.next_action(
+        [ChatTurn("in", "Your refund has been processed as DoorDash credits.")])
+    assert action.kind == "send"  # keeps pushing, not success
 
 
-async def test_scripted_missing_format_key_never_raises():
+async def test_scripted_declines_dashpass_then_repushes():
     strategy = ScriptedStrategy()
-    strategy.start(make_ctx(
-        config={"scripted_followups": ["Hi {nonexistent} #{order_count}"]}))
-    action = await strategy.next_action([])
+    strategy.start(make_ctx(config=REPUSH_CFG))
+    action = await strategy.next_action(
+        [ChatTurn("in", "Would you like to try DashPass free for a month?")])
     assert action.kind == "send"
-    assert action.message == "Hi  #2"
+    assert "DashPass" in action.message
+    assert "original card" in action.message  # re-push paired with decline
+
+
+async def test_scripted_declines_phone_call():
+    strategy = ScriptedStrategy()
+    strategy.start(make_ctx(config=REPUSH_CFG))
+    action = await strategy.next_action(
+        [ChatTurn("in", "Since you're unresponsive, can I give you a call?")])
+    assert action.kind == "send"
+    assert "can't take a call" in action.message.lower()
+
+
+async def test_scripted_answers_offscript_question_then_repushes():
+    strategy = ScriptedStrategy()
+    strategy.start(make_ctx(config=REPUSH_CFG))
+    action = await strategy.next_action(
+        [ChatTurn("in", "Who canceled the order — the dasher or the store?")])
+    assert action.kind == "send"
+    assert "store canceled" in action.message.lower()
+    assert "original card" in action.message
+
+
+async def test_scripted_remake_note_appended():
+    strategy = ScriptedStrategy()
+    ctx = make_ctx(config=REPUSH_CFG)
+    ctx.orders[0].remake = True
+    strategy.start(ctx)
+    action = await strategy.next_action([ChatTurn("in", "How can I help?")])
+    assert "remake I never asked for" in action.message
+
+
+def test_classify_agent_turn_pure():
+    from backend.browser.chat_strategy import classify_agent_turn
+    assert classify_agent_turn(
+        "your refund has been processed", REPUSH_CFG) == "success"
+    assert classify_agent_turn("Try DashPass!", REPUSH_CFG) == "dashpass"
+    assert classify_agent_turn("Can I call you?", REPUSH_CFG) == "call"
+    assert classify_agent_turn("Who canceled it?", REPUSH_CFG) == "question"
+    assert classify_agent_turn("One moment please.", REPUSH_CFG) == "repush"
+    # credits veto: refund phrase + credits is NOT success
+    assert classify_agent_turn(
+        "refund has been processed as credits", REPUSH_CFG) == "repush"
 
 
 def test_registry_has_both_strategies():

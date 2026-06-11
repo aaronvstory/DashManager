@@ -102,10 +102,12 @@ def detect(page_text: str, cfg: dict) -> RefundResult:
     refund_label: str = cfg.get("refund_label", "Refund")
     cancelled_texts: list[str] = cfg.get("cancelled_texts", [])
     pending_texts: list[str] = cfg.get("pending_texts", _DEFAULT_PENDING_TEXTS)
+    remake_texts: list[str] = cfg.get("remake_texts", [])
 
     text_cf = text.casefold()
     cancelled_seen = any(t.casefold() in text_cf for t in cancelled_texts if t)
     pending_seen = any(t.casefold() in text_cf for t in pending_texts if t)
+    remake_seen = any(t.casefold() in text_cf for t in remake_texts if t)
 
     totals = _label_amounts(lines, total_label)
     refunds = _label_amounts(lines, refund_label)
@@ -116,7 +118,8 @@ def detect(page_text: str, cfg: dict) -> RefundResult:
     if total is None:
         return RefundResult(
             status=RefundStatus.unknown, total_amount=None,
-            refund_amount=refund, cancelled_text_seen=cancelled_seen)
+            refund_amount=refund, cancelled_text_seen=cancelled_seen,
+            remake_seen=remake_seen)
 
     # A real refund line wins outright.
     if refund:  # non-zero Refund line — money moved
@@ -124,13 +127,22 @@ def detect(page_text: str, cfg: dict) -> RefundResult:
                   else RefundStatus.partial)
         return RefundResult(
             status=status, total_amount=total, refund_amount=refund,
-            cancelled_text_seen=cancelled_seen)
+            cancelled_text_seen=cancelled_seen, remake_seen=remake_seen)
 
     # No refund yet — is it self-claimable, or does it need a chat?
     if pending_seen:
         return RefundResult(
             status=RefundStatus.pending_claim, total_amount=total,
-            refund_amount=refund, cancelled_text_seen=cancelled_seen)
+            refund_amount=refund, cancelled_text_seen=cancelled_seen,
+            remake_seen=remake_seen)
+    # A remade order with no refund line — flagged so the chat calls it out;
+    # routed to chat just like not_refunded.
+    if remake_seen:
+        return RefundResult(
+            status=RefundStatus.remake, total_amount=total,
+            refund_amount=refund, cancelled_text_seen=cancelled_seen,
+            remake_seen=True)
     return RefundResult(
         status=RefundStatus.not_refunded, total_amount=total,
-        refund_amount=refund, cancelled_text_seen=cancelled_seen)
+        refund_amount=refund, cancelled_text_seen=cancelled_seen,
+        remake_seen=remake_seen)

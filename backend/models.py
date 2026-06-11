@@ -34,6 +34,10 @@ class RefundStatus(StrEnum):
     # METHOD (not credits) and confirming — no agent chat needed.
     pending_claim = "pending_claim"
     not_refunded = "not_refunded"  # cancelled, no refund line, no claim — chat
+    # A REMADE order (DoorDash redelivered it) that did NOT auto-refund. Routed
+    # to chat like not_refunded, but flagged so the chat calls out the remake
+    # ("an automatic remake I never asked for").
+    remake = "remake"
     unknown = "unknown"          # unparseable — never silently pass
 
 
@@ -127,6 +131,7 @@ class RefundResult(BaseModel):
     total_amount: float | None = None
     refund_amount: float | None = None
     cancelled_text_seen: bool = False
+    remake_seen: bool = False  # receipt mentions a remake/redelivery
 
 
 class IdentityProfile(BaseModel):
@@ -151,12 +156,28 @@ class Chat(BaseModel):
     id: int
     run_id: int
     customer_id: int
+    order_id: int | None = None   # the order this chat belongs to (V5)
+    attempt_no: int = 1           # retry number on that order (1..N)
     order_ids: list[int] = Field(default_factory=list)
     opening_message: str = ""
     outcome: ChatOutcome | None = None
     agent_reached: bool = False
     started_at: str = ""
     finished_at: str | None = None
+
+
+class ClaimRecord(BaseModel):
+    """One self-claim attempt on a pending_claim order (audit trail)."""
+    id: int
+    run_id: int
+    order_id: int
+    customer_id: int
+    amount: float | None = None
+    to_original_payment: bool = False
+    confirmed: bool = False
+    outcome: str = ""
+    error: str | None = None
+    created_at: str = ""
 
 
 class ChatMessageRow(BaseModel):
@@ -195,9 +216,12 @@ EVENT_TYPES = (
     "orders_found",
     "order_checking",
     "order_checked",
+    "claim_started",
+    "claim_outcome",
     "chat_opened",
     "chat_escalation",
     "chat_message",
+    "chat_attempt",
     "chat_outcome",
     "customer_done",
     "run_done",
