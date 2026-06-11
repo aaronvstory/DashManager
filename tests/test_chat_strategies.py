@@ -104,6 +104,8 @@ async def test_scripted_declines_phone_call():
         [ChatTurn("in", "Since you're unresponsive, can I give you a call?")])
     assert action.kind == "send"
     assert "can't take a call" in action.message.lower()
+    # The decline must be paired with the re-push so the agent stays on task.
+    assert "original card" in action.message
 
 
 async def test_scripted_answers_offscript_question_then_repushes():
