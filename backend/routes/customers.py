@@ -61,7 +61,7 @@ async def _run_login(bucket_date: str | None) -> None:
         from backend.browser.session import login_and_capture
 
         bus.publish("login_waiting")
-        storage, cookies, profile = await login_and_capture(
+        storage, cookies, profile, temp_profile = await login_and_capture(
             emit=lambda t, d: bus.publish(t, d))
 
         bucket = bucket_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -77,10 +77,21 @@ async def _run_login(bucket_date: str | None) -> None:
         cookies_dest = config.SESSIONS_DIR / f"{cid}_cookies.json"
         Path(storage).replace(storage_dest)
         Path(cookies).replace(cookies_dest)
+        # Adopt the temp login profile as the customer's persistent profile.
+        import shutil as _shutil
+
+        from backend.browser.driver import profile_dir
+        dest = profile_dir(cid)
+        _shutil.rmtree(dest, ignore_errors=True)
+        try:
+            _shutil.move(temp_profile, str(dest))
+        except Exception:
+            _shutil.rmtree(temp_profile, ignore_errors=True)
         await db.update_customer(
             cid,
             storage_state_path=str(storage_dest),
             cookies_path=str(cookies_dest),
+            session_status="active",
         )
 
         bus.publish("login_captured", {
@@ -259,6 +270,12 @@ async def delete_customer(cid: int) -> dict[str, Any]:
                 Path(p).unlink(missing_ok=True)
             except OSError:
                 pass  # locked/permission-denied file must not block DB delete
+    # Remove the customer's persistent Chromium profile dir too.
+    from backend.browser.driver import remove_profile
+    try:
+        remove_profile(cid)
+    except Exception:
+        pass
     await db.delete_customer(cid)
     return {"ok": True}
 
@@ -272,25 +289,27 @@ async def test_session(cid: int) -> dict[str, Any]:
     # Lazy: Playwright + browser modules load only when actually testing.
     from playwright.async_api import async_playwright
 
-    from backend.browser import driver, orders
-    from backend.browser.driver import SessionExpiredError
+    from backend.browser import orders
+    from backend.browser.driver import (SessionExpiredError,
+                                        export_storage_state,
+                                        open_customer_profile)
 
     browser_cfg = await db.get_setting("browser")
+    scraped = []
     try:
         async with async_playwright() as p:
-            browser = await driver.launch_browser(
-                p, headless=bool(browser_cfg["headless"]))
+            ctx = None
             try:
-                ctx = await driver.new_customer_context(
-                    browser,
-                    row["storage_state_path"],
-                    row["cookies_path"],
-                    viewport=tuple(browser_cfg["viewport"]),
-                )
-                page = await ctx.new_page()
+                ctx = await open_customer_profile(
+                    p, cid, headless=bool(browser_cfg["headless"]),
+                    seed_storage_state=row.get("storage_state_path") or None,
+                    viewport=tuple(browser_cfg["viewport"]))
+                page = ctx.pages[0] if ctx.pages else await ctx.new_page()
                 scraped = await orders.scrape_orders(page)
+                await export_storage_state(ctx, cid)
             finally:
-                await browser.close()
+                if ctx is not None:
+                    await ctx.close()
     except SessionExpiredError:
         await db.update_customer(cid, session_status="expired")
         return {"ok": False, "error": "session_expired"}

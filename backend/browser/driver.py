@@ -1,18 +1,24 @@
 """Playwright plumbing shared by session, orders, and chat drivers.
 
-Ported from the proven ddtr app: stealth launch args, storage-state-first
-session replay (cookies-only fallback), Cloudflare wait-and-reload, and
-best-effort screenshots. Session files here are plain JSON — the old app's
-encryption layer is intentionally dropped.
+Each customer gets its own persistent Chromium profile (own user-data-dir on
+disk: cookies, cache, localStorage). This gives true per-account isolation —
+several customers can be logged in and run concurrently without cross-
+contamination — and the session survives restarts (no replay needed). A
+portable storage_state JSON is still exported as a backup so a profile can be
+reseeded if its dir is lost.
+
+Ported from the proven ddtr app: stealth launch args, Cloudflare
+wait-and-reload, best-effort screenshots. No encryption layer (intentional).
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import re
+import shutil
 from pathlib import Path
 
-from playwright.async_api import Browser, BrowserContext, Page, Playwright
+from playwright.async_api import BrowserContext, Page, Playwright
 
 from backend import config
 from backend.browser.selectors import (
@@ -29,49 +35,62 @@ class SessionExpiredError(Exception):
     """The saved session no longer authenticates (redirect to login/identity)."""
 
 
-async def launch_browser(p: Playwright, headless: bool) -> Browser:
-    return await p.chromium.launch(headless=headless, args=CHROMIUM_ARGS)
+def profile_dir(customer_id: int) -> Path:
+    """The on-disk Chromium user-data-dir for one customer (gitignored)."""
+    return config.PROFILES_DIR / str(customer_id)
 
 
-async def new_customer_context(
-    browser: Browser,
-    storage_state_path: str,
-    cookies_path: str | None,
+def profile_exists(customer_id: int) -> bool:
+    d = profile_dir(customer_id)
+    # A non-empty profile dir means Chromium has written a session here.
+    return d.exists() and any(d.iterdir())
+
+
+def remove_profile(customer_id: int) -> None:
+    shutil.rmtree(profile_dir(customer_id), ignore_errors=True)
+
+
+async def open_customer_profile(
+    p: Playwright,
+    customer_id: int,
+    headless: bool,
+    *,
+    seed_storage_state: str | None = None,
     viewport: tuple[int, int] = (1400, 900),
 ) -> BrowserContext:
-    """Replay a saved customer session.
+    """Open the customer's persistent profile as an isolated context.
 
-    Full storage_state (cookies + localStorage) is preferred; a cookies-only
-    context is the legacy fallback. Raises SessionExpiredError when neither
-    file is usable so callers handle it like any other dead session.
+    Returns a BrowserContext (which, for a persistent context, owns the whole
+    browser — close THE CONTEXT to clean up). When the profile dir is empty
+    and a `seed_storage_state` file is given, its cookies are injected so a
+    portable backup can repopulate a fresh profile.
     """
-    vp = {"width": viewport[0], "height": viewport[1]}
-    if storage_state_path and Path(storage_state_path).exists():
+    d = profile_dir(customer_id)
+    d.mkdir(parents=True, exist_ok=True)
+    fresh = not any(d.iterdir())
+    ctx = await p.chromium.launch_persistent_context(
+        str(d), headless=headless, args=CHROMIUM_ARGS, user_agent=UA,
+        viewport={"width": viewport[0], "height": viewport[1]})
+    if fresh and seed_storage_state and Path(seed_storage_state).exists():
         try:
-            return await browser.new_context(
-                viewport=vp, user_agent=UA, storage_state=storage_state_path)
+            state = json.loads(Path(seed_storage_state).read_text("utf-8"))
+            cookies = state.get("cookies", [])
+            if cookies:
+                await ctx.add_cookies(cookies)
         except Exception:
-            # Corrupted/truncated storage_state (e.g. capture killed
-            # mid-write) — treat like any dead session: try cookies next.
-            pass
-    if not cookies_path or not Path(cookies_path).exists():
-        raise SessionExpiredError(
-            "no usable session files (missing storage state and cookies)")
-    try:
-        cookies = json.loads(Path(cookies_path).read_text("utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        raise SessionExpiredError(
-            f"corrupted cookie file {cookies_path}: {exc}") from exc
-    if not cookies:
-        raise SessionExpiredError(f"empty cookie file: {cookies_path}")
-    ctx = await browser.new_context(viewport=vp, user_agent=UA)
-    try:
-        await ctx.add_cookies(cookies)
-    except Exception as exc:
-        await ctx.close()
-        raise SessionExpiredError(
-            f"cookie replay rejected ({cookies_path}): {exc}") from exc
+            pass  # backup seed is best-effort; a real login still works
     return ctx
+
+
+async def export_storage_state(ctx: BrowserContext, customer_id: int) -> str:
+    """Write a portable storage_state backup for the customer; returns path."""
+    config.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    path = config.SESSIONS_DIR / f"{customer_id}_storage.json"
+    try:
+        await ctx.storage_state(path=str(path))
+        return str(path)
+    except Exception:
+        return ""
 
 
 async def handle_cloudflare(page: Page) -> bool:

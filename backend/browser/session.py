@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any, Callable
 
 from playwright.async_api import Page, async_playwright
@@ -34,22 +35,28 @@ PENDING_COOKIES = "pending_cookies.json"
 
 async def login_and_capture(
     emit: EmitFn | None = None,
-) -> tuple[str, str, IdentityProfile]:
+) -> tuple[str, str, IdentityProfile, str]:
     """Open a headed browser, wait for manual login, save session + identity.
 
-    Returns (storage_state_path, cookies_path, profile). Session files are
-    plain JSON written to config.SESSIONS_DIR under pending_* names.
+    Returns (storage_state_path, cookies_path, profile, temp_profile_dir).
+    The caller adopts temp_profile_dir as the new customer's persistent
+    profile. Session files are plain JSON under pending_* names.
     """
+    import tempfile
+
     storage_path = config.SESSIONS_DIR / PENDING_STORAGE
     cookies_path = config.SESSIONS_DIR / PENDING_COOKIES
+    # Manual login runs in a temp persistent profile; the route adopts it as
+    # the customer's profile dir after creating the row (see _run_login).
+    temp_profile = Path(tempfile.mkdtemp(prefix="dm_login_"))
     profile = IdentityProfile()
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False, args=CHROMIUM_ARGS)
+        ctx = await p.chromium.launch_persistent_context(
+            str(temp_profile), headless=False, args=CHROMIUM_ARGS,
+            user_agent=UA, viewport={"width": 1400, "height": 900})
         try:
-            ctx = await browser.new_context(
-                viewport={"width": 1400, "height": 900}, user_agent=UA)
-            page = await ctx.new_page()
+            page = ctx.pages[0] if ctx.pages else await ctx.new_page()
             await page.goto(LOGIN_URL, wait_until="domcontentloaded")
             if emit:
                 emit("login_waiting", {})
@@ -80,9 +87,9 @@ async def login_and_capture(
                 if emit:
                     emit("log", {"message": f"identity capture failed: {exc}"})
         finally:
-            await browser.close()
+            await ctx.close()
 
-    return str(storage_path), str(cookies_path), profile
+    return str(storage_path), str(cookies_path), profile, str(temp_profile)
 
 
 async def _capture_identity(page: Page) -> IdentityProfile:

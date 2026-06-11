@@ -12,10 +12,9 @@ from __future__ import annotations
 
 import json
 import time
-from pathlib import Path
 from typing import Any
 
-from backend import config, db
+from backend import db
 from backend.daisy.bridge import DaisyBridge
 from backend.events import bus
 
@@ -72,9 +71,9 @@ async def relogin_customer(customer_id: int) -> dict[str, Any]:
     """Headed fresh login + OTP + session capture for one customer."""
     from playwright.async_api import async_playwright
 
-    from backend.browser.driver import launch_browser
+    from backend.browser.driver import (export_storage_state,
+                                        open_customer_profile)
     from backend.browser.login_flow import login_and_capture
-    from backend.browser.selectors import UA
 
     customer = await db.get_customer(customer_id)
     if customer is None:
@@ -97,30 +96,31 @@ async def relogin_customer(customer_id: int) -> dict[str, Any]:
             return res.get("code") or ""
 
         async with async_playwright() as p:
-            browser = await launch_browser(
-                p, bool(browser_cfg.get("headless", False)))
             outcome = "failed"
+            ctx = None
             try:
-                ctx = await browser.new_context(
-                    viewport={"width": 1400, "height": 900}, user_agent=UA)
-                page = await ctx.new_page()
+                # Log into the customer's OWN persistent profile so the session
+                # lives on disk and isolates from other customers.
+                ctx = await open_customer_profile(
+                    p, customer_id,
+                    bool(browser_cfg.get("headless", False)),
+                    seed_storage_state=customer.get("storage_state_path")
+                    or None,
+                    viewport=tuple(browser_cfg.get("viewport", [1400, 900])))
+                page = ctx.pages[0] if ctx.pages else await ctx.new_page()
                 outcome = await login_and_capture(
                     page, customer["email"], password, poll_otp,
                     address=address, emit=_emit)
                 _emit("relogin_outcome", {"customer_id": customer_id,
                                           "outcome": outcome})
                 if outcome == "logged_in":
-                    config.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-                    storage = config.SESSIONS_DIR / f"{customer_id}_storage.json"
-                    cookies = config.SESSIONS_DIR / f"{customer_id}_cookies.json"
-                    await ctx.storage_state(path=str(storage))
-                    Path(cookies).write_text(
-                        json.dumps(await ctx.cookies(), indent=2), "utf-8")
+                    storage = await export_storage_state(ctx, customer_id)
                     await db.update_customer(
-                        customer_id, storage_state_path=str(storage),
-                        cookies_path=str(cookies), session_status="active")
+                        customer_id, storage_state_path=storage,
+                        session_status="active")
             finally:
-                await browser.close()
+                if ctx is not None:
+                    await ctx.close()
 
     if outcome != "logged_in":
         _emit("relogin_failed", {"customer_id": customer_id,

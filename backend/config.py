@@ -12,10 +12,11 @@ load_dotenv(BASE / ".env")
 DATA_DIR = BASE / "data"
 SESSIONS_DIR = DATA_DIR / "sessions"
 SCREENSHOTS_DIR = DATA_DIR / "screenshots"
+PROFILES_DIR = DATA_DIR / "profiles"  # one persistent Chromium profile per customer
 DB_PATH = DATA_DIR / "dashmanager.db"
 FRONTEND_DIST = BASE / "frontend" / "dist"
 
-for _d in (DATA_DIR, SESSIONS_DIR, SCREENSHOTS_DIR):
+for _d in (DATA_DIR, SESSIONS_DIR, SCREENSHOTS_DIR, PROFILES_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 PORT = int(os.getenv("DASH_PORT", "8765"))
@@ -87,7 +88,10 @@ DEFAULT_SETTINGS: dict[str, object] = {
         "system_prompt": "",  # empty -> backend.llm.prompts.default_system_prompt()
         "max_turns": 12,
     },
-    "browser": {"headless": False, "viewport": [1400, 900]},
+    "browser": {"headless": False, "viewport": [1400, 900],
+                # How many customers run concurrently (own profiles). Keep
+                # modest — each is a full headed Chromium.
+                "max_concurrent": 3},
     "openrouter_api_key": "",  # UI-set override; env var preferred
     "daisy": {
         # CustomerDaisy install — DashManager shells out to its venv.

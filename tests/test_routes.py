@@ -69,11 +69,17 @@ async def test_login_starts_then_409_then_captures(client, monkeypatch,
     sessions_dir = tmp_path / "sessions"
     sessions_dir.mkdir()
     monkeypatch.setattr(config, "SESSIONS_DIR", sessions_dir)
+    profiles_dir = tmp_path / "profiles"
+    profiles_dir.mkdir()
+    monkeypatch.setattr(config, "PROFILES_DIR", profiles_dir)
 
     pending_storage = sessions_dir / "pending_storage.json"
     pending_cookies = sessions_dir / "pending_cookies.json"
     pending_storage.write_text("{}")
     pending_cookies.write_text("[]")
+    temp_profile = tmp_path / "temp_profile"
+    temp_profile.mkdir()
+    (temp_profile / "marker").write_text("x")  # non-empty so move succeeds
 
     release = asyncio.Event()
 
@@ -83,7 +89,8 @@ async def test_login_starts_then_409_then_captures(client, monkeypatch,
         await release.wait()
         profile = IdentityProfile(first_name="Ada", last_name="Lovelace",
                                   email="ada@example.com", phone="555-0100")
-        return str(pending_storage), str(pending_cookies), profile
+        return (str(pending_storage), str(pending_cookies), profile,
+                str(temp_profile))
 
     stub = types.ModuleType("backend.browser.session")
     stub.login_and_capture = fake_login_and_capture

@@ -15,6 +15,7 @@ route layer.
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -38,8 +39,7 @@ async def create_account(*, location_origin: str | None,
     """
     from playwright.async_api import async_playwright
 
-    from backend.browser.driver import launch_browser
-    from backend.browser.selectors import UA
+    from backend.browser.selectors import CHROMIUM_ARGS, UA
     from backend.browser.signup import fill_signup_form, submit_and_verify
 
     bucket = bucket_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -75,16 +75,23 @@ async def create_account(*, location_origin: str | None,
             res = await daisy.fetch_otp(token, api_url, mirror_hosts)
             return res.get("code") or ""
 
-        # ── Drive the browser ────────────────────────────────────────────────
+        # ── Drive the browser in a TEMP profile ──────────────────────────────
+        # The customer row doesn't exist yet, so sign up in a temp persistent
+        # profile; it's moved to data/profiles/{cid}/ once the row is created.
+        import tempfile
+
+        temp_profile = Path(tempfile.mkdtemp(prefix="dm_signup_"))
         async with async_playwright() as p:
-            browser = await launch_browser(
-                p, bool(browser_cfg.get("headless", False)))
             outcome = "failed"
-            storage_path = cookies_path = ""
+            storage_backup = ""
+            ctx = None
             try:
-                ctx = await browser.new_context(
-                    viewport={"width": 1400, "height": 900}, user_agent=UA)
-                page = await ctx.new_page()
+                ctx = await p.chromium.launch_persistent_context(
+                    str(temp_profile),
+                    headless=bool(browser_cfg.get("headless", False)),
+                    args=CHROMIUM_ARGS, user_agent=UA,
+                    viewport={"width": 1400, "height": 900})
+                page = ctx.pages[0] if ctx.pages else await ctx.new_page()
                 await fill_signup_form(page, identity, emit=_emit)
                 _emit("signup_submitting", {})
                 outcome = await submit_and_verify(
@@ -95,19 +102,16 @@ async def create_account(*, location_origin: str | None,
 
                 if outcome == "created":
                     config.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-                    storage_path = str(config.SESSIONS_DIR
-                                       / "pending_signup_storage.json")
-                    cookies_path = str(config.SESSIONS_DIR
-                                       / "pending_signup_cookies.json")
-                    await ctx.storage_state(path=storage_path)
-                    Path(cookies_path).write_text(
-                        json.dumps(await ctx.cookies(), indent=2), "utf-8")
+                    storage_backup = str(config.SESSIONS_DIR
+                                         / "pending_signup_storage.json")
+                    await ctx.storage_state(path=storage_backup)
             finally:
-                await browser.close()
+                if ctx is not None:
+                    await ctx.close()
 
         if outcome != "created":
-            # Number/identity are still useful; record the attempt in Daisy DB.
-            try:
+            shutil.rmtree(temp_profile, ignore_errors=True)
+            try:  # number/identity still useful — record the attempt
                 await daisy.save_customer(_daisy_record(identity, verified=False))
             except Exception:
                 pass
@@ -133,13 +137,22 @@ async def create_account(*, location_origin: str | None,
             api_url=identity.get("api_url", ""),
             mirror_hosts=json.dumps(identity.get("mirror_hosts", [])),
             notes=_notes(identity, daisy_id))
-        # Rename pending session files to the customer-scoped names.
+
+        # Adopt the signup profile as the customer's persistent profile.
+        from backend.browser.driver import profile_dir
+
+        dest = profile_dir(cid)
+        shutil.rmtree(dest, ignore_errors=True)
+        try:
+            shutil.move(str(temp_profile), str(dest))
+        except Exception:
+            shutil.rmtree(temp_profile, ignore_errors=True)
         final_storage = config.SESSIONS_DIR / f"{cid}_storage.json"
-        final_cookies = config.SESSIONS_DIR / f"{cid}_cookies.json"
-        Path(storage_path).replace(final_storage)
-        Path(cookies_path).replace(final_cookies)
-        await db.update_customer(cid, storage_state_path=str(final_storage),
-                                 cookies_path=str(final_cookies))
+        if storage_backup and Path(storage_backup).exists():
+            Path(storage_backup).replace(final_storage)
+        await db.update_customer(cid,
+                                 storage_state_path=str(final_storage),
+                                 session_status="active")
 
         summary = {"customer_id": cid, "daisy_id": daisy_id,
                    "name": f"{identity.get('first_name','')} "
