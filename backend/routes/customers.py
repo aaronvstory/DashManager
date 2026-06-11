@@ -51,9 +51,50 @@ class CustomerPatch(BaseModel):
     notes: str | None = None
 
 
+def _derive_pills(c: dict[str, Any]) -> dict[str, Any]:
+    """Lifecycle/session pills for a customer row (for UI + DB viewer)."""
+    from backend.browser.driver import profile_exists
+
+    has_profile = False
+    try:
+        has_profile = profile_exists(c["id"])
+    except Exception:
+        pass
+    has_storage = bool(c.get("storage_state_path")
+                       and Path(c["storage_state_path"]).exists())
+    has_token = bool(c.get("number_token"))
+    session = c.get("session_status", "invalid")
+    # lifecycle: created -> logged_in (session active + a profile/storage)
+    logged_in = session == "active" and (has_profile or has_storage)
+    return {
+        "lifecycle": "logged_in" if logged_in else "created",
+        "session_status": session,
+        "has_session": has_profile or has_storage,
+        "has_profile": has_profile,
+        "has_storage_backup": has_storage,
+        "has_number_token": has_token,
+    }
+
+
 @router.get("")
 async def list_customers() -> dict[str, Any]:
-    return {"customers": await db.list_customers()}
+    rows = await db.list_customers()
+    for c in rows:
+        c["pills"] = _derive_pills(c)
+    return {"customers": rows}
+
+
+@router.get("/full")
+async def customers_full() -> dict[str, Any]:
+    """Everything the DB viewer needs: customers (+pills) and their orders."""
+    rows = await db.list_customers()
+    out = []
+    for c in rows:
+        c = dict(c)
+        c["pills"] = _derive_pills(c)
+        c["orders"] = await db.list_orders(c["id"])
+        out.append(c)
+    return {"customers": out}
 
 
 async def _run_login(bucket_date: str | None) -> None:
