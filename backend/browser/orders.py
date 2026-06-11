@@ -110,8 +110,9 @@ async def scrape_orders(
     prev = stable = 0
     for _ in range(SCROLL_MAX_ITERS):
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        await asyncio.sleep(0.55)  # legacy-tuned lazy-load waits: shorter and
         await page.keyboard.press("End")
-        await asyncio.sleep(0.7)
+        await asyncio.sleep(0.75)  # the list truncates before "stable" hits
         if chosen is None:
             chosen = await _pick_card_selector(page)
         count = await page.locator(chosen).count() if chosen else 0

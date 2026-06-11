@@ -125,3 +125,18 @@ class TestDetectSuccess:
 
     def test_empty_phrases_never_match(self):
         assert detect_success("refund has been processed", []) is False
+
+
+class TestCreditGuard:
+    """Success requires the ORIGINAL payment method — credits never count."""
+
+    def test_credit_mention_vetoes_success(self):
+        from backend.browser.chat import detect_success
+        phrases = ["refund has been processed"]
+        assert detect_success(
+            "Good news, your refund has been processed!", phrases)
+        assert not detect_success(
+            "Your refund has been processed as DoorDash credits.", phrases)
+        assert not detect_success(
+            "I have added credits and your refund has been processed.",
+            phrases)

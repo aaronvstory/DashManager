@@ -78,6 +78,9 @@ DEFAULT_SETTINGS: dict[str, object] = {
         ],
         "max_turns": 12,
         "max_chat_seconds": 300,
+        # How long to wait for a reply after sending the AGENT word — humans
+        # take far longer to connect than the bot takes to answer.
+        "human_wait_seconds": 90,
     },
     "llm": {
         "model": "anthropic/claude-sonnet-4.5",

@@ -16,7 +16,13 @@ from typing import Any, Callable
 from playwright.async_api import Page, async_playwright
 
 from backend import config, db
-from backend.browser.selectors import CHROMIUM_ARGS, EDIT_PROFILE_URL, LOGIN_URL, UA
+from backend.browser.selectors import (
+    CHROMIUM_ARGS,
+    EDIT_PROFILE_URL,
+    LOGIN_URL,
+    ORDERS_URL,
+    UA,
+)
 from backend.models import IdentityProfile
 
 EmitFn = Callable[[str, dict[str, Any]], None]
@@ -53,6 +59,13 @@ async def login_and_capture(
                            and "identity" not in u),
                 timeout=300_000)
             await asyncio.sleep(3)  # let post-login cookies settle (harvest)
+            try:
+                # Legacy visits /orders before exporting: an authenticated
+                # page-load finalizes the session cookies/localStorage.
+                await page.goto(ORDERS_URL, wait_until="domcontentloaded")
+                await asyncio.sleep(3)
+            except Exception:
+                pass
 
             await ctx.storage_state(path=str(storage_path))
             cookies = await ctx.cookies()

@@ -60,9 +60,19 @@ def is_bot_reply(text: str, bot_patterns: list[str]) -> bool:
     return any(p.lower() in lo for p in bot_patterns)
 
 
-def detect_success(text: str, phrases: list[str]) -> bool:
-    """Case-insensitive substring match against refund-confirmed phrases."""
+# Success means a refund to the ORIGINAL payment method. Any mention of
+# credits in the same reply disqualifies the driver-level short-circuit —
+# "I've processed a refund as credits" must NOT end the chat as success;
+# the strategy (or a human) keeps pushing instead.
+CREDIT_GUARD_TERMS = ("credit",)
+
+
+def detect_success(text: str, phrases: list[str],
+                   guard_terms: tuple[str, ...] = CREDIT_GUARD_TERMS) -> bool:
+    """Case-insensitive phrase match, vetoed by credit-guard terms."""
     lo = text.lower()
+    if any(g in lo for g in guard_terms):
+        return False
     return any(p.lower() in lo for p in phrases)
 
 
@@ -102,20 +112,29 @@ async def _body_text(page: Page) -> str:
         return ""
 
 
-async def find_chat_input(page: Page) -> Locator | None:
-    """First visible match in the CHAT_SELS cascade, else None."""
-    for sel in CHAT_SELS:
-        loc = page.locator(sel).first
-        try:
-            if await loc.is_visible():
-                return loc
-        except Exception:
-            continue
-    return None
+async def find_chat_input(page: Page, wait_s: float = 0.0) -> Locator | None:
+    """First visible match in the CHAT_SELS cascade, else None.
+
+    With wait_s > 0 the cascade is re-polled until the deadline — the sendbird
+    widget re-renders its input, so a single zero-wait pass can miss it
+    (legacy waited ~5s per send).
+    """
+    deadline = time.monotonic() + wait_s
+    while True:
+        for sel in CHAT_SELS:
+            loc = page.locator(sel).first
+            try:
+                if await loc.is_visible():
+                    return loc
+            except Exception:
+                continue
+        if time.monotonic() >= deadline:
+            return None
+        await asyncio.sleep(0.5)
 
 
 async def send_message(page: Page, text: str) -> bool:
-    el = await find_chat_input(page)
+    el = await find_chat_input(page, wait_s=5.0)
     if el is None:
         return False
     try:
@@ -243,7 +262,10 @@ async def navigate_to_chat(page: Page, order_uuid: str,
     deadline = time.monotonic() + NAV_POLL_S
     while time.monotonic() < deadline:
         if await find_chat_input(page) is not None:
-            _notify(emit, "chat_opened", {"order_uuid": order_uuid})
+            # The runner emits the canonical chat_opened (with chat_id);
+            # this is only a diagnostic breadcrumb.
+            _notify(emit, "log",
+                    {"msg": f"chat: input found for {order_uuid}"})
             return "ok"
         try:
             got = page.locator(GOT_IT_TEXT).first
@@ -299,16 +321,18 @@ async def run_chat(page: Page, strategy: ChatStrategy, ctx: ChatContext, *,
 
     async def _rec(direction: str, content: str) -> None:
         transcript.append(ChatTurn(direction=direction, content=content))
+        # The runner's record() both persists AND emits chat_message with the
+        # chat_id; emitting here too would double every message in the UI.
         if record is not None:
             await record(direction, content)
-        _notify(emit, "chat_message",
-                {"direction": direction, "content": content})
 
-    async def _exchange(text: str) -> str | None:
+    async def _exchange(text: str, max_wait: float = REPLY_WAIT_S
+                        ) -> str | None:
         """Send `text`, wait for the next reply; record both sides.
 
-        Returns the new agent text, '' if the reply produced no new lines,
-        or None when the send failed / nothing arrived within REPLY_WAIT_S.
+        Returns the new agent text; '' when the send worked but nothing (new)
+        arrived within max_wait — silence is NOT fatal (legacy proceeded to
+        its next message); None ONLY when the send itself failed.
         """
         # Flush window: let any in-flight reply to the PREVIOUS message land
         # before the baseline, so wait_for_reply only fires on the reply to
@@ -321,8 +345,8 @@ async def run_chat(page: Page, strategy: ChatStrategy, ctx: ChatContext, *,
         # Snapshot AFTER our own bubble renders so it never appears in the diff.
         await asyncio.sleep(0.3)
         prev_text = await _body_text(page)
-        if not await wait_for_reply(page, before):
-            return None
+        if not await wait_for_reply(page, before, max_wait):
+            return ""
         reply = extract_diff(prev_text, await _body_text(page))
         if reply:
             await _rec("in", reply)
@@ -334,14 +358,20 @@ async def run_chat(page: Page, strategy: ChatStrategy, ctx: ChatContext, *,
         if reply is None:
             return ChatOutcome.failed.value, False
 
+        # Humans take far longer to connect than the bot takes to answer —
+        # after sending AGENT, wait on a human-scale clock.
+        human_wait = float(chat_cfg.get("human_wait_seconds", 90))
         escalations = 0
-        while is_bot_reply(reply, chat_cfg["bot_patterns"]):
+        # Silence counts as "still the bot" (legacy proceeded on timeout);
+        # the escalation cap bounds the loop either way.
+        while not reply or is_bot_reply(reply, chat_cfg["bot_patterns"]):
             escalations += 1
             if escalations > chat_cfg["max_escalations"]:
                 await end_chat(page)
                 return ChatOutcome.blocked.value, False
             _notify(emit, "chat_escalation", {"attempt": escalations})
-            reply = await _exchange(chat_cfg["agent_word"])
+            reply = await _exchange(chat_cfg["agent_word"],
+                                    max_wait=human_wait)
             if reply is None:
                 return ChatOutcome.failed.value, False
 
@@ -362,6 +392,9 @@ async def run_chat(page: Page, strategy: ChatStrategy, ctx: ChatContext, *,
             action = await strategy.next_action(transcript)
             if action.kind == "send":
                 reply = await _exchange(action.message or "")
+                if reply is None:  # chat input is gone — the widget died
+                    await end_chat(page)
+                    return ChatOutcome.manual_flag.value, agent_reached
                 # Driver-level short-circuit on every new agent text.
                 if reply and detect_success(reply, chat_cfg["success_phrases"]):
                     await end_chat(page)

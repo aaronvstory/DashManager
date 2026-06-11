@@ -217,8 +217,17 @@ class RunManager:
                                         "openrouter_api_key":
                                             api_key_override or None})
                             strategy = get_strategy(strategy_name)
+                            # The UI's "LLM max turns" knob lives in the llm
+                            # settings object; the driver reads chat_cfg, so
+                            # propagate it or the knob is dead.
+                            effective_cfg = dict(chat_cfg)
+                            if strategy_name == "llm":
+                                effective_cfg["max_turns"] = int(
+                                    llm_cfg.get("max_turns",
+                                                chat_cfg["max_turns"]))
                             outcome, agent_reached = await run_chat(
-                                page, strategy, chat_ctx, chat_cfg=chat_cfg,
+                                page, strategy, chat_ctx,
+                                chat_cfg=effective_cfg,
                                 emit=emit, record=record)
                             await db.finish_chat(chat_id, outcome,
                                                  agent_reached)
