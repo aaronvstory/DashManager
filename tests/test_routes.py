@@ -93,7 +93,7 @@ async def test_login_starts_then_409_then_captures(client, monkeypatch,
                 str(temp_profile))
 
     stub = types.ModuleType("backend.browser.session")
-    stub.login_and_capture = fake_login_and_capture
+    stub.manual_login_and_capture = fake_login_and_capture
     monkeypatch.setitem(sys.modules, "backend.browser.session", stub)
 
     events_q = bus.subscribe()

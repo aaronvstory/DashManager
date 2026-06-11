@@ -120,9 +120,15 @@ class RunManager:
                             p, run_id, pos, len(customers), cust,
                             strategy_name, cfg, stats, emit)
 
-                await asyncio.gather(
+                results = await asyncio.gather(
                     *(worker(i, c) for i, c in enumerate(customers, start=1)),
                     return_exceptions=True)
+                # _process_customer catches its own errors, but a failure in
+                # the worker wrapper itself would otherwise vanish — log it.
+                for r in results:
+                    if isinstance(r, BaseException):
+                        emit("log", {"level": "error",
+                                     "message": f"worker crashed: {r}"})
 
             if self._stop.is_set():
                 status = "stopped"
@@ -144,23 +150,30 @@ class RunManager:
                                                    get_strategy)
         from backend.browser.driver import (SessionExpiredError,
                                              export_storage_state,
-                                             open_customer_profile)
+                                             open_customer_profile,
+                                             profile_lock)
         from backend.browser.orders import open_receipt, scrape_orders
         from backend.browser.refund_detector import detect
 
         # Everything is inside the try so a KeyError on cust/cfg (or any
         # setup error) is logged, not silently swallowed by gather(
         # return_exceptions=True).
-        cid = cust.get("id")
-        name = f"Customer {cid}"
+        cid = None
+        name = "Unknown customer"
         ctx = None
+        plock = None
         try:
+            cid = cust["id"]
             name = (f"{cust['first_name']} {cust['last_name']}".strip()
                     or f"Customer {cid}")
             emit("customer_started", {"customer_id": cid, "name": name,
                                       "position": pos, "total": total})
             await self._bump(stats, "customers")
             browser_cfg = cfg["browser"]
+            # Per-customer lock: never let a manual test-session/relogin open
+            # this same profile concurrently (Chromium locks the dir).
+            plock = profile_lock(cid)
+            await plock.acquire()
             try:
                 # Each customer drives its OWN persistent profile — fully
                 # isolated, so concurrent customers never share cookies.
@@ -238,6 +251,8 @@ class RunManager:
         finally:
             if ctx is not None:
                 await ctx.close()  # persistent context owns the browser
+            if plock is not None and plock.locked():
+                plock.release()
         emit("customer_done", {"customer_id": cid, "stats": dict(stats)})
 
     async def _pursue_refunds(self, run_id, cid, name, cust, page, problems,

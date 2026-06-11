@@ -68,7 +68,8 @@ class DaisyBridge:
         except (asyncio.TimeoutError, ProcessLookupError):
             try:
                 self._proc.kill()
-            except ProcessLookupError:
+                await self._proc.wait()  # reap to avoid a zombie
+            except (ProcessLookupError, Exception):
                 pass
         finally:
             self._proc = None
@@ -118,6 +119,10 @@ class DaisyBridge:
         try:
             proc.kill()
         except ProcessLookupError:
+            pass
+        try:
+            await proc.wait()  # reap so we don't leak a zombie
+        except Exception:
             pass
 
     # ── Commands ─────────────────────────────────────────────────────────────

@@ -167,7 +167,9 @@ async def login_and_capture(page: Page, email: str, password: str,
             tried.add(code)
             _notify(emit, "otp_received", {"code": code})
             if await _enter_otp(page, code):
-                for _ in range(3):
+                # Up to 10s — slow networks/proxies; premature resend would
+                # invalidate this good code.
+                for _ in range(5):
                     await asyncio.sleep(2.0)
                     await handle_cloudflare(page)
                     if any(m in page.url for m in SUCCESS_URL_MARKERS):

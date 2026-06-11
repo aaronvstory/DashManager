@@ -33,7 +33,7 @@ PENDING_STORAGE = "pending_storage.json"
 PENDING_COOKIES = "pending_cookies.json"
 
 
-async def login_and_capture(
+async def manual_login_and_capture(
     emit: EmitFn | None = None,
 ) -> tuple[str, str, IdentityProfile, str]:
     """Open a headed browser, wait for manual login, save session + identity.

@@ -213,7 +213,9 @@ async def submit_and_verify(page: Page, poll_otp: OtpPoller, *,
             tried_codes.add(code)
             _notify(emit, "otp_received", {"code": code})
             if await _enter_otp(page, code):
-                for _ in range(3):  # success can take a beat to redirect
+                # Up to 10s — slow networks/proxies can take a while; a
+                # premature resend would invalidate this good code.
+                for _ in range(5):
                     await asyncio.sleep(2.0)
                     await handle_cloudflare(page)
                     if any(m in page.url for m in SUCCESS_URL_MARKERS):
@@ -291,7 +293,10 @@ async def _fill_address_if_present(page: Page, address: dict[str, Any] | None,
                     street_no = re.match(r"\d+", full)
                     option = page.locator(
                         "div[role='dialog'] [role='option'], "
-                        "div[role='dialog'] li, div[role='dialog'] a")
+                        # NOT a bare 'a' — that matches Terms/Privacy/Close and
+                        # could navigate away. List items / option rows only.
+                        "div[role='dialog'] li, "
+                        "div[role='dialog'] [role='button'][data-anchor-id]")
                     n = await option.count()
                     for i in range(min(n, 8)):
                         row = option.nth(i)

@@ -16,6 +16,7 @@ import asyncio
 import json
 import re
 import shutil
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from playwright.async_api import BrowserContext, Page, Playwright
@@ -29,6 +30,19 @@ from backend.browser.selectors import (
 )
 
 _FILENAME_UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
+
+# Chromium locks a profile's user-data-dir while a context is open, so two
+# operations on the SAME customer (e.g. a run iterating them + a manual
+# test-session/relogin) would crash. One lock per customer serializes access;
+# different customers still run fully concurrently.
+_profile_locks: dict[int, asyncio.Lock] = {}
+
+
+def profile_lock(customer_id: int) -> asyncio.Lock:
+    lock = _profile_locks.get(customer_id)
+    if lock is None:
+        lock = _profile_locks[customer_id] = asyncio.Lock()
+    return lock
 
 
 class SessionExpiredError(Exception):
@@ -80,6 +94,28 @@ async def open_customer_profile(
         except Exception:
             pass  # backup seed is best-effort; a real login still works
     return ctx
+
+
+@asynccontextmanager
+async def customer_profile(
+    p: Playwright, customer_id: int, headless: bool, *,
+    seed_storage_state: str | None = None,
+    viewport: tuple[int, int] = (1400, 900),
+):
+    """Open a customer profile under their per-customer lock; close on exit.
+
+    Holding the lock for the whole open→use→close span prevents two operations
+    on the same customer from fighting over Chromium's user-data-dir lock.
+    Yields the BrowserContext.
+    """
+    async with profile_lock(customer_id):
+        ctx = await open_customer_profile(
+            p, customer_id, headless, seed_storage_state=seed_storage_state,
+            viewport=viewport)
+        try:
+            yield ctx
+        finally:
+            await ctx.close()
 
 
 async def export_storage_state(ctx: BrowserContext, customer_id: int) -> str:

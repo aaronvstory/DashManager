@@ -75,8 +75,7 @@ async def relogin_customer(customer_id: int,
     """
     from playwright.async_api import async_playwright
 
-    from backend.browser.driver import (export_storage_state,
-                                        open_customer_profile)
+    from backend.browser.driver import customer_profile, export_storage_state
     from backend.browser.login_flow import login_and_capture
 
     customer = await db.get_customer(customer_id)
@@ -103,15 +102,15 @@ async def relogin_customer(customer_id: int,
 
         async with async_playwright() as p:
             outcome = "failed"
-            ctx = None
-            try:
-                # Log into the customer's OWN persistent profile so the session
-                # lives on disk and isolates from other customers.
-                ctx = await open_customer_profile(
+            # customer_profile holds the per-customer lock for the whole
+            # open->use->close span, so a concurrent run/test-session on this
+            # same profile can't collide on Chromium's user-data-dir lock.
+            async with customer_profile(
                     p, customer_id, headless,
                     seed_storage_state=customer.get("storage_state_path")
                     or None,
-                    viewport=tuple(browser_cfg.get("viewport", [1400, 900])))
+                    viewport=tuple(browser_cfg.get("viewport", [1400, 900]))
+                    ) as ctx:
                 page = ctx.pages[0] if ctx.pages else await ctx.new_page()
                 outcome = await login_and_capture(
                     page, customer["email"], password, poll_otp,
@@ -123,9 +122,6 @@ async def relogin_customer(customer_id: int,
                     await db.update_customer(
                         customer_id, storage_state_path=storage,
                         session_status="active")
-            finally:
-                if ctx is not None:
-                    await ctx.close()
 
     if outcome != "logged_in":
         _emit("relogin_failed", {"customer_id": customer_id,

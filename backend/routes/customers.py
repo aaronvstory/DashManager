@@ -110,11 +110,11 @@ async def _run_login(bucket_date: str | None) -> None:
     temp_profile: str | None = None
     try:
         # Lazy: pulls in Playwright, which must not load at app boot.
-        from backend.browser.session import login_and_capture
+        from backend.browser.session import manual_login_and_capture
 
         bus.publish("login_waiting")
-        storage, cookies, profile, temp_profile = await login_and_capture(
-            emit=lambda t, d: bus.publish(t, d))
+        storage, cookies, profile, temp_profile = \
+            await manual_login_and_capture(emit=lambda t, d: bus.publish(t, d))
 
         bucket = bucket_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         cid = await db.create_customer(
@@ -347,9 +347,8 @@ async def test_session(cid: int, body: ReloginBody | None = None
     from playwright.async_api import async_playwright  # lazy
 
     from backend.browser import orders
-    from backend.browser.driver import (SessionExpiredError,
-                                        export_storage_state,
-                                        open_customer_profile)
+    from backend.browser.driver import (SessionExpiredError, customer_profile,
+                                        export_storage_state)
 
     browser_cfg = await db.get_setting("browser")
     override = (body or ReloginBody()).headless
@@ -357,18 +356,15 @@ async def test_session(cid: int, body: ReloginBody | None = None
     result = None
     try:
         async with async_playwright() as p:
-            ctx = None
-            try:
-                ctx = await open_customer_profile(
+            # Per-customer lock (via customer_profile) so this can't collide
+            # with a run/relogin already driving this customer's profile.
+            async with customer_profile(
                     p, cid, headless=headless,
                     seed_storage_state=row.get("storage_state_path") or None,
-                    viewport=tuple(browser_cfg["viewport"]))
+                    viewport=tuple(browser_cfg["viewport"])) as ctx:
                 page = ctx.pages[0] if ctx.pages else await ctx.new_page()
                 result = await orders.scrape_orders_full(page)
                 await export_storage_state(ctx, cid)
-            finally:
-                if ctx is not None:
-                    await ctx.close()
     except SessionExpiredError:
         await db.update_customer(cid, session_status="expired")
         return {"ok": False, "error": "session_expired"}
