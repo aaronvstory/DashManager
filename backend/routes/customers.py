@@ -29,6 +29,16 @@ class LoginBody(BaseModel):
     bucket_date: str | None = None
 
 
+class CreateAccountBody(BaseModel):
+    bucket_date: str | None = None
+    location_origin: str | None = None  # falls back to daisy settings default
+    radius_miles: float | None = None
+
+
+_create_lock = asyncio.Lock()
+_create_task: asyncio.Task | None = None
+
+
 class CustomerPatch(BaseModel):
     first_name: str | None = None
     last_name: str | None = None
@@ -92,6 +102,47 @@ async def start_login(body: LoginBody | None = None) -> dict[str, Any]:
     _login_task = asyncio.create_task(
         _run_login(body.bucket_date if body else None))
     return {"started": True}
+
+
+async def _run_create_account(body: CreateAccountBody) -> None:
+    try:
+        from backend.account_creator import create_account
+
+        daisy_cfg = await db.get_setting("daisy")
+        origin = body.location_origin or daisy_cfg.get("location_origin")
+        radius = (body.radius_miles if body.radius_miles is not None
+                  else float(daisy_cfg.get("radius_miles", 5.0)))
+        await create_account(
+            location_origin=origin, radius_miles=radius,
+            bucket_date=body.bucket_date, daisy_root=daisy_cfg.get("root"))
+    except Exception as e:  # surfaced to the UI as an event
+        bus.publish("account_failed", {"error": str(e)})
+    finally:
+        _create_lock.release()
+
+
+@router.post("/create-account")
+async def create_account_route(body: CreateAccountBody | None = None
+                               ) -> dict[str, Any]:
+    global _create_task
+    if _create_lock.locked():
+        raise HTTPException(status_code=409,
+                            detail="an account creation is already running")
+    await _create_lock.acquire()
+    _create_task = asyncio.create_task(
+        _run_create_account(body or CreateAccountBody()))
+    return {"started": True}
+
+
+@router.get("/daisy/locations")
+async def daisy_locations() -> dict[str, Any]:
+    """Predefined CustomerDaisy starting locations for the create-account UI."""
+    from backend.daisy.bridge import DaisyBridge
+
+    daisy_cfg = await db.get_setting("daisy")
+    async with DaisyBridge(root=daisy_cfg.get("root")) as d:
+        return {"locations": await d.locations(),
+                "balance": await d.balance()}
 
 
 @router.patch("/{cid}")

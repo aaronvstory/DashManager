@@ -118,6 +118,18 @@ export type EventType =
   | "login_waiting"
   | "login_captured"
   | "login_failed"
+  | "account_balance"
+  | "identity_generating"
+  | "identity_generated"
+  | "number_renting"
+  | "number_rented"
+  | "signup_submitting"
+  | "signup_outcome"
+  | "otp_waiting"
+  | "otp_received"
+  | "otp_resent"
+  | "account_created"
+  | "account_failed"
   | "run_started"
   | "customer_started"
   | "session_invalid"
@@ -143,6 +155,18 @@ export const EVENT_TYPES: readonly EventType[] = [
   "login_waiting",
   "login_captured",
   "login_failed",
+  "account_balance",
+  "identity_generating",
+  "identity_generated",
+  "number_renting",
+  "number_rented",
+  "signup_submitting",
+  "signup_outcome",
+  "otp_waiting",
+  "otp_received",
+  "otp_resent",
+  "account_created",
+  "account_failed",
   "run_started",
   "customer_started",
   "session_invalid",

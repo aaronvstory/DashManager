@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { format } from "date-fns"
-import { Plus, UserPlus } from "lucide-react"
+import { Plus, Sparkles, UserPlus } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { toast } from "sonner"
 import { AddCustomerDialog } from "@/components/customers/add-customer-dialog"
+import { CreateAccountDialog } from "@/components/customers/create-account-dialog"
 import { BucketCard } from "@/components/customers/bucket-card"
 import { DeleteCustomerDialog } from "@/components/customers/delete-customer-dialog"
 import { EditCustomerDialog } from "@/components/customers/edit-customer-dialog"
@@ -77,6 +78,7 @@ export default function CustomersPage() {
   const customers = useMemo(() => data?.customers ?? [], [data])
 
   const [addOpen, setAddOpen] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
   const [editing, setEditing] = useState<Customer | null>(null)
   const [deleting, setDeleting] = useState<Customer | null>(null)
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<number>>(new Set())
@@ -189,10 +191,16 @@ export default function CustomersPage() {
             : "Manage DoorDash customer accounts, their captured sessions, and bucket dates."
         }
         actions={
-          <Button onClick={() => setAddOpen(true)}>
-            <Plus data-icon="inline-start" />
-            Add customer
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setCreateOpen(true)}>
+              <Sparkles data-icon="inline-start" />
+              Create account
+            </Button>
+            <Button onClick={() => setAddOpen(true)}>
+              <Plus data-icon="inline-start" />
+              Add customer
+            </Button>
+          </div>
         }
       />
 
@@ -236,6 +244,8 @@ export default function CustomersPage() {
       ) : null}
 
       <AddCustomerDialog open={addOpen} onOpenChange={setAddOpen} />
+
+      <CreateAccountDialog open={createOpen} onOpenChange={setCreateOpen} />
 
       {editing ? (
         <EditCustomerDialog

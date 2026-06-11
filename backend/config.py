@@ -89,4 +89,11 @@ DEFAULT_SETTINGS: dict[str, object] = {
     },
     "browser": {"headless": False, "viewport": [1400, 900]},
     "openrouter_api_key": "",  # UI-set override; env var preferred
+    "daisy": {
+        # CustomerDaisy install — DashManager shells out to its venv.
+        "root": r"C:\claude\CustomerDaisy",
+        # Default account-creation location + radius (Edenton, NC = index 0).
+        "location_origin": "706 N Broad St, Edenton, NC 27932",
+        "radius_miles": 5.0,
+    },
 }

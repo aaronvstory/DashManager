@@ -1,0 +1,586 @@
+import { useEffect, useRef, useState } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { format } from "date-fns"
+import {
+  CalendarDays,
+  CircleAlert,
+  CircleCheck,
+  LoaderCircle,
+  MapPin,
+  Phone,
+  RefreshCw,
+  Sparkles,
+} from "lucide-react"
+import { toast } from "sonner"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
+import { Calendar } from "@/components/ui/calendar"
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { api, ApiError } from "@/lib/api"
+import { useRunStore } from "@/store/runStore"
+import { cn } from "@/lib/utils"
+import { apiErrorDetail } from "./helpers"
+
+type Phase = "idle" | "starting" | "running" | "created" | "failed"
+
+/** One row in the live progress list during account creation. */
+type StepKey = "identity" | "number" | "signup" | "otp" | "account"
+type StepStatus = "pending" | "active" | "done"
+
+const STEP_ORDER: ReadonlyArray<{ key: StepKey; label: string }> = [
+  { key: "identity", label: "Generating identity" },
+  { key: "number", label: "Renting phone number" },
+  { key: "signup", label: "Submitting signup" },
+  { key: "otp", label: "Waiting for SMS code" },
+  { key: "account", label: "Creating account" },
+]
+
+interface DaisyLocation {
+  index: number
+  name: string
+  city: string
+  state: string
+  full_address: string
+}
+
+interface LocationsResponse {
+  locations: DaisyLocation[]
+  balance: number
+}
+
+interface GeneratedIdentity {
+  first_name: string
+  last_name: string
+  email: string
+  city: string
+  state: string
+  full_address: string
+}
+
+interface RentedNumber {
+  phone_number: string
+  price: number | null
+}
+
+interface CreatedAccount {
+  customer_id: number
+  name: string
+  email: string
+  phone: string
+  bucket_date: string
+}
+
+function str(v: unknown, fallback = ""): string {
+  return typeof v === "string" ? v : fallback
+}
+
+function num(v: unknown): number | null {
+  return typeof v === "number" ? v : null
+}
+
+export function CreateAccountDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const queryClient = useQueryClient()
+  const lastEvent = useRunStore((s) => s.lastEvent)
+
+  const [phase, setPhase] = useState<Phase>("idle")
+  const [date, setDate] = useState<Date>(() => new Date())
+  const [dateOpen, setDateOpen] = useState(false)
+  const [location, setLocation] = useState<string>("")
+  const [radius, setRadius] = useState<string>("5")
+
+  // Live progress, built up from SSE events.
+  const [steps, setSteps] = useState<Record<StepKey, StepStatus>>({
+    identity: "pending",
+    number: "pending",
+    signup: "pending",
+    otp: "pending",
+    account: "pending",
+  })
+  const [identity, setIdentity] = useState<GeneratedIdentity | null>(null)
+  const [rented, setRented] = useState<RentedNumber | null>(null)
+  const [otpCode, setOtpCode] = useState<string | null>(null)
+  const [otpResent, setOtpResent] = useState(false)
+  const [created, setCreated] = useState<CreatedAccount | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  /** Ignore SSE events that predate this creation attempt. */
+  const baselineEventId = useRef(-1)
+
+  // Pull Daisy locations + balance when the dialog opens (subprocess: ~1-3s).
+  const locationsQuery = useQuery({
+    queryKey: ["daisy-locations"],
+    queryFn: () => api.get<LocationsResponse>("/customers/daisy/locations"),
+    enabled: open,
+    staleTime: 60_000,
+  })
+  const locations = locationsQuery.data?.locations ?? []
+  const balance = locationsQuery.data?.balance ?? null
+
+  // Default the location to the first option (Edenton) once they load.
+  useEffect(() => {
+    if (!location && locations.length > 0) {
+      setLocation(locations[0].full_address)
+    }
+  }, [location, locations])
+
+  useEffect(() => {
+    if (!lastEvent) return
+    if (phase !== "starting" && phase !== "running") return
+    if (lastEvent.id <= baselineEventId.current) return
+
+    const d = lastEvent.data
+
+    switch (lastEvent.type) {
+      case "identity_generating":
+        setPhase("running")
+        setSteps((s) => ({ ...s, identity: "active" }))
+        break
+      case "identity_generated":
+        setPhase("running")
+        setIdentity({
+          first_name: str(d.first_name),
+          last_name: str(d.last_name),
+          email: str(d.email),
+          city: str(d.city),
+          state: str(d.state),
+          full_address: str(d.full_address),
+        })
+        setSteps((s) => ({ ...s, identity: "done" }))
+        break
+      case "number_renting":
+        setSteps((s) => ({ ...s, number: "active" }))
+        break
+      case "number_rented":
+        setRented({
+          phone_number: str(d.phone_number),
+          price: num(d.price),
+        })
+        setSteps((s) => ({ ...s, number: "done" }))
+        break
+      case "signup_submitting":
+        setSteps((s) => ({ ...s, signup: "active" }))
+        break
+      case "otp_waiting":
+        setSteps((s) => ({ ...s, signup: "done", otp: "active" }))
+        break
+      case "otp_received":
+        setOtpCode(str(d.code))
+        setSteps((s) => ({ ...s, otp: "done" }))
+        break
+      case "otp_resent":
+        setOtpResent(true)
+        break
+      case "account_created":
+        setCreated({
+          customer_id: num(d.customer_id) ?? -1,
+          name: str(d.name),
+          email: str(d.email),
+          phone: str(d.phone),
+          bucket_date: str(d.bucket_date),
+        })
+        setSteps({
+          identity: "done",
+          number: "done",
+          signup: "done",
+          otp: "done",
+          account: "done",
+        })
+        setPhase("created")
+        void queryClient.invalidateQueries({ queryKey: ["customers"] })
+        toast.success(`Account created for ${str(d.name) || "new customer"}`)
+        break
+      case "account_failed":
+        setError(str(d.error) || "Account creation failed.")
+        setPhase("failed")
+        break
+      default:
+        break
+    }
+  }, [lastEvent, phase, queryClient])
+
+  function resetProgress() {
+    setSteps({
+      identity: "pending",
+      number: "pending",
+      signup: "pending",
+      otp: "pending",
+      account: "pending",
+    })
+    setIdentity(null)
+    setRented(null)
+    setOtpCode(null)
+    setOtpResent(false)
+    setCreated(null)
+    setError(null)
+  }
+
+  function resetToIdle() {
+    resetProgress()
+    setPhase("idle")
+  }
+
+  function handleOpenChange(next: boolean) {
+    onOpenChange(next)
+    if (!next) {
+      resetToIdle()
+      setDate(new Date())
+      setDateOpen(false)
+    }
+  }
+
+  async function start() {
+    resetProgress()
+    setPhase("starting")
+    baselineEventId.current = useRunStore.getState().lastEvent?.id ?? -1
+    const radiusMiles = Number(radius)
+    try {
+      await api.post<{ started: boolean }>("/customers/create-account", {
+        bucket_date: format(date, "yyyy-MM-dd"),
+        location_origin: location || undefined,
+        radius_miles: Number.isFinite(radiusMiles) ? radiusMiles : undefined,
+      })
+    } catch (err) {
+      setPhase("idle")
+      if (err instanceof ApiError && err.status === 409) {
+        toast.error("An account creation is already running")
+      } else {
+        toast.error(apiErrorDetail(err, "Could not start account creation"))
+      }
+    }
+  }
+
+  const busy = phase === "starting" || phase === "running"
+  const lowBalance = balance !== null && balance < 0.5
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Create account</DialogTitle>
+          <DialogDescription>
+            Sign up a brand-new DoorDash account automatically with a generated
+            identity.
+          </DialogDescription>
+        </DialogHeader>
+
+        {phase === "idle" ? (
+          <>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="create-account-date">Bucket date</Label>
+                <Popover open={dateOpen} onOpenChange={setDateOpen}>
+                  <PopoverTrigger
+                    render={
+                      <Button
+                        id="create-account-date"
+                        variant="outline"
+                        className="w-full justify-between font-normal"
+                      />
+                    }
+                  >
+                    {format(date, "EEE, MMM d yyyy")}
+                    <CalendarDays className="text-muted-foreground" />
+                  </PopoverTrigger>
+                  <PopoverContent align="start" className="w-auto p-0">
+                    <Calendar
+                      mode="single"
+                      selected={date}
+                      defaultMonth={date}
+                      onSelect={(d) => {
+                        if (d) {
+                          setDate(d)
+                          setDateOpen(false)
+                        }
+                      }}
+                    />
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="create-account-location">Location</Label>
+                {locationsQuery.isLoading ? (
+                  <div className="flex h-8 items-center gap-2 px-1 text-sm text-muted-foreground">
+                    <LoaderCircle className="size-4 animate-spin" />
+                    Loading locations…
+                  </div>
+                ) : locationsQuery.isError ? (
+                  <p className="text-sm text-destructive">
+                    Could not load locations.
+                  </p>
+                ) : (
+                  <Select
+                    items={locations.map((l) => ({
+                      label: `${l.name} — ${l.city}, ${l.state}`,
+                      value: l.full_address,
+                    }))}
+                    value={location}
+                    onValueChange={(v) => {
+                      if (v) setLocation(v as string)
+                    }}
+                  >
+                    <SelectTrigger
+                      id="create-account-location"
+                      className="w-full"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {locations.map((l) => (
+                        <SelectItem key={l.index} value={l.full_address}>
+                          {l.name} — {l.city}, {l.state}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="create-account-radius">Radius (miles)</Label>
+                <Input
+                  id="create-account-radius"
+                  type="number"
+                  min={1}
+                  value={radius}
+                  onChange={(e) => setRadius(e.target.value)}
+                />
+              </div>
+
+              {balance !== null ? (
+                <p
+                  className={cn(
+                    "text-xs",
+                    lowBalance ? "text-amber-500" : "text-muted-foreground",
+                  )}
+                >
+                  api.cc balance: ${balance.toFixed(2)}
+                </p>
+              ) : null}
+
+              <Alert>
+                <Sparkles />
+                <AlertTitle>Automatic account creation</AlertTitle>
+                <AlertDescription>
+                  A Chromium window opens and signs up a fresh DoorDash account
+                  using a generated identity, email, phone number, and address
+                  near the chosen location. The SMS code is entered
+                  automatically.
+                </AlertDescription>
+              </Alert>
+            </div>
+
+            <DialogFooter>
+              <DialogClose render={<Button variant="outline" />}>
+                Cancel
+              </DialogClose>
+              <Button
+                onClick={() => void start()}
+                disabled={locationsQuery.isLoading}
+              >
+                <Sparkles data-icon="inline-start" />
+                Create account
+              </Button>
+            </DialogFooter>
+          </>
+        ) : null}
+
+        {busy ? (
+          <>
+            <div className="py-2">
+              <StepList
+                steps={steps}
+                identity={identity}
+                rented={rented}
+                otpCode={otpCode}
+                otpResent={otpResent}
+              />
+            </div>
+            <DialogFooter>
+              <DialogClose render={<Button variant="outline" />}>
+                Hide — creation keeps running
+              </DialogClose>
+            </DialogFooter>
+          </>
+        ) : null}
+
+        {phase === "created" ? (
+          <>
+            <div className="flex flex-col items-center gap-4 py-6 text-center">
+              <div className="flex size-12 items-center justify-center rounded-full bg-emerald-500/10 ring-1 ring-emerald-500/25">
+                <CircleCheck className="size-6 text-emerald-500" />
+              </div>
+              <div className="space-y-1">
+                <p className="text-sm font-medium">Account created</p>
+                <p className="text-sm text-muted-foreground">
+                  {created?.name || "Customer"}
+                  {created?.email ? ` · ${created.email}` : ""}
+                </p>
+                {created?.phone ? (
+                  <p className="text-xs text-muted-foreground">
+                    {created.phone}
+                    {created.bucket_date ? ` · ${created.bucket_date}` : ""}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={resetToIdle}>
+                Create another
+              </Button>
+              <DialogClose render={<Button />}>Done</DialogClose>
+            </DialogFooter>
+          </>
+        ) : null}
+
+        {phase === "failed" ? (
+          <>
+            <Alert variant="destructive">
+              <CircleAlert />
+              <AlertTitle>Account creation failed</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+            <DialogFooter>
+              <DialogClose render={<Button variant="outline" />}>
+                Close
+              </DialogClose>
+              <Button onClick={() => void start()}>
+                <RefreshCw data-icon="inline-start" />
+                Retry
+              </Button>
+            </DialogFooter>
+          </>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function StepList({
+  steps,
+  identity,
+  rented,
+  otpCode,
+  otpResent,
+}: {
+  steps: Record<StepKey, StepStatus>
+  identity: GeneratedIdentity | null
+  rented: RentedNumber | null
+  otpCode: string | null
+  otpResent: boolean
+}) {
+  return (
+    <ol className="relative space-y-1">
+      {STEP_ORDER.map((step, i) => {
+        const status = steps[step.key]
+        const isLast = i === STEP_ORDER.length - 1
+        return (
+          <li key={step.key} className="relative">
+            {/* Connecting line between markers. */}
+            {!isLast ? (
+              <span
+                aria-hidden
+                className={cn(
+                  "absolute top-7 left-[1.0625rem] h-[calc(100%-1rem)] w-px",
+                  status === "done" ? "bg-emerald-500/40" : "bg-border",
+                )}
+              />
+            ) : null}
+            <div
+              className={cn(
+                "flex items-start gap-3 rounded-lg px-2 py-2 transition-colors",
+                status === "active" ? "bg-primary/5" : "",
+              )}
+            >
+              <span className="mt-0.5 flex size-[1.375rem] shrink-0 items-center justify-center">
+                {status === "done" ? (
+                  <CircleCheck className="size-[1.375rem] text-emerald-500" />
+                ) : status === "active" ? (
+                  <LoaderCircle className="size-[1.375rem] animate-spin text-primary" />
+                ) : (
+                  <span className="size-2 rounded-full bg-muted-foreground/40" />
+                )}
+              </span>
+              <div className="min-w-0 flex-1 space-y-1">
+                <p
+                  className={cn(
+                    "text-sm leading-[1.375rem] transition-colors",
+                    status === "pending"
+                      ? "text-muted-foreground"
+                      : "font-medium text-foreground",
+                  )}
+                >
+                  {step.key === "otp" && status === "active"
+                    ? "Waiting for SMS code…"
+                    : step.label}
+                </p>
+
+                {/* Inline details revealed as events arrive. */}
+                {step.key === "identity" && identity ? (
+                  <div className="space-y-0.5 text-xs text-muted-foreground">
+                    <p className="font-medium text-foreground/80">
+                      {`${identity.first_name} ${identity.last_name}`.trim()}
+                    </p>
+                    {identity.email ? <p>{identity.email}</p> : null}
+                    {identity.city || identity.state ? (
+                      <p className="flex items-center gap-1">
+                        <MapPin className="size-3" />
+                        {[identity.city, identity.state]
+                          .filter(Boolean)
+                          .join(", ")}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+
+                {step.key === "number" && rented ? (
+                  <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <Phone className="size-3" />
+                    {rented.phone_number}
+                    {rented.price !== null
+                      ? ` · $${rented.price.toFixed(2)}`
+                      : ""}
+                  </p>
+                ) : null}
+
+                {step.key === "otp" && otpResent && !otpCode ? (
+                  <p className="text-xs text-amber-500">code resent</p>
+                ) : null}
+
+                {step.key === "otp" && otpCode ? (
+                  <p className="text-xs text-muted-foreground">
+                    code {otpCode}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
