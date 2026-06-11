@@ -43,14 +43,18 @@ class DaisyBridge:
         self._proc = await asyncio.create_subprocess_exec(
             self.python, str(worker),
             cwd=self.root,
-            env={"DAISY_ROOT": self.root, "PYTHONUNBUFFERED": "1",
-                 **_os_environ()},
+            # OUR vars LAST so a stray parent DAISY_ROOT / PYTHONUNBUFFERED
+            # can't point the worker at the wrong checkout or buffer stdout
+            # (which would corrupt the JSON protocol).
+            env={**_os_environ(), "DAISY_ROOT": self.root,
+                 "PYTHONUNBUFFERED": "1"},
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
         ready = await self._read_line()
         if not ready.get("ok"):
+            await self._kill_proc()  # reap — don't leak the failed worker
             raise DaisyError(ready.get("error", "worker failed to start"))
 
     async def close(self) -> None:

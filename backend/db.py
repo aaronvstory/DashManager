@@ -116,7 +116,15 @@ ALTER TABLE orders ADD COLUMN status_text TEXT NOT NULL DEFAULT '';
 ALTER TABLE orders ADD COLUMN dasher_name TEXT NOT NULL DEFAULT '';
 """
 
-_MIGRATIONS: list[str] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3]  # idx i -> version i+1
+# V4: the lifecycle contract is in_progress|completed|cancelled now; the V1
+# default 'active' is legacy. Backfill so old rows become refund-checkable
+# (and aren't stranded by clear_in_progress_orders, which only drops
+# 'in_progress').
+SCHEMA_V4 = """
+UPDATE orders SET order_status='completed' WHERE order_status='active';
+"""
+
+_MIGRATIONS: list[str] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4]
 
 
 def _connect(db_path: Path | None = None) -> sqlite3.Connection:

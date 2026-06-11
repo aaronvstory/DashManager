@@ -119,9 +119,13 @@ async def relogin_customer(customer_id: int,
                                           "outcome": outcome})
                 if outcome == "logged_in":
                     storage = await export_storage_state(ctx, customer_id)
-                    await db.update_customer(
-                        customer_id, storage_state_path=storage,
-                        session_status="active")
+                    # Don't clobber a previously-valid path with an empty
+                    # export ("" = capture failed). The live profile dir is
+                    # the real session anyway; keep the old backup path.
+                    fields = {"session_status": "active"}
+                    if storage:
+                        fields["storage_state_path"] = storage
+                    await db.update_customer(customer_id, **fields)
 
     if outcome != "logged_in":
         _emit("relogin_failed", {"customer_id": customer_id,

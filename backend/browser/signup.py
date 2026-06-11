@@ -224,6 +224,7 @@ async def submit_and_verify(page: Page, poll_otp: OtpPoller, *,
                 # Submitted but not logged in (expired/rejected) → resend.
                 if await _resend(page, emit):
                     last_resend = time.monotonic()
+                    tried_codes.clear()  # a fresh code may reuse the digits
                 continue
             return "otp_failed"
         # No fresh code yet; resend if the wait is dragging.
@@ -231,6 +232,7 @@ async def submit_and_verify(page: Page, poll_otp: OtpPoller, *,
                 and time.monotonic() - last_resend > resend_after_s):
             if await _resend(page, emit):
                 last_resend = time.monotonic()
+                tried_codes.clear()  # a fresh code may reuse the digits
         await asyncio.sleep(3.0)
     return "otp_timeout"
 

@@ -162,6 +162,7 @@ class RunManager:
         name = "Unknown customer"
         ctx = None
         plock = None
+        plock_held = False
         try:
             cid = cust["id"]
             name = (f"{cust['first_name']} {cust['last_name']}".strip()
@@ -171,9 +172,12 @@ class RunManager:
             await self._bump(stats, "customers")
             browser_cfg = cfg["browser"]
             # Per-customer lock: never let a manual test-session/relogin open
-            # this same profile concurrently (Chromium locks the dir).
+            # this same profile concurrently (Chromium locks the dir). Track
+            # OUR acquisition with a flag — `locked()` is True even when
+            # another task holds it, so releasing on that would steal it.
             plock = profile_lock(cid)
             await plock.acquire()
+            plock_held = True
             try:
                 # Each customer drives its OWN persistent profile — fully
                 # isolated, so concurrent customers never share cookies.
@@ -251,8 +255,8 @@ class RunManager:
         finally:
             if ctx is not None:
                 await ctx.close()  # persistent context owns the browser
-            if plock is not None and plock.locked():
-                plock.release()
+            if plock is not None and plock_held:
+                plock.release()  # only release the lock WE acquired
         emit("customer_done", {"customer_id": cid, "stats": dict(stats)})
 
     async def _pursue_refunds(self, run_id, cid, name, cust, page, problems,

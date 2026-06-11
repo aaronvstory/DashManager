@@ -178,11 +178,13 @@ async def login_and_capture(page: Page, email: str, password: str,
                         return "logged_in"
                 if await _resend(page, emit):  # expired/rejected → fresh code
                     last_resend = time.monotonic()
+                    tried.clear()  # a fresh code may reuse the digits
                 continue
             return "otp_failed"
         if (time.monotonic() - started > resend_after_s
                 and time.monotonic() - last_resend > resend_after_s):
             if await _resend(page, emit):
                 last_resend = time.monotonic()
+                tried.clear()  # a fresh code may reuse the digits
         await asyncio.sleep(3.0)
     return "otp_timeout"
