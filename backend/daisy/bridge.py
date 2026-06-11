@@ -97,12 +97,28 @@ class DaisyBridge:
                 await self.start()
             assert self._proc and self._proc.stdin
             req = json.dumps({"cmd": cmd, "args": args or {}}) + "\n"
-            self._proc.stdin.write(req.encode("utf-8"))
-            await self._proc.stdin.drain()
-            resp = await asyncio.wait_for(self._read_line(), timeout=timeout)
+            try:
+                self._proc.stdin.write(req.encode("utf-8"))
+                await self._proc.stdin.drain()
+                resp = await asyncio.wait_for(self._read_line(), timeout=timeout)
+            except (BrokenPipeError, ConnectionResetError,
+                    asyncio.TimeoutError) as exc:
+                # Worker died/stalled around the write or hung on read — drop
+                # the dead handle so the next call restarts it cleanly.
+                await self._kill_proc()
+                raise DaisyError(f"{cmd} failed: {exc}") from exc
         if not resp.get("ok"):
             raise DaisyError(resp.get("error", f"{cmd} failed"))
         return resp["result"]
+
+    async def _kill_proc(self) -> None:
+        proc, self._proc = self._proc, None
+        if proc is None:
+            return
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
 
     # ── Commands ─────────────────────────────────────────────────────────────
 

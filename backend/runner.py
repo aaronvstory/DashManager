@@ -251,7 +251,16 @@ class RunManager:
         if self._throttle_s:
             emit("log", {"level": "info",
                          "message": f"throttle: waiting {self._throttle_s:.0f}s"})
-            await asyncio.sleep(self._throttle_s)
+            # Stop-aware: a Stop during the backoff must abort, not proceed to
+            # open a chat. wait() returns early if stop is set; else it times
+            # out after the throttle and we continue.
+            try:
+                await asyncio.wait_for(self._stop.wait(),
+                                       timeout=self._throttle_s)
+            except asyncio.TimeoutError:
+                pass
+        if self._stop.is_set():
+            return
 
         chat_cfg = cfg["chat"]
         amounts = _amounts_text([so.price for _, so in problems])

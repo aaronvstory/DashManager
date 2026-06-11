@@ -105,6 +105,9 @@ async def customers_full() -> dict[str, Any]:
 
 
 async def _run_login(bucket_date: str | None) -> None:
+    import shutil as _shutil
+
+    temp_profile: str | None = None
     try:
         # Lazy: pulls in Playwright, which must not load at app boot.
         from backend.browser.session import login_and_capture
@@ -126,16 +129,12 @@ async def _run_login(bucket_date: str | None) -> None:
         cookies_dest = config.SESSIONS_DIR / f"{cid}_cookies.json"
         Path(storage).replace(storage_dest)
         Path(cookies).replace(cookies_dest)
-        # Adopt the temp login profile as the customer's persistent profile.
-        import shutil as _shutil
-
+        # Adopt the temp login profile as the customer's persistent profile;
+        # the finally cleans temp_profile if this move never happened.
         from backend.browser.driver import profile_dir
         dest = profile_dir(cid)
         _shutil.rmtree(dest, ignore_errors=True)
-        try:
-            _shutil.move(temp_profile, str(dest))
-        except Exception:
-            _shutil.rmtree(temp_profile, ignore_errors=True)
+        _shutil.move(str(temp_profile), str(dest))
         await db.update_customer(
             cid,
             storage_state_path=str(storage_dest),
@@ -150,6 +149,11 @@ async def _run_login(bucket_date: str | None) -> None:
         })
     except Exception as e:  # noqa: BLE001 — surfaced to the UI as an event
         bus.publish("login_failed", {"error": str(e)})
+    finally:
+        # Clean the temp login profile if it wasn't adopted (a successful
+        # move leaves the path gone, so this is then a no-op).
+        if temp_profile:
+            _shutil.rmtree(temp_profile, ignore_errors=True)
 
 
 @router.post("/login")
