@@ -41,6 +41,7 @@ import {
 import type { Customer } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { customerName, hasRealName, parseBucketDate, parseDbTimestamp } from "./helpers"
+import { CustomerPills } from "./customer-pills"
 import { SessionStatusBadge } from "./session-status-badge"
 
 interface RowCallbacks {
@@ -221,7 +222,7 @@ export function BucketCard({
             <TableHead>Name</TableHead>
             <TableHead>Email</TableHead>
             <TableHead>Phone</TableHead>
-            <TableHead>Session</TableHead>
+            <TableHead>Status</TableHead>
             <TableHead>Added</TableHead>
             <TableHead className="w-12 pr-4 text-right">
               <span className="sr-only">Actions</span>
@@ -257,6 +258,8 @@ export function BucketCard({
                       <LoaderCircle className="animate-spin" />
                       Testing…
                     </Badge>
+                  ) : c.pills ? (
+                    <CustomerPills pills={c.pills} />
                   ) : (
                     <SessionStatusBadge status={c.session_status} />
                   )}

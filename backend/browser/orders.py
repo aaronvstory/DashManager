@@ -14,7 +14,6 @@ from playwright.async_api import Page
 
 from backend.browser.driver import SessionExpiredError, handle_cloudflare
 from backend.browser.selectors import (
-    ACTIVE_ORDER_CARD_SELECTORS,
     CANCELLED_BADGE_TEXTS,
     IN_PROGRESS_STATUS_TEXTS,
     LOGIN_URL_MARKERS,
@@ -25,6 +24,7 @@ from backend.browser.selectors import (
     ORDERS_URL,
     SCROLL_MAX_ITERS,
     SCROLL_STABLE_ITERS,
+    STATUS_DISPLAY,
 )
 from backend.models import OrderStatus, OrdersScrapeResult, ScrapedOrder
 
@@ -75,13 +75,13 @@ def classify_orders_page(body_text: str) -> str:
 
 
 def in_progress_status(text: str) -> str:
-    """Pure: the matched in-progress status phrase from a card's text, or ''."""
+    """Pure: friendly in-progress status label from a card's text, or ''."""
     lo = (text or "").lower()
-    for s in IN_PROGRESS_STATUS_TEXTS:
+    # Longest phrases first so "picking up your doubledash order" wins over
+    # the substring "picking up your order".
+    for s in sorted(IN_PROGRESS_STATUS_TEXTS, key=len, reverse=True):
         if s in lo:
-            # Return the human form from the original text where possible.
-            idx = lo.find(s)
-            return (text[idx:idx + len(s)]).strip() or s
+            return STATUS_DISPLAY.get(s, s.title())
     return ""
 
 

@@ -14,10 +14,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { api, ApiError } from "@/lib/api"
-import type { Customer } from "@/lib/types"
+import type { Customer, ReloginRequest } from "@/lib/types"
 import { useRunStore } from "@/store/runStore"
 import { cn } from "@/lib/utils"
 import { apiErrorDetail, customerName } from "./helpers"
+import { HeadlessToggle, useHeadlessOverride } from "./headless-toggle"
 
 type Phase = "idle" | "starting" | "running" | "done" | "failed"
 
@@ -60,6 +61,7 @@ export function LoginCustomerDialog({
   const [otpCode, setOtpCode] = useState<string | null>(null)
   const [otpResent, setOtpResent] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const { headless, setHeadless } = useHeadlessOverride()
 
   /** Ignore SSE events that predate this login attempt. */
   const baselineEventId = useRef(-1)
@@ -134,8 +136,13 @@ export function LoginCustomerDialog({
     resetProgress()
     setPhase("starting")
     baselineEventId.current = useRunStore.getState().lastEvent?.id ?? -1
+    const body: ReloginRequest = {}
+    if (headless !== null) body.headless = headless
     try {
-      await api.post<{ started: boolean }>(`/customers/${customer.id}/relogin`)
+      await api.post<{ started: boolean }>(
+        `/customers/${customer.id}/relogin`,
+        body,
+      )
     } catch (err) {
       setPhase("idle")
       if (err instanceof ApiError && err.status === 409) {
@@ -175,6 +182,7 @@ export function LoginCustomerDialog({
                 refreshing the saved session.
               </AlertDescription>
             </Alert>
+            <HeadlessToggle headless={headless} onChange={setHeadless} />
             <DialogFooter>
               <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
               <Button onClick={() => void start()}>

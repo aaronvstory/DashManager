@@ -23,9 +23,13 @@ import {
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { api, ApiError } from "@/lib/api"
-import type { Customer, StrategyName } from "@/lib/types"
+import type { Customer, RunRequest, StrategyName } from "@/lib/types"
 import { useRunStore } from "@/store/runStore"
 import { cn } from "@/lib/utils"
+import {
+  HeadlessToggle,
+  useHeadlessOverride,
+} from "@/components/customers/headless-toggle"
 
 const STRATEGY_OPTIONS: Array<{
   value: StrategyName
@@ -82,6 +86,7 @@ export function StartRunCard() {
   const setActiveRun = useRunStore((s) => s.setActiveRun)
   const [bucketDate, setBucketDate] = useState<string | null>(null)
   const [strategy, setStrategy] = useState<StrategyName>("scripted")
+  const { headless, setHeadless } = useHeadlessOverride()
 
   const customersQuery = useQuery({
     queryKey: ["customers"],
@@ -107,10 +112,8 @@ export function StartRunCard() {
   const selectedStrategy = STRATEGY_OPTIONS.find((s) => s.value === strategy)
 
   const startRun = useMutation({
-    mutationFn: (body: {
-      scope: { bucket_date: string }
-      chat_strategy: StrategyName
-    }) => api.post<{ run_id: number }>("/runs", body),
+    mutationFn: (body: RunRequest) =>
+      api.post<{ run_id: number }>("/runs", body),
     onSuccess: ({ run_id }) => {
       setActiveRun(run_id)
       toast.success("Run started", {
@@ -230,6 +233,8 @@ export function StartRunCard() {
             <p className="text-xs text-muted-foreground">{selectedStrategy.hint}</p>
           ) : null}
         </div>
+
+        <HeadlessToggle headless={headless} onChange={setHeadless} />
       </CardContent>
       <CardFooter>
         <Button
@@ -237,10 +242,12 @@ export function StartRunCard() {
           disabled={!bucketDate || startRun.isPending}
           onClick={() => {
             if (!bucketDate) return
-            startRun.mutate({
+            const body: RunRequest = {
               scope: { bucket_date: bucketDate },
               chat_strategy: strategy,
-            })
+            }
+            if (headless !== null) body.headless = headless
+            startRun.mutate(body)
           }}
         >
           {startRun.isPending ? (

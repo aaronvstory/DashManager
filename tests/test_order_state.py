@@ -16,6 +16,15 @@ class TestClassifyPage:
     def test_preparing_is_in_progress(self):
         assert classify_orders_page("Dairy Queen\nPreparing") == "in_progress"
 
+    def test_dasher_waiting_is_in_progress(self):
+        assert classify_orders_page(
+            "Dairy Queen\nDasher waiting for order\n"
+            "Estimated Delivery: Jun 12") == "in_progress"
+
+    def test_picking_up_is_in_progress(self):
+        assert classify_orders_page(
+            "Dairy Queen\nPicking up your DoubleDash order") == "in_progress"
+
     def test_completed_only(self):
         assert classify_orders_page(
             "Orders\nCompleted\nDairy Queen\nView Receipt") == "has_completed"
@@ -32,6 +41,15 @@ class TestInProgressStatus:
 
     def test_completed_card_has_no_status(self):
         assert in_progress_status("Dairy Queen\n$12.00\nView Receipt") == ""
+
+    def test_dasher_waiting_label(self):
+        assert in_progress_status(
+            "Dairy Queen\nDasher waiting for order") == "Dasher waiting for order"
+
+    def test_doubledash_pickup_beats_generic(self):
+        # Longest-match: the DoubleDash phrase wins over "picking up your order".
+        assert in_progress_status(
+            "Picking up your DoubleDash order") == "Picking up order"
 
 
 class TestDasherExtraction:

@@ -65,6 +65,8 @@ export interface LlmSettings {
 export interface BrowserSettings {
   headless: boolean
   viewport: number[]
+  /** How many customer browsers run at once. */
+  max_concurrent: number
 }
 
 export interface AppSettings {

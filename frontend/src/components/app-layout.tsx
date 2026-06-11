@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useLocation } from "react-router-dom"
-import { History, Play, Settings, Users } from "lucide-react"
+import { Database, History, Play, Settings, Users } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Logo } from "@/components/logo"
@@ -17,6 +17,7 @@ interface NavItem {
 
 const NAV: NavItem[] = [
   { to: "/", label: "Customers", icon: Users, end: true },
+  { to: "/database", label: "Database", icon: Database },
   { to: "/run", label: "Run", icon: Play },
   { to: "/history", label: "History", icon: History },
   { to: "/settings", label: "Settings", icon: Settings },

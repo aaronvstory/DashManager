@@ -53,11 +53,44 @@ ORDERS_EMPTY_TEXT = "no previous deliveries"
 # Active/in-progress orders live under an "In Progress" section with status
 # text like these; they show "View Order" (no receipt UUID yet).
 ORDERS_IN_PROGRESS_HEADER = "in progress"
+# Every pre-delivery / pre-cancel status phrase seen live (2026-06-12). Order
+# matters loosely; classify_orders_page / in_progress_status do substring match.
 IN_PROGRESS_STATUS_TEXTS = [
-    "heading to you", "preparing", "order in progress", "arrives between",
-    "being prepared", "almost there", "on the way", "confirming your order",
-    "finding a dasher", "dasher is", "picked up",
+    "dasher waiting for order",        # dasher assigned, at restaurant
+    "picking up your doubledash order",
+    "picking up your order",
+    "heading to you",                  # dasher en route
+    "preparing",                       # no dasher yet
+    "being prepared",
+    "order in progress",               # DoubleDash group header
+    "arrives between",
+    "estimated delivery",
+    "confirming your order",
+    "finding a dasher",
+    "finding you a dasher",
+    "dasher is heading",
+    "dasher is on the way",
+    "almost there",
+    "on the way",
+    "picked up",
+    "order received",
+    "waiting for order",
 ]
+# Friendly display labels for the common statuses (used in the UI/live view).
+STATUS_DISPLAY = {
+    "dasher waiting for order": "Dasher waiting for order",
+    "picking up your doubledash order": "Picking up order",
+    "picking up your order": "Picking up order",
+    "heading to you": "Heading to you",
+    "preparing": "Preparing",
+    "being prepared": "Preparing",
+    "order in progress": "Order in progress",
+    "confirming your order": "Confirming order",
+    "finding a dasher": "Finding a dasher",
+    "finding you a dasher": "Finding a dasher",
+    "almost there": "Almost there",
+    "on the way": "On the way",
+}
 # Active-order cards (no /orders/<uuid> receipt link).
 ACTIVE_ORDER_CARD_SELECTORS = [
     '[data-testid="OrderTrackerOrderItem"]',

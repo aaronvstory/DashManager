@@ -35,9 +35,11 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { api, ApiError } from "@/lib/api"
+import type { CreateAccountRequest } from "@/lib/types"
 import { useRunStore } from "@/store/runStore"
 import { cn } from "@/lib/utils"
 import { apiErrorDetail } from "./helpers"
+import { HeadlessToggle, useHeadlessOverride } from "./headless-toggle"
 
 type Phase = "idle" | "starting" | "running" | "created" | "failed"
 
@@ -111,6 +113,7 @@ export function CreateAccountDialog({
   const [dateOpen, setDateOpen] = useState(false)
   const [location, setLocation] = useState<string>("")
   const [radius, setRadius] = useState<string>("5")
+  const { headless, setHeadless } = useHeadlessOverride()
 
   // Live progress, built up from SSE events.
   const [steps, setSteps] = useState<Record<StepKey, StepStatus>>({
@@ -257,12 +260,14 @@ export function CreateAccountDialog({
     setPhase("starting")
     baselineEventId.current = useRunStore.getState().lastEvent?.id ?? -1
     const radiusMiles = Number(radius)
+    const body: CreateAccountRequest = {
+      bucket_date: format(date, "yyyy-MM-dd"),
+      location_origin: location || undefined,
+      radius_miles: Number.isFinite(radiusMiles) ? radiusMiles : undefined,
+    }
+    if (headless !== null) body.headless = headless
     try {
-      await api.post<{ started: boolean }>("/customers/create-account", {
-        bucket_date: format(date, "yyyy-MM-dd"),
-        location_origin: location || undefined,
-        radius_miles: Number.isFinite(radiusMiles) ? radiusMiles : undefined,
-      })
+      await api.post<{ started: boolean }>("/customers/create-account", body)
     } catch (err) {
       setPhase("idle")
       if (err instanceof ApiError && err.status === 409) {
@@ -392,6 +397,8 @@ export function CreateAccountDialog({
                   automatically.
                 </AlertDescription>
               </Alert>
+
+              <HeadlessToggle headless={headless} onChange={setHeadless} />
             </div>
 
             <DialogFooter>

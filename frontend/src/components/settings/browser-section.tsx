@@ -17,18 +17,26 @@ export function BrowserSection({ browser }: { browser: BrowserSettings }) {
     headless: browser.headless,
     width: String(browser.viewport[0] ?? 1400),
     height: String(browser.viewport[1] ?? 900),
+    maxConcurrent: String(browser.max_concurrent ?? 1),
   }
   const [form, setForm] = useState(initial)
   const [baseline, setBaseline] = useState(initial)
 
   const parsedWidth = parsePositiveInt(form.width)
   const parsedHeight = parsePositiveInt(form.height)
+  const parsedMaxConcurrent = parsePositiveInt(form.maxConcurrent)
   const dirty = JSON.stringify(form) !== JSON.stringify(baseline)
-  const invalid = parsedWidth === null || parsedHeight === null
+  const invalid =
+    parsedWidth === null || parsedHeight === null || parsedMaxConcurrent === null
   const save = useSaveSettings("Browser")
 
   function handleSave() {
-    if (parsedWidth === null || parsedHeight === null) return
+    if (
+      parsedWidth === null ||
+      parsedHeight === null ||
+      parsedMaxConcurrent === null
+    )
+      return
     save.mutate(
       [
         {
@@ -37,6 +45,7 @@ export function BrowserSection({ browser }: { browser: BrowserSettings }) {
             ...browser,
             headless: form.headless,
             viewport: [parsedWidth, parsedHeight],
+            max_concurrent: parsedMaxConcurrent,
           },
         },
       ],
@@ -58,7 +67,8 @@ export function BrowserSection({ browser }: { browser: BrowserSettings }) {
         <div className="space-y-1.5">
           <Label htmlFor="browser-headless">Headless mode</Label>
           <p className="text-xs leading-relaxed text-muted-foreground">
-            Headed is strongly recommended — DoorDash blocks headless browsers.
+            Headed (off) is strongly recommended — DoorDash blocks headless. This
+            is the default for all actions.
           </p>
           {form.headless ? (
             <p className="flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
@@ -98,6 +108,23 @@ export function BrowserSection({ browser }: { browser: BrowserSettings }) {
           />
         </Field>
       </div>
+
+      <Field
+        label="Max concurrent browsers"
+        htmlFor="browser-max-concurrent"
+        helper="How many customer browsers run at once."
+      >
+        <Input
+          id="browser-max-concurrent"
+          type="number"
+          min={1}
+          value={form.maxConcurrent}
+          onChange={(e) =>
+            setForm((f) => ({ ...f, maxConcurrent: e.target.value }))
+          }
+          aria-invalid={parsedMaxConcurrent === null}
+        />
+      </Field>
     </SettingsCard>
   )
 }

@@ -11,7 +11,17 @@
 
 export type SessionStatus = "active" | "expired" | "invalid"
 
+/**
+ * Order lifecycle as surfaced by the DB viewer (/customers/full). The scraper
+ * stores the narrower `OrderStatus` ("active" | "cancelled"), but the enriched
+ * full view can also report DoorDash live states.
+ */
+export type OrderLifecycle = "in_progress" | "completed" | "cancelled" | "active"
+
 export type OrderStatus = "active" | "cancelled"
+
+/** Customer lifecycle: created via the account flow vs. fully logged in. */
+export type CustomerLifecycle = "created" | "logged_in"
 
 export type RefundStatus =
   | "unchecked"
@@ -37,6 +47,19 @@ export type ChatDirection = "out" | "in" | "system"
 // Entities
 // ---------------------------------------------------------------------------
 
+/**
+ * Derived status flags the backend attaches to each customer for the UI.
+ * Mirrors the `pills` object on the /customers and /customers/full responses.
+ */
+export interface CustomerPills {
+  lifecycle: CustomerLifecycle
+  session_status: SessionStatus
+  has_session: boolean
+  has_profile: boolean
+  has_storage_backup: boolean
+  has_number_token: boolean
+}
+
 export interface Customer {
   id: number
   first_name: string
@@ -52,6 +75,8 @@ export interface Customer {
   notes: string
   /** Daisy number token; '' when the customer wasn't created via the account flow. */
   number_token?: string
+  /** Derived status flags for the UI (present on /customers and /customers/full). */
+  pills?: CustomerPills
 }
 
 /** Raw result of scraping one card on https://www.doordash.com/orders. */
@@ -74,11 +99,45 @@ export interface Order {
   description: string
   items_count: number | null
   price: number | null
-  order_status: OrderStatus
+  order_status: OrderLifecycle
   refund_status: RefundStatus
   total_amount: number | null
   refund_amount: number | null
+  /** Live status copy, e.g. "Heading to you". Present on the /customers/full view. */
+  status_text?: string | null
+  /** Assigned dasher's first name, e.g. "Erin". Present on the /customers/full view. */
+  dasher_name?: string | null
   last_checked_at: string | null
+}
+
+/** A customer enriched with derived pills + their orders, from /customers/full. */
+export interface FullCustomer extends Customer {
+  pills: CustomerPills
+  orders: Order[]
+}
+
+// ---------------------------------------------------------------------------
+// Request shapes that accept a per-action headless override
+// ---------------------------------------------------------------------------
+
+/** Common opt-in: omit/null = use the global browser.headless setting. */
+export interface HeadlessOverride {
+  headless?: boolean
+}
+
+export interface CreateAccountRequest extends HeadlessOverride {
+  bucket_date: string
+  location_origin?: string
+  radius_miles?: number
+}
+
+export type ReloginRequest = HeadlessOverride
+
+export type TestSessionRequest = HeadlessOverride
+
+export interface RunRequest extends HeadlessOverride {
+  scope: Record<string, unknown>
+  chat_strategy: StrategyName
 }
 
 export interface Run {
