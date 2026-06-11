@@ -30,7 +30,9 @@ const ORDER_LABEL: Record<OrderLifecycle, { tone: Tone; label: string }> = {
 const REFUND_LABEL: Record<RefundStatus, { tone: Tone; label: string }> = {
   refunded: { tone: "emerald", label: "Refunded" },
   partial: { tone: "amber", label: "Partial refund" },
+  pending_claim: { tone: "blue", label: "Self-claim" },
   not_refunded: { tone: "red", label: "Not refunded" },
+  remake: { tone: "amber", label: "Remake" },
   unchecked: { tone: "zinc", label: "Unchecked" },
   unknown: { tone: "amber", label: "Unknown" },
 }

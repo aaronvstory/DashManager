@@ -53,10 +53,23 @@ export interface LiveChat {
   chat_id: number
   customer_id: number
   order_ids: number[]
+  /** The order this chat belongs to (per-order, V5). */
+  order_id?: number | null
+  /** Retry attempt number on that order (1..3). */
+  attempt_no?: number
   messages: LiveChatMessage[]
   outcome?: ChatOutcome
   agent_reached?: boolean
   escalations: number
+}
+
+/** A self-claim in flight/finished (pending_claim resolved without a chat). */
+export interface LiveClaim {
+  order_id: number
+  store?: string
+  amount?: number | null
+  outcome?: string
+  to_original_payment?: boolean
 }
 
 interface RunState {
@@ -73,6 +86,8 @@ interface RunState {
   customersProgress: CustomerProgress[]
   orders: Record<number, LiveOrder>
   chats: Record<number, LiveChat>
+  /** Self-claims keyed by order_id (pending_claim resolved without a chat). */
+  claims: Record<number, LiveClaim>
   liveLog: AppEvent[]
 
   setConnected: (connected: boolean) => void
@@ -98,6 +113,7 @@ const EMPTY_RUN = {
   customersProgress: [] as CustomerProgress[],
   orders: {} as Record<number, LiveOrder>,
   chats: {} as Record<number, LiveChat>,
+  claims: {} as Record<number, LiveClaim>,
 }
 
 function num(v: unknown): number | null {
@@ -238,8 +254,46 @@ export const useRunStore = create<RunState>((set) => ({
           }
         }
 
+        case "claim_started": {
+          const oid = num(d.order_id) ?? -1
+          return {
+            ...base,
+            claims: {
+              ...state.claims,
+              [oid]: {
+                ...state.claims[oid],
+                order_id: oid,
+                store: str(d.store, state.claims[oid]?.store ?? ""),
+                amount: num(d.amount) ?? state.claims[oid]?.amount,
+              },
+            },
+          }
+        }
+
+        case "claim_outcome": {
+          const oid = num(d.order_id) ?? -1
+          const prev = state.claims[oid]
+          return {
+            ...base,
+            claims: {
+              ...state.claims,
+              [oid]: {
+                ...prev,
+                order_id: oid,
+                outcome: str(d.outcome, prev?.outcome ?? ""),
+                amount: num(d.amount) ?? prev?.amount,
+                to_original_payment: Boolean(d.to_original_payment),
+              },
+            },
+          }
+        }
+
         case "chat_opened": {
           const id = num(d.chat_id) ?? -1
+          const orderIds = Array.isArray(d.order_ids)
+            ? (d.order_ids as number[])
+            : []
+          const orderId = num(d.order_id) ?? orderIds[0] ?? null
           return {
             ...base,
             chats: {
@@ -247,15 +301,20 @@ export const useRunStore = create<RunState>((set) => ({
               [id]: {
                 chat_id: id,
                 customer_id: num(d.customer_id) ?? -1,
-                order_ids: Array.isArray(d.order_ids)
-                  ? (d.order_ids as number[])
-                  : [],
+                order_ids: orderIds,
+                order_id: orderId,
+                attempt_no: num(d.attempt) ?? 1,
                 messages: [],
                 escalations: 0,
               },
             },
           }
         }
+
+        // attempt marker (chat_attempt) carries no new chat state beyond the
+        // chat_opened that precedes it — surface via lastEvent/log only.
+        case "chat_attempt":
+          return base
 
         case "chat_escalation": {
           // No chat_id in the payload — attribute to the chat in flight.

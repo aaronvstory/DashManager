@@ -27,7 +27,9 @@ export type RefundStatus =
   | "unchecked"
   | "refunded" // Refund line present, amount >= total
   | "partial" // Refund line present, 0 < amount < total
+  | "pending_claim" // self-service "Choose your refund method" — claim to original card
   | "not_refunded" // no Refund line — pursue, even if "canceled"
+  | "remake" // DoorDash remade it without being asked; usually no auto-refund
   | "unknown" // unparseable — never silently pass
 
 export type RunStatus = "running" | "completed" | "stopped" | "error"
@@ -154,12 +156,18 @@ export interface Chat {
   id: number
   run_id: number
   customer_id: number
+  /** The order this chat belongs to (V5 — chats are now order-keyed). */
+  order_id: number | null
+  /** Retry attempt number on that order (1..3). */
+  attempt_no: number
   order_ids: number[]
   opening_message: string
   outcome: ChatOutcome | null
   agent_reached: boolean
   started_at: string
   finished_at: string | null
+  /** Per-order transcript: messages attached by the run-detail endpoint. */
+  messages?: ChatMessage[]
 }
 
 /** Mirrors ChatMessageRow on the backend. */
@@ -169,6 +177,23 @@ export interface ChatMessage {
   ts: string
   direction: ChatDirection
   content: string
+}
+
+/**
+ * One self-claim attempt on a pending_claim order (mirrors ClaimRecord /
+ * the `claims` table). A claim resolves a refund WITHOUT an agent chat.
+ */
+export interface Claim {
+  id: number
+  run_id: number
+  order_id: number
+  customer_id: number
+  amount: number | null
+  to_original_payment: boolean
+  confirmed: boolean
+  outcome: string // 'success' | 'failed' | 'wrong_method' | 'error'
+  error: string | null
+  created_at: string
 }
 
 // ---------------------------------------------------------------------------
@@ -201,9 +226,12 @@ export type EventType =
   | "orders_found"
   | "order_checking"
   | "order_checked"
+  | "claim_started"
+  | "claim_outcome"
   | "chat_opened"
   | "chat_escalation"
   | "chat_message"
+  | "chat_attempt"
   | "chat_outcome"
   | "customer_done"
   | "run_done"
@@ -242,9 +270,12 @@ export const EVENT_TYPES: readonly EventType[] = [
   "orders_found",
   "order_checking",
   "order_checked",
+  "claim_started",
+  "claim_outcome",
   "chat_opened",
   "chat_escalation",
   "chat_message",
+  "chat_attempt",
   "chat_outcome",
   "customer_done",
   "run_done",

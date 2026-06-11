@@ -10,7 +10,13 @@ import { useRef } from "react"
 import type { ReactNode } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { format } from "date-fns"
-import { AlertCircle, Camera, MessagesSquare, ShoppingBag } from "lucide-react"
+import {
+  AlertCircle,
+  BadgeCheck,
+  Camera,
+  MessagesSquare,
+  ShoppingBag,
+} from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -31,10 +37,11 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { api } from "@/lib/api"
-import type { Run } from "@/lib/types"
+import type { Claim, Run } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import {
   ChatOutcomeBadge,
+  ClaimOutcomeBadge,
   RefundStatusBadge,
   RunStatusBadge,
   StrategyLabel,
@@ -42,13 +49,18 @@ import {
 import { ChatTranscript } from "./chat-transcript"
 import {
   basename,
+  groupByOrder,
   money,
   parseDbDate,
   runDuration,
   scopeSummary,
   statNum,
 } from "./run-data"
-import type { RunDetailResponse } from "./run-data"
+import type {
+  ChatWithMessages,
+  OrderAudit,
+  RunDetailResponse,
+} from "./run-data"
 
 function HeadlineStat({
   label,
@@ -88,6 +100,104 @@ function SectionHeading({
   )
 }
 
+/** One chat attempt card (header + transcript bubbles). */
+function ChatCard({ chat }: { chat: ChatWithMessages }) {
+  return (
+    <Card size="sm" className="gap-0 overflow-hidden py-0">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b bg-muted/30 px-3 py-2">
+        <span className="text-xs font-medium">Attempt {chat.attempt_no}</span>
+        <span className="text-xs text-muted-foreground">Chat #{chat.id}</span>
+        <div className="ml-auto flex items-center gap-2.5">
+          {chat.agent_reached ? (
+            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+              <span className="size-1.5 rounded-full bg-emerald-500" />
+              Agent reached
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+              <span className="size-1.5 rounded-full bg-zinc-500" />
+              No agent
+            </span>
+          )}
+          <ChatOutcomeBadge outcome={chat.outcome} />
+        </div>
+      </div>
+      <ChatTranscript messages={chat.messages} />
+    </Card>
+  )
+}
+
+/** A self-claim record row (refund resolved without a chat). */
+function ClaimRow({ claim }: { claim: Claim }) {
+  const amount = money(claim.amount ?? null)
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border bg-muted/20 px-3 py-2 text-xs">
+      <BadgeCheck
+        className={cn(
+          "size-4 shrink-0",
+          claim.outcome === "success"
+            ? "text-emerald-500"
+            : "text-muted-foreground",
+        )}
+      />
+      <span className="font-medium">Self-claim</span>
+      {amount ? <span className="tabular-nums">{amount}</span> : null}
+      {claim.to_original_payment ? (
+        <span className="text-muted-foreground">→ original card</span>
+      ) : claim.outcome === "success" ? (
+        <span className="text-muted-foreground">refund posted</span>
+      ) : null}
+      <div className="ml-auto flex items-center gap-2">
+        {claim.error ? (
+          <span
+            title={claim.error}
+            className="max-w-36 truncate text-red-600 dark:text-red-400"
+          >
+            {claim.error}
+          </span>
+        ) : null}
+        <ClaimOutcomeBadge outcome={claim.outcome} />
+      </div>
+    </div>
+  )
+}
+
+/** Per-order audit block: the order header + its claims + stacked chats. */
+function OrderAuditCard({ audit }: { audit: OrderAudit }) {
+  const { order, chats, claims } = audit
+  return (
+    <div className="space-y-2 rounded-xl border bg-card/40 p-3">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="max-w-52 truncate text-sm font-medium">
+          {order.store_name || "Unknown store"}
+        </span>
+        {money(order.price) ? (
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {money(order.price)}
+          </span>
+        ) : null}
+        <div className="ml-auto">
+          <RefundStatusBadge status={order.refund_status} />
+        </div>
+      </div>
+      {claims.length > 0 ? (
+        <div className="space-y-1.5">
+          {claims.map((claim) => (
+            <ClaimRow key={claim.id} claim={claim} />
+          ))}
+        </div>
+      ) : null}
+      {chats.length > 0 ? (
+        <div className="space-y-2">
+          {chats.map((chat) => (
+            <ChatCard key={chat.id} chat={chat} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 export function RunDetailSheet({
   run,
   onClose,
@@ -113,6 +223,12 @@ export function RunDetailSheet({
   const liveRun = detailQuery.data?.run ?? shown
   const orders = detailQuery.data?.orders
   const chats = detailQuery.data?.chats
+  const claims = detailQuery.data?.claims
+  // Per-order audit grouping (chats stacked by attempt + self-claim records).
+  const grouped = detailQuery.data
+    ? groupByOrder(detailQuery.data)
+    : { perOrder: [], orphanChats: [] }
+  const auditCount = grouped.perOrder.length + grouped.orphanChats.length
 
   // Prefer detail-derived counts (truthful mid-run); fall back to saved stats.
   const checked = orders ? orders.length : statNum(liveRun.stats, "checked")
@@ -120,9 +236,14 @@ export function RunDetailSheet({
     ? orders.filter((o) => o.refund_status === "not_refunded").length
     : statNum(liveRun.stats, "not_refunded")
   const chatCount = chats ? chats.length : statNum(liveRun.stats, "chats_started")
+  const claimCount = claims ? claims.length : statNum(liveRun.stats, "claims_started")
   const chatsWon = chats
     ? chats.filter((c) => c.outcome === "success").length
     : statNum(liveRun.stats, "chats_won")
+  const claimsWon = claims
+    ? claims.filter((c) => c.outcome === "success").length
+    : statNum(liveRun.stats, "claims_won")
+  const resolved = chatsWon + claimsWon
   const duration = runDuration(liveRun)
   const hasErrors = (orders ?? []).some((o) => o.error)
 
@@ -166,14 +287,14 @@ export function RunDetailSheet({
             sub={checked > 0 ? `of ${checked} checked` : "nothing checked"}
           />
           <HeadlineStat
-            label="Chats opened"
-            value={chatCount}
+            label="Refunds pursued"
+            value={chatCount + claimCount}
             sub={
-              chatCount > 0
-                ? `${chatsWon} won`
+              chatCount + claimCount > 0
+                ? `${resolved} resolved${claimCount > 0 ? ` · ${claimCount} self-claim` : ""}`
                 : liveRun.status === "running"
                   ? "so far"
-                  : "none opened"
+                  : "none needed"
             }
           />
           <HeadlineStat
@@ -320,44 +441,26 @@ export function RunDetailSheet({
                 )}
               </section>
 
-              {/* Chats */}
+              {/* Refund pursuits, grouped per order (chats stacked by attempt
+                  + self-claim records). */}
               <section>
                 <SectionHeading
                   icon={MessagesSquare}
-                  title="Support chats"
-                  count={chats?.length ?? 0}
+                  title="Refund pursuits"
+                  count={auditCount}
                 />
-                {!chats || chats.length === 0 ? (
+                {auditCount === 0 ? (
                   <p className="rounded-lg border border-dashed px-4 py-6 text-center text-xs text-muted-foreground">
-                    No support chats were opened — nothing needed chasing.
+                    Nothing needed chasing — no self-claims or support chats.
                   </p>
                 ) : (
                   <div className="space-y-3">
-                    {chats.map((chat) => (
-                      <Card key={chat.id} size="sm" className="gap-0 overflow-hidden py-0">
-                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b bg-muted/30 px-3 py-2">
-                          <span className="text-xs font-medium">Chat #{chat.id}</span>
-                          <span className="text-xs text-muted-foreground">
-                            Customer {chat.customer_id} · {chat.order_ids.length}{" "}
-                            order{chat.order_ids.length === 1 ? "" : "s"}
-                          </span>
-                          <div className="ml-auto flex items-center gap-2.5">
-                            {chat.agent_reached ? (
-                              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
-                                <span className="size-1.5 rounded-full bg-emerald-500" />
-                                Agent reached
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-                                <span className="size-1.5 rounded-full bg-zinc-500" />
-                                No agent
-                              </span>
-                            )}
-                            <ChatOutcomeBadge outcome={chat.outcome} />
-                          </div>
-                        </div>
-                        <ChatTranscript messages={chat.messages} />
-                      </Card>
+                    {grouped.perOrder.map((audit) => (
+                      <OrderAuditCard key={audit.order.order_id} audit={audit} />
+                    ))}
+                    {/* Legacy customer-keyed chats with no resolvable order. */}
+                    {grouped.orphanChats.map((chat) => (
+                      <ChatCard key={chat.id} chat={chat} />
                     ))}
                   </div>
                 )}
