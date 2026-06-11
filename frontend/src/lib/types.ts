@@ -134,6 +134,32 @@ export type EventType =
   | "log"
   | "heartbeat"
 
+/**
+ * Runtime mirror of EVENT_TYPES in backend/models.py. The backend emits
+ * NAMED SSE events (`event: <type>`), so the EventSource needs an explicit
+ * addEventListener per type — keep this list in sync with the backend.
+ */
+export const EVENT_TYPES: readonly EventType[] = [
+  "login_waiting",
+  "login_captured",
+  "login_failed",
+  "run_started",
+  "customer_started",
+  "session_invalid",
+  "orders_found",
+  "order_checking",
+  "order_checked",
+  "chat_opened",
+  "chat_escalation",
+  "chat_message",
+  "chat_outcome",
+  "customer_done",
+  "run_done",
+  "run_error",
+  "log",
+  "heartbeat",
+]
+
 export interface AppEvent {
   id: number
   ts: string
