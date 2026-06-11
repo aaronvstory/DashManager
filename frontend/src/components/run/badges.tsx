@@ -23,9 +23,18 @@ const REFUND_STYLES: Record<RefundStatus, { label: string; className: string }> 
     className:
       "border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400",
   },
+  pending_claim: {
+    label: "Self-claim",
+    className: "border-sky-500/25 bg-sky-500/10 text-sky-600 dark:text-sky-400",
+  },
   not_refunded: {
     label: "Not refunded",
     className: "border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-400",
+  },
+  remake: {
+    label: "Remake",
+    className:
+      "border-orange-500/25 bg-orange-500/10 text-orange-600 dark:text-orange-400",
   },
   unknown: {
     label: "Unknown",

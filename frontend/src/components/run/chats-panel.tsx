@@ -72,9 +72,9 @@ export function ChatsPanel() {
                           {customerLabel(chat, names)}
                         </div>
                         <div className="text-xs text-muted-foreground">
-                          {chat.order_ids.length} order
-                          {chat.order_ids.length === 1 ? "" : "s"}
-                          {" · "}
+                          {chat.attempt_no && chat.attempt_no > 1
+                            ? `Attempt ${chat.attempt_no} · `
+                            : ""}
                           {chat.messages.length} message
                           {chat.messages.length === 1 ? "" : "s"}
                           {chat.escalations > 0
