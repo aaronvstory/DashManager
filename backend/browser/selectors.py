@@ -91,12 +91,11 @@ STATUS_DISPLAY = {
     "almost there": "Almost there",
     "on the way": "On the way",
 }
-# Active-order cards (no /orders/<uuid> receipt link).
-ACTIVE_ORDER_CARD_SELECTORS = [
-    '[data-testid="OrderTrackerOrderItem"]',
-    '[data-testid="OrdersInProgressSection"] [role="link"]',
-    'button:has-text("View Order")',
-]
+# In-progress orders live under this section and have NO /orders/<uuid> link
+# on the card (verified live 2026-06-12) — each row is store + status text +
+# a "View Order" button (data-anchor-id=ViewOrderButton). Scraped by text.
+IN_PROGRESS_SECTION = '[data-testid="OrdersInProgressSection"]'
+VIEW_ORDER_BUTTON = '[data-anchor-id="ViewOrderButton"]'
 
 # ── Support chat (user-specified 2026-06 flow + harvested chat machinery) ───
 # Navigation: HELP_ORDERS_URL -> click a[href*="<order-uuid>"] ->

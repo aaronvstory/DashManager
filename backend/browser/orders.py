@@ -15,6 +15,7 @@ from playwright.async_api import Page
 from backend.browser.driver import SessionExpiredError, handle_cloudflare
 from backend.browser.selectors import (
     CANCELLED_BADGE_TEXTS,
+    IN_PROGRESS_SECTION,
     IN_PROGRESS_STATUS_TEXTS,
     LOGIN_URL_MARKERS,
     ORDER_CARD_SELECTORS,
@@ -25,6 +26,7 @@ from backend.browser.selectors import (
     SCROLL_MAX_ITERS,
     SCROLL_STABLE_ITERS,
     STATUS_DISPLAY,
+    VIEW_ORDER_BUTTON,
 )
 from backend.models import OrderStatus, OrdersScrapeResult, ScrapedOrder
 
@@ -46,6 +48,25 @@ _EXTRACT_CARDS_JS = """
       href = c.href || c.getAttribute('href') || '';
     }
     return { text: c.innerText || '', href };
+  });
+}
+"""
+
+# In-progress orders: one row per "View Order" button inside the section.
+# They carry no /orders/<uuid> link, so each is captured by its row text
+# (store + status). Walks up from the button to the row holding the store.
+_EXTRACT_IN_PROGRESS_JS = """
+(sel) => {
+  const sec = document.querySelector(sel.section);
+  if (!sec) return [];
+  const btns = [...sec.querySelectorAll(sel.btn)];
+  return btns.map(b => {
+    let el = b;
+    for (let i = 0; i < 6 && el.parentElement; i++) {
+      el = el.parentElement;
+      if (el.innerText && el.innerText.split('\\n').length >= 2) break;
+    }
+    return { text: el.innerText || '' };
   });
 }
 """
@@ -151,23 +172,50 @@ async def scrape_orders_full(
 ) -> OrdersScrapeResult:
     """Scrape /orders and classify state. Raises SessionExpiredError if out.
 
-    Active (in-progress) orders DO carry a /orders/<uuid> link (verified live
-    2026-06-12), so the same card extraction covers both — each is classified
-    by its status text into in_progress / cancelled / completed.
+    Two distinct order shapes (verified live 2026-06-12):
+      • COMPLETED orders — under OrdersCompletedSection, carry a
+        /orders/<uuid> receipt link → UUID-keyed, refund-checkable.
+      • IN-PROGRESS orders — under OrdersInProgressSection, a "View Order"
+        button and NO link on the card → captured by row text (store + status
+        + dasher), keyed by a synthetic id; not refund-checkable yet.
     """
     await page.goto(ORDERS_URL, wait_until="domcontentloaded")
     await asyncio.sleep(3)  # redirects to login land after dcl (harvest)
     if any(marker in page.url for marker in LOGIN_URL_MARKERS):
         raise SessionExpiredError(f"redirected to {page.url}")
     await handle_cloudflare(page)
+    await asyncio.sleep(3)  # the In Progress section renders a beat later
 
-    body = await page.evaluate("() => document.body ? document.body.innerText : ''")
+    orders: list[ScrapedOrder] = []
+
+    # ── In-progress orders (no UUID; text-keyed) ──
+    ip_raw: list[dict[str, str]] = await page.evaluate(
+        _EXTRACT_IN_PROGRESS_JS,
+        {"section": IN_PROGRESS_SECTION, "btn": VIEW_ORDER_BUTTON})
+    for idx, item in enumerate(ip_raw):
+        text = item.get("text") or ""
+        parsed = parse_card_text(text)
+        status_text = in_progress_status(text) or "In progress"
+        store = parsed["store_name"] or "order"
+        orders.append(ScrapedOrder(
+            order_uuid=f"inprogress:{store}:{idx}",  # synthetic — no real uuid
+            receipt_url="",
+            store_name=parsed["store_name"],
+            description=parsed["description"],
+            items_count=parsed["items_count"], price=parsed["price"],
+            order_status=OrderStatus.in_progress, status_text=status_text,
+            dasher_name=parsed.get("dasher_name", "")))
+
+    # Re-read body AFTER the in-progress section is up, then classify.
+    body = await page.evaluate(
+        "() => document.body ? document.body.innerText : ''")
     page_state = classify_orders_page(body)
-    if page_state == "none":
+    if page_state == "none" and not orders:
         if emit:
             emit("log", {"message": "no orders (No Previous Deliveries)"})
         return OrdersScrapeResult(state="none")
 
+    # ── Completed orders (UUID-keyed) ──
     chosen: str | None = None
     prev = stable = 0
     for _ in range(SCROLL_MAX_ITERS):
@@ -188,42 +236,29 @@ async def scrape_orders_full(
             stable = 0
         prev = count
 
-    if chosen is None:
-        if emit:
-            emit("log", {"message":
-                         "page shows orders but no card selector matched — "
-                         "selector drift?"})
-        return OrdersScrapeResult(state=page_state)
-    if emit:
-        emit("log", {"message": f"order card selector: {chosen}"})
-
-    raw: list[dict[str, str]] = await page.evaluate(
-        _EXTRACT_CARDS_JS, {"card": chosen, "link": ORDER_LINK_SELECTOR})
-
-    orders: list[ScrapedOrder] = []
     seen: set[str] = set()
-    for item in raw:
-        href = item.get("href") or ""
-        uuid = extract_order_uuid(href)
-        if uuid is None or uuid in seen:
-            continue
-        seen.add(uuid)
-        text = item.get("text") or ""
-        parsed = parse_card_text(text)
-        status_text = in_progress_status(text)
-        if parsed["cancelled"]:
-            lifecycle = OrderStatus.cancelled
-        elif status_text:
-            lifecycle = OrderStatus.in_progress
-        else:
-            lifecycle = OrderStatus.completed
-        orders.append(ScrapedOrder(
-            order_uuid=uuid, receipt_url=href,
-            store_name=parsed["store_name"],
-            description=parsed["description"],
-            items_count=parsed["items_count"], price=parsed["price"],
-            order_status=lifecycle, status_text=status_text,
-            dasher_name=parsed.get("dasher_name", "")))
+    if chosen is not None:
+        if emit:
+            emit("log", {"message": f"completed card selector: {chosen}"})
+        raw: list[dict[str, str]] = await page.evaluate(
+            _EXTRACT_CARDS_JS, {"card": chosen, "link": ORDER_LINK_SELECTOR})
+        for item in raw:
+            href = item.get("href") or ""
+            uuid = extract_order_uuid(href)
+            if uuid is None or uuid in seen:
+                continue  # no receipt UUID → it's an in-progress card, handled
+            seen.add(uuid)
+            text = item.get("text") or ""
+            parsed = parse_card_text(text)
+            lifecycle = (OrderStatus.cancelled if parsed["cancelled"]
+                         else OrderStatus.completed)
+            orders.append(ScrapedOrder(
+                order_uuid=uuid, receipt_url=href,
+                store_name=parsed["store_name"],
+                description=parsed["description"],
+                items_count=parsed["items_count"], price=parsed["price"],
+                order_status=lifecycle,
+                dasher_name=parsed.get("dasher_name", "")))
 
     n_prog = sum(1 for o in orders if o.order_status == OrderStatus.in_progress)
     n_done = sum(1 for o in orders if o.order_status == OrderStatus.completed)
@@ -232,7 +267,8 @@ async def scrape_orders_full(
                      f"scraped {len(orders)} orders "
                      f"({n_prog} in progress, {n_done} completed)"})
     return OrdersScrapeResult(
-        state="in_progress" if n_prog else "has_completed",
+        state="in_progress" if n_prog else
+              ("has_completed" if orders else page_state),
         orders=orders, in_progress_count=n_prog, completed_count=n_done)
 
 

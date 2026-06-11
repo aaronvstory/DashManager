@@ -40,3 +40,8 @@ logs/
 
 # ── Session state ────────────────────────────────────────────────────
 .claude/
+
+# Throwaway live-test scripts
+_live_test_*.py
+_dump_*.py
+_*_out.txt
