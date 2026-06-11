@@ -51,11 +51,13 @@ OTP_INPUT_SELECTORS = [
 ]
 # Split 6-box variant (not seen 2026-06-12, kept as a fallback).
 OTP_DIGIT_SELECTOR = "input[maxlength='1']"
-# The verify button is literally labelled "Submit" in the live modal.
+# Verify button label varies: "Submit" in the signup/2-step dialog, "Sign In"
+# on the passwordless OTP-first login screen (verified live 2026-06-12).
 OTP_SUBMIT_SELECTORS = [
     "div[role='dialog'] button:has-text('Submit')",
     "button:has-text('Submit')",
     "button:has-text('Verify')",
+    "button:has-text('Sign In')",
     "button:has-text('Continue')",
 ]
 OTP_RESEND_SELECTORS = [
@@ -105,6 +107,15 @@ async def _fill_textbox(page: Page, name: str, value: str) -> None:
 
 
 async def _find_otp_input(page: Page):
+    # Check split digit-boxes FIRST: the passwordless OTP-first screen uses 6
+    # separate maxlength=1 inputs, and a broad single-input selector below
+    # would otherwise match one box and stuff all 6 digits into it.
+    digits = page.locator(OTP_DIGIT_SELECTOR)
+    try:
+        if await digits.count() >= 4 and await digits.first.is_visible():
+            return ("digits", digits)
+    except Exception:
+        pass
     for sel in OTP_INPUT_SELECTORS:
         loc = page.locator(sel).first
         try:
@@ -112,12 +123,6 @@ async def _find_otp_input(page: Page):
                 return ("single", loc)
         except Exception:
             continue
-    digits = page.locator(OTP_DIGIT_SELECTOR)
-    try:
-        if await digits.count() >= 4 and await digits.first.is_visible():
-            return ("digits", digits)
-    except Exception:
-        pass
     return (None, None)
 
 

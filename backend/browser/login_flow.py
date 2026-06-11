@@ -93,40 +93,69 @@ async def login_and_capture(page: Page, email: str, password: str,
     if any(m in page.url for m in SUCCESS_URL_MARKERS):
         return "logged_in"
 
-    # ── Password step ("Welcome back") ──
-    try:
-        pw = page.locator(PASSWORD_INPUT).first
-        await pw.wait_for(state="visible", timeout=10_000)
-        await pw.click()
-        await pw.fill(password)
-    except Exception:
-        await screenshot(page, "login_no_password_field")
-        return "failed"
-    await _click_button_text(page, SIGNIN_BUTTON)
-    await asyncio.sleep(2.5)
-    await handle_cloudflare(page)
+    # After the email step DoorDash branches into ONE of two flows (verified
+    # live 2026-06-12):
+    #   (a) password screen ("Welcome back") -> Sign In -> 2-Step OTP, or
+    #   (b) passwordless OTP-first ("Verify code", a 6-box split input).
+    # Wait for whichever appears and handle it.
+    deadline = time.monotonic() + 20
+    branch = None  # "password" | "otp" | "done"
+    while time.monotonic() < deadline:
+        if any(m in page.url for m in SUCCESS_URL_MARKERS):
+            branch = "done"
+            break
+        kind, _ = await _find_otp_input(page)
+        if kind is not None:
+            branch = "otp"
+            break
+        try:
+            if await page.locator(PASSWORD_INPUT).first.is_visible():
+                branch = "password"
+                break
+        except Exception:
+            pass
+        await asyncio.sleep(1.0)
 
-    if any(m in page.url for m in SUCCESS_URL_MARKERS):
+    if branch == "done":
         await _fill_address_if_present(page, address, emit=emit)
         return "logged_in"
 
-    # ── 2-Step Verification (same OTP dialog as signup) ──
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        kind, _ = await _find_otp_input(page)
-        if kind is not None:
-            break
+    if branch == "password":
+        try:
+            pw = page.locator(PASSWORD_INPUT).first
+            await pw.click()
+            await pw.fill(password)
+        except Exception:
+            await screenshot(page, "login_no_password_field")
+            return "failed"
+        await _click_button_text(page, SIGNIN_BUTTON)
+        await asyncio.sleep(2.5)
+        await handle_cloudflare(page)
         if any(m in page.url for m in SUCCESS_URL_MARKERS):
             await _fill_address_if_present(page, address, emit=emit)
             return "logged_in"
-        # A wrong password leaves us on the password screen, not the OTP modal.
-        if await page.locator("text=/incorrect|wrong password|try again/i"
-                              ).first.is_visible():
-            return "bad_credentials"
-        await asyncio.sleep(1.0)
-    else:
-        await screenshot(page, "login_no_otp_modal")
+        # Password accepted -> 2-Step Verification OTP next.
+        otp_deadline = time.monotonic() + 30
+        while time.monotonic() < otp_deadline:
+            kind, _ = await _find_otp_input(page)
+            if kind is not None:
+                break
+            if any(m in page.url for m in SUCCESS_URL_MARKERS):
+                await _fill_address_if_present(page, address, emit=emit)
+                return "logged_in"
+            if await page.locator(
+                    "text=/incorrect|wrong password|try again/i"
+                    ).first.is_visible():
+                return "bad_credentials"
+            await asyncio.sleep(1.0)
+        else:
+            await screenshot(page, "login_no_otp_modal")
+            return "failed"
+
+    if branch is None:
+        await screenshot(page, "login_no_branch")
         return "failed"
+    # branch == "otp": passwordless flow, OTP input already present.
 
     _notify(emit, "otp_waiting", {})
     started = time.monotonic()
