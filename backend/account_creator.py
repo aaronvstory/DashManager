@@ -34,7 +34,9 @@ async def create_account(*, location_origin: str | None,
                          daisy_root: str | None = None,
                          headless: bool | None = None,
                          batch_id: str | None = None,
-                         batch_label: str | None = None) -> dict[str, Any]:
+                         batch_label: str | None = None,
+                         reuse_number: dict[str, Any] | None = None,
+                         ) -> dict[str, Any]:
     """Run the full create-account flow. Returns a summary dict.
 
     `headless` overrides the browser setting for this one run (None = use the
@@ -42,8 +44,17 @@ async def create_account(*, location_origin: str | None,
     CustomerDaisy record so several accounts created in one run cluster as a
     single batch in CustomerDaisy's "recent batch OTPs" screen (the per-rental
     `ordernum` is unique, so without a shared id they'd appear as N separate
-    entries). Raises on fatal failure (caller emits account_failed); partial
-    progress is reported via events.
+    entries).
+
+    `reuse_number`, when given, is an already-bought number dict (with
+    `number_token`/`api_url`/`mirror_hosts`/`phone_number`, e.g. from
+    `orphan_numbers()`) — the rent step is SKIPPED and this number is used,
+    so a signup that failed after renting (VPN/Cloudflare block) can be retried
+    without paying for a fresh number. A fresh identity is still generated for
+    the address; only the phone number is reused.
+
+    Raises on fatal failure (caller emits account_failed); partial progress is
+    reported via events.
     """
     from playwright.async_api import async_playwright
 
@@ -71,11 +82,17 @@ async def create_account(*, location_origin: str | None,
             "city": identity.get("city"), "state": identity.get("state"),
             "full_address": identity.get("full_address")})
 
-        _emit("number_renting", {})
-        number = await daisy.rent_number()
-        identity.update(number)  # phone_number, number_token, api_url, ...
-        _emit("number_rented", {"phone_number": number.get("phone_number"),
-                                "price": number.get("price")})
+        if reuse_number and reuse_number.get("number_token"):
+            number = dict(reuse_number)
+            identity.update(number)  # reuse an already-bought number, no rent
+            _emit("number_reused",
+                  {"phone_number": number.get("phone_number")})
+        else:
+            _emit("number_renting", {})
+            number = await daisy.rent_number()
+            identity.update(number)  # phone_number, number_token, api_url, ...
+            _emit("number_rented", {"phone_number": number.get("phone_number"),
+                                    "price": number.get("price")})
 
         token = number["number_token"]
         api_url = number.get("api_url", "")
@@ -180,22 +197,88 @@ async def create_account(*, location_origin: str | None,
         return summary
 
 
+# rent_number returns these keys; CustomerDaisy's save_customer only folds the
+# `apicc_`-prefixed names into customer metadata. Without this mapping the
+# number token/url/ordernum silently drop on save — so a failed signup leaves an
+# ORPHAN (a paid number with no recoverable handle). Mapping them makes orphans
+# reusable: orphan_numbers() can find them and create_account(reuse_number=...)
+# can finish signup on an already-bought number instead of renting a new one.
+_NUMBER_FIELD_MAP = {
+    "number_token": "apicc_number_token",
+    "api_url": "apicc_api_url",
+    "mirror_hosts": "apicc_mirror_hosts",
+    "ordernum": "apicc_ordernum",
+    "end_time": "apicc_end_time",
+}
+
+
 def _daisy_record(identity: dict[str, Any], *, verified: bool,
                   batch_id: str | None = None,
                   batch_label: str | None = None) -> dict[str, Any]:
     """Shape an identity into CustomerDaisy's save_customer payload.
 
-    When `batch_id` is given it's written to the `apicc_batch_id`/
-    `apicc_batch_label` fields CustomerDaisy folds into customer metadata, so a
-    run of several accounts groups under one batch in its "recent batch OTPs"
-    screen.
+    Maps the rented-number fields to the `apicc_*` keys CustomerDaisy persists
+    into metadata (so the number survives even on a failed signup — recoverable
+    as an orphan). When `batch_id` is given it's written to `apicc_batch_id`/
+    `apicc_batch_label` so a run groups under one batch in CustomerDaisy's
+    "recent batch OTPs" screen.
     """
     rec = dict(identity)
     rec["verification_completed"] = verified
+    for src, dst in _NUMBER_FIELD_MAP.items():
+        if identity.get(src) is not None and dst not in rec:
+            rec[dst] = identity[src]
     if batch_id:
         rec["apicc_batch_id"] = batch_id
         rec["apicc_batch_label"] = batch_label or batch_id
     return rec
+
+
+def _extract_orphan(rec: dict[str, Any]) -> dict[str, Any] | None:
+    """Pure: turn a CustomerDaisy record into a reusable number dict, or None.
+
+    A reusable orphan = a record whose api.cc number token is present but whose
+    signup never completed (verification_completed falsy). The number lives in
+    metadata under the `apicc_*` keys (see _NUMBER_FIELD_MAP); pull them back
+    into the rent_number-shaped dict create_account(reuse_number=...) expects.
+    """
+    if rec.get("verification_completed"):
+        return None
+    meta = rec.get("metadata") or {}
+    token = meta.get("apicc_number_token") or rec.get("number_token")
+    if not token:
+        return None
+    return {
+        "phone_number": (rec.get("primary_phone") or rec.get("phone")
+                         or meta.get("phone_number") or ""),
+        "number_token": token,
+        "api_url": meta.get("apicc_api_url") or rec.get("api_url") or "",
+        "mirror_hosts": meta.get("apicc_mirror_hosts") or [],
+        "ordernum": meta.get("apicc_ordernum") or "",
+        "_daisy_name": f"{rec.get('first_name','')} "
+                       f"{rec.get('last_name','')}".strip(),
+    }
+
+
+async def orphan_numbers(*, daisy_root: str | None = None,
+                         limit: int = 30) -> list[dict[str, Any]]:
+    """Find already-bought api.cc numbers whose signup never completed.
+
+    Returns reusable number dicts (newest first) to feed
+    create_account(reuse_number=...) so a paid number from a failed attempt
+    isn't wasted. Dedups against DashManager customers already holding that
+    token (those are done, not orphans).
+    """
+    used_tokens = {c.get("number_token") for c in await db.list_customers()
+                   if c.get("number_token")}
+    out: list[dict[str, Any]] = []
+    async with DaisyBridge(root=daisy_root) as daisy:
+        recents = await daisy.list_recent_customers(limit)
+    for rec in recents:
+        orphan = _extract_orphan(rec)
+        if orphan and orphan["number_token"] not in used_tokens:
+            out.append(orphan)
+    return out
 
 
 def _notes(identity: dict[str, Any], daisy_id: str) -> str:
