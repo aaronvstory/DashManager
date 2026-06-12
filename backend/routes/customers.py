@@ -19,9 +19,8 @@ from backend.events import bus
 router = APIRouter()
 
 # Single login capture at a time: acquired in the endpoint (so a second POST
-# 409s immediately) and released by the background task when it finishes.
-_login_lock = asyncio.Lock()
-# Strong reference so the background task is never garbage-collected mid-run.
+# 409s immediately). Strong reference so the background task is never
+# garbage-collected mid-run; its done-ness is the single source of "running".
 _login_task: asyncio.Task | None = None
 
 
@@ -36,10 +35,18 @@ class CreateAccountBody(BaseModel):
     headless: bool | None = None        # per-action override of the setting
 
 
-_create_lock = asyncio.Lock()
 _create_task: asyncio.Task | None = None
-_relogin_lock = asyncio.Lock()
 _relogin_task: asyncio.Task | None = None
+
+
+def _task_running(task: asyncio.Task | None) -> bool:
+    """A task is 'running' only while it actually exists and isn't done.
+
+    Using the live task (not a Lock acquired outside it) avoids the failure
+    mode where create_task's coroutine never reaches a finally and a Lock
+    stays held forever — a done/None task is simply not running.
+    """
+    return task is not None and not task.done()
 
 
 class CustomerPatch(BaseModel):
@@ -98,13 +105,16 @@ async def customers_full() -> dict[str, Any]:
 
 
 async def _run_login(bucket_date: str | None) -> None:
+    import shutil as _shutil
+
+    temp_profile: str | None = None
     try:
         # Lazy: pulls in Playwright, which must not load at app boot.
-        from backend.browser.session import login_and_capture
+        from backend.browser.session import manual_login_and_capture
 
         bus.publish("login_waiting")
-        storage, cookies, profile, temp_profile = await login_and_capture(
-            emit=lambda t, d: bus.publish(t, d))
+        storage, cookies, profile, temp_profile = \
+            await manual_login_and_capture(emit=lambda t, d: bus.publish(t, d))
 
         bucket = bucket_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
         cid = await db.create_customer(
@@ -119,16 +129,12 @@ async def _run_login(bucket_date: str | None) -> None:
         cookies_dest = config.SESSIONS_DIR / f"{cid}_cookies.json"
         Path(storage).replace(storage_dest)
         Path(cookies).replace(cookies_dest)
-        # Adopt the temp login profile as the customer's persistent profile.
-        import shutil as _shutil
-
+        # Adopt the temp login profile as the customer's persistent profile;
+        # the finally cleans temp_profile if this move never happened.
         from backend.browser.driver import profile_dir
         dest = profile_dir(cid)
         _shutil.rmtree(dest, ignore_errors=True)
-        try:
-            _shutil.move(temp_profile, str(dest))
-        except Exception:
-            _shutil.rmtree(temp_profile, ignore_errors=True)
+        _shutil.move(str(temp_profile), str(dest))
         await db.update_customer(
             cid,
             storage_state_path=str(storage_dest),
@@ -144,16 +150,21 @@ async def _run_login(bucket_date: str | None) -> None:
     except Exception as e:  # noqa: BLE001 — surfaced to the UI as an event
         bus.publish("login_failed", {"error": str(e)})
     finally:
-        _login_lock.release()
+        # Clean the temp login profile if it wasn't adopted (a successful
+        # move leaves the path gone, so this is then a no-op).
+        if temp_profile:
+            _shutil.rmtree(temp_profile, ignore_errors=True)
 
 
 @router.post("/login")
 async def start_login(body: LoginBody | None = None) -> dict[str, Any]:
     global _login_task
-    if _login_lock.locked():
+    # Synchronous check-then-create: no await between the check and
+    # create_task, so two requests can't both pass; and a done/None task is
+    # never "running" (no lock to leak if a task fails to start).
+    if _task_running(_login_task):
         raise HTTPException(status_code=409,
                             detail="a login capture is already running")
-    await _login_lock.acquire()
     _login_task = asyncio.create_task(
         _run_login(body.bucket_date if body else None))
     return {"started": True}
@@ -173,18 +184,15 @@ async def _run_create_account(body: CreateAccountBody) -> None:
             headless=body.headless)
     except Exception as e:  # surfaced to the UI as an event
         bus.publish("account_failed", {"error": str(e)})
-    finally:
-        _create_lock.release()
 
 
 @router.post("/create-account")
 async def create_account_route(body: CreateAccountBody | None = None
                                ) -> dict[str, Any]:
     global _create_task
-    if _create_lock.locked():
+    if _task_running(_create_task):
         raise HTTPException(status_code=409,
                             detail="an account creation is already running")
-    await _create_lock.acquire()
     _create_task = asyncio.create_task(
         _run_create_account(body or CreateAccountBody()))
     return {"started": True}
@@ -275,8 +283,6 @@ async def _run_relogin(cid: int, headless: bool | None) -> None:
         await relogin_customer(cid, headless=headless)
     except Exception as e:
         bus.publish("relogin_failed", {"customer_id": cid, "error": str(e)})
-    finally:
-        _relogin_lock.release()
 
 
 @router.post("/{cid}/relogin")
@@ -285,9 +291,8 @@ async def relogin(cid: int, body: ReloginBody | None = None) -> dict[str, Any]:
     global _relogin_task
     if await db.get_customer(cid) is None:
         raise HTTPException(status_code=404, detail="customer not found")
-    if _relogin_lock.locked():
+    if _task_running(_relogin_task):
         raise HTTPException(status_code=409, detail="a login is already running")
-    await _relogin_lock.acquire()
     _relogin_task = asyncio.create_task(
         _run_relogin(cid, (body or ReloginBody()).headless))
     return {"started": True}
@@ -318,10 +323,11 @@ async def delete_customer(cid: int) -> dict[str, Any]:
                 Path(p).unlink(missing_ok=True)
             except OSError:
                 pass  # locked/permission-denied file must not block DB delete
-    # Remove the customer's persistent Chromium profile dir too.
+    # Remove the customer's persistent Chromium profile dir too. rmtree on a
+    # large profile can block for seconds, so off-load it from the event loop.
     from backend.browser.driver import remove_profile
     try:
-        remove_profile(cid)
+        await asyncio.to_thread(remove_profile, cid)
     except Exception:
         pass
     await db.delete_customer(cid)
@@ -341,9 +347,8 @@ async def test_session(cid: int, body: ReloginBody | None = None
     from playwright.async_api import async_playwright  # lazy
 
     from backend.browser import orders
-    from backend.browser.driver import (SessionExpiredError,
-                                        export_storage_state,
-                                        open_customer_profile)
+    from backend.browser.driver import (SessionExpiredError, customer_profile,
+                                        export_storage_state)
 
     browser_cfg = await db.get_setting("browser")
     override = (body or ReloginBody()).headless
@@ -351,23 +356,22 @@ async def test_session(cid: int, body: ReloginBody | None = None
     result = None
     try:
         async with async_playwright() as p:
-            ctx = None
-            try:
-                ctx = await open_customer_profile(
+            # Per-customer lock (via customer_profile) so this can't collide
+            # with a run/relogin already driving this customer's profile.
+            async with customer_profile(
                     p, cid, headless=headless,
                     seed_storage_state=row.get("storage_state_path") or None,
-                    viewport=tuple(browser_cfg["viewport"]))
+                    viewport=tuple(browser_cfg["viewport"])) as ctx:
                 page = ctx.pages[0] if ctx.pages else await ctx.new_page()
                 result = await orders.scrape_orders_full(page)
                 await export_storage_state(ctx, cid)
-            finally:
-                if ctx is not None:
-                    await ctx.close()
     except SessionExpiredError:
         await db.update_customer(cid, session_status="expired")
         return {"ok": False, "error": "session_expired"}
 
-    # Persist scraped orders so the DB viewer reflects current state.
+    # Replace in-progress orders (no stable identity) before re-persisting, so
+    # phantom rows from completed/vanished live orders don't accumulate.
+    await db.clear_in_progress_orders(cid)
     for so in result.orders:
         await db.upsert_order(
             cid, so.order_uuid, so.receipt_url, store_name=so.store_name,

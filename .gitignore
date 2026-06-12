@@ -45,3 +45,9 @@ logs/
 _live_test_*.py
 _dump_*.py
 _*_out.txt
+_codex_*.txt
+_check5.py
+_login4.py
+_walk.py
+_walk_shot.png
+_recheck.py

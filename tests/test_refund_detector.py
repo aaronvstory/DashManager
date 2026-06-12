@@ -162,3 +162,38 @@ def test_zero_dollar_refund_is_not_refunded():
     r = detect(text, CFG)
     assert r.status == RefundStatus.not_refunded
     assert r.refund_amount == pytest.approx(0.0)
+
+
+CFG_FULL = {
+    "total_label": "Total", "refund_label": "Refund",
+    "cancelled_texts": ["order was canceled", "order cancelled"],
+    "pending_texts": ["pending refund", "choose your refund method",
+                      "to original payment method"],
+}
+
+
+def test_pending_claim_choose_refund_method():
+    txt = ("Your order was canceled, we'll help you find a replacement\n"
+           "Choose your refund method\n"
+           "$112.44 credits\n$112.44 to original payment method\n"
+           "Subtotal\n$50.95\nTotal\n$112.44")
+    r = detect(txt, CFG_FULL)
+    assert r.status == RefundStatus.pending_claim
+    assert r.total_amount == 112.44
+
+
+def test_pending_refund_badge():
+    txt = "Order Cancelled\nPending Refund\nSubtotal\n$50.95\nTotal\n$106.81"
+    assert detect(txt, CFG_FULL).status == RefundStatus.pending_claim
+
+
+def test_real_refund_beats_pending_banner():
+    # A real Refund line wins even if a stale claim banner lingers.
+    txt = ("Choose your refund method\nTotal\n$112.44\nRefund\n-$112.44")
+    assert detect(txt, CFG_FULL).status == RefundStatus.refunded
+
+
+def test_canceled_no_refund_no_pending_is_chat():
+    txt = ("Your order was canceled, we'll help you find a replacement\n"
+           "Subtotal\n$50.95\nTotal\n$106.71\nPayment\nVisa")
+    assert detect(txt, CFG_FULL).status == RefundStatus.not_refunded

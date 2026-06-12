@@ -134,10 +134,14 @@ async def _enter_otp(page: Page, code: str) -> bool:
         if kind == "single":
             await loc.click()
             await loc.fill(code)
-        else:  # split digit boxes — type one char per input
+        else:  # split digit boxes — click + key-press per box
+            # fill() can skip the keypress handlers these widgets use to
+            # auto-advance focus / update state, so type each digit as a key.
             n = await loc.count()
             for i, ch in enumerate(code[:n]):
-                await loc.nth(i).fill(ch)
+                box = loc.nth(i)
+                await box.click()
+                await box.press(ch)
         # Submit (some flows auto-advance on the last digit).
         for sel in OTP_SUBMIT_SELECTORS:
             btn = page.locator(sel).first
@@ -209,7 +213,9 @@ async def submit_and_verify(page: Page, poll_otp: OtpPoller, *,
             tried_codes.add(code)
             _notify(emit, "otp_received", {"code": code})
             if await _enter_otp(page, code):
-                for _ in range(3):  # success can take a beat to redirect
+                # Up to 10s — slow networks/proxies can take a while; a
+                # premature resend would invalidate this good code.
+                for _ in range(5):
                     await asyncio.sleep(2.0)
                     await handle_cloudflare(page)
                     if any(m in page.url for m in SUCCESS_URL_MARKERS):
@@ -218,6 +224,7 @@ async def submit_and_verify(page: Page, poll_otp: OtpPoller, *,
                 # Submitted but not logged in (expired/rejected) → resend.
                 if await _resend(page, emit):
                     last_resend = time.monotonic()
+                    tried_codes.clear()  # a fresh code may reuse the digits
                 continue
             return "otp_failed"
         # No fresh code yet; resend if the wait is dragging.
@@ -225,6 +232,7 @@ async def submit_and_verify(page: Page, poll_otp: OtpPoller, *,
                 and time.monotonic() - last_resend > resend_after_s):
             if await _resend(page, emit):
                 last_resend = time.monotonic()
+                tried_codes.clear()  # a fresh code may reuse the digits
         await asyncio.sleep(3.0)
     return "otp_timeout"
 
@@ -287,7 +295,10 @@ async def _fill_address_if_present(page: Page, address: dict[str, Any] | None,
                     street_no = re.match(r"\d+", full)
                     option = page.locator(
                         "div[role='dialog'] [role='option'], "
-                        "div[role='dialog'] li, div[role='dialog'] a")
+                        # NOT a bare 'a' — that matches Terms/Privacy/Close and
+                        # could navigate away. List items / option rows only.
+                        "div[role='dialog'] li, "
+                        "div[role='dialog'] [role='button'][data-anchor-id]")
                     n = await option.count()
                     for i in range(min(n, 8)):
                         row = option.nth(i)

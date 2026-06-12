@@ -63,18 +63,34 @@ def _label_amounts(lines: list[str], label: str) -> list[float]:
     return amounts
 
 
+# A self-service "Choose your refund method" / Resolution screen — the user
+# claims the refund by selecting ORIGINAL PAYMENT METHOD and confirming.
+# Verified live 2026-06-12. No agent chat needed for these.
+_DEFAULT_PENDING_TEXTS = [
+    "pending refund",
+    "pending resolution",
+    "choose your refund method",
+    "to original payment method",  # only appears on the claim screen
+]
+
+
 def detect(page_text: str, cfg: dict) -> RefundResult:
     """Classify a receipt page's refund state from its body innerText.
 
     cfg is the ``refund_signal`` settings dict (total_label, refund_label,
-    cancelled_texts). Rules:
+    cancelled_texts, pending_texts). Rules, in order:
 
     - No parseable Total (junk page, Cloudflare interstitial, empty) ->
       ``unknown`` — never silently pass.
-    - Total present, no Refund line -> ``not_refunded``. Cancellation prose
-      alone proves NOTHING about money; it only sets ``cancelled_text_seen``.
-    - Refund present: amount >= total -> ``refunded``; 0 < amount < total ->
-      ``partial``; a $0.00 refund moved no money -> ``not_refunded``.
+    - Refund line present: amount >= total -> ``refunded``; 0 < amount < total
+      -> ``partial`` (a real refund always wins, even if a stale claim
+      banner lingers).
+    - A self-service claim screen ("Pending Refund" / "Choose your refund
+      method") -> ``pending_claim`` — claim it (original payment method),
+      don't chat.
+    - Otherwise (cancelled, no refund, no claim) -> ``not_refunded`` — chat.
+      Cancellation prose alone proves NOTHING; it only sets
+      ``cancelled_text_seen``.
 
     If a label appears multiple times the LAST occurrence wins — pages can
     mention totals elsewhere (marketing copy, summaries) before the breakdown.
@@ -85,9 +101,11 @@ def detect(page_text: str, cfg: dict) -> RefundResult:
     total_label: str = cfg.get("total_label", "Total")
     refund_label: str = cfg.get("refund_label", "Refund")
     cancelled_texts: list[str] = cfg.get("cancelled_texts", [])
+    pending_texts: list[str] = cfg.get("pending_texts", _DEFAULT_PENDING_TEXTS)
 
     text_cf = text.casefold()
     cancelled_seen = any(t.casefold() in text_cf for t in cancelled_texts if t)
+    pending_seen = any(t.casefold() in text_cf for t in pending_texts if t)
 
     totals = _label_amounts(lines, total_label)
     refunds = _label_amounts(lines, refund_label)
@@ -97,22 +115,22 @@ def detect(page_text: str, cfg: dict) -> RefundResult:
 
     if total is None:
         return RefundResult(
-            status=RefundStatus.unknown,
-            total_amount=None,
-            refund_amount=refund,
-            cancelled_text_seen=cancelled_seen,
-        )
-    if not refund:  # no Refund line, or a $0.00 refund — money never moved
+            status=RefundStatus.unknown, total_amount=None,
+            refund_amount=refund, cancelled_text_seen=cancelled_seen)
+
+    # A real refund line wins outright.
+    if refund:  # non-zero Refund line — money moved
+        status = (RefundStatus.refunded if refund >= total
+                  else RefundStatus.partial)
         return RefundResult(
-            status=RefundStatus.not_refunded,
-            total_amount=total,
-            refund_amount=refund,
-            cancelled_text_seen=cancelled_seen,
-        )
-    status = RefundStatus.refunded if refund >= total else RefundStatus.partial
+            status=status, total_amount=total, refund_amount=refund,
+            cancelled_text_seen=cancelled_seen)
+
+    # No refund yet — is it self-claimable, or does it need a chat?
+    if pending_seen:
+        return RefundResult(
+            status=RefundStatus.pending_claim, total_amount=total,
+            refund_amount=refund, cancelled_text_seen=cancelled_seen)
     return RefundResult(
-        status=status,
-        total_amount=total,
-        refund_amount=refund,
-        cancelled_text_seen=cancelled_seen,
-    )
+        status=RefundStatus.not_refunded, total_amount=total,
+        refund_amount=refund, cancelled_text_seen=cancelled_seen)

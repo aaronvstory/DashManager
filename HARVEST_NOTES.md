@@ -77,3 +77,43 @@ Edenton NC identity from CustomerDaisy). Confirmed working:
 
 Bridge (subprocess under CustomerDaisy venv): balance/locations/generate_identity/
 rent_number/fetch_otp/save_customer all verified live. api.cc balance read $12.74.
+
+## Refund states + claim/chat flow — verified live 2026-06-12 (with user)
+
+Three-way refund classification (detector now implements this):
+
+| State | Signal on receipt | Action |
+|---|---|---|
+| **refunded** | breakdown has `Refund -$X` line (>= total); or banner "We've issued $X refund ... to your original payment method" | done, skip |
+| **pending_claim** | order under "Pending Resolution" w/ "Pending Refund" badge + "Resolution" button; opening shows "Choose your refund method" | SELF-CLAIM (no chat) |
+| **not_refunded** | cancelled, NO refund line, NO resolution option — breakdown ends at Total -> Payment | CHAT with agent |
+
+**pending_claim self-claim flow (verified — Wendy $112.24):**
+1. Orders page -> "Resolution" button (`get_by_role("button", name="Resolution")`)
+2. -> `/orders/<uuid>` "Choose your refund method": two options, **credits is DEFAULT-selected (BAD)**
+3. Click text "to original payment method" (`get_by_text("to original payment method")`) — selects that radio
+4. VERIFY correct radio selected (screenshot/DOM) BEFORE confirming
+5. Click "Confirm" (`get_by_role("button", name="Confirm")`)
+6. -> "We've issued $X refund ... to your original payment method" + breakdown gains `Refund -$X`
+
+**Chat flow (verified — Wendy $106.71):**
+1. `/orders/help` -> click the order's $amount text (cards have NO href) -> `/help/orders/<uuid>?deliveryUUID=...`
+2. Click "Contact support" -> chat widget opens (quick-reply buttons + "Type message" input)
+3. Type the opening message (store + amount + "refund to original card, not credits"), Enter
+4. Bot replies (often confirms no refund on record + offers to escalate)
+5. Type "AGENT" -> bot: "I'm unable to resolve ... connect you with a human" -> "Connecting you with an agent..." (loading)
+6. Human joins: **"You are now connected to our support agent"** — agent echoes the amount + "original payment card"
+7. Answer any clarifying Qs (e.g. "store canceled due to items unavailable"), ask to confirm BOTH today's orders refunded to card + amounts; thank + goodbye. Decline DashPass.
+
+**Cloudflare — TWO variants (2026-06-12):**
+- Variant A (handled): "Verifying you are human" → wait 30s + reload clears it.
+- Variant B (NEW, NOT yet handled): "Performing security verification" /
+  "protect against malicious bots" + a Ray ID — a harder Turnstile gate that
+  did NOT clear with reload or a 20s+ wait on Heidi's session. `handle_cloudflare`
+  must also detect this text; handling likely needs a longer wait, a fresh
+  navigation, or surfacing to the user (per the early VPN/connection note).
+  This is a real robustness gap to design for.
+
+**Detection signals for the automation:**
+- bot vs human: bot says "virtual assistant" / shows quick-reply buttons; human handoff = "Connecting you with an agent" then "connected to our support agent".
+- ⚠️ **Agents time out if you're slow** — "Since you are unresponsive let me call you" after a delay. The automation must reply promptly once a human is engaged (LLM/scripted = near-instant; this is where the speed matters more than the cleverness).

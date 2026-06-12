@@ -43,14 +43,18 @@ class DaisyBridge:
         self._proc = await asyncio.create_subprocess_exec(
             self.python, str(worker),
             cwd=self.root,
-            env={"DAISY_ROOT": self.root, "PYTHONUNBUFFERED": "1",
-                 **_os_environ()},
+            # OUR vars LAST so a stray parent DAISY_ROOT / PYTHONUNBUFFERED
+            # can't point the worker at the wrong checkout or buffer stdout
+            # (which would corrupt the JSON protocol).
+            env={**_os_environ(), "DAISY_ROOT": self.root,
+                 "PYTHONUNBUFFERED": "1"},
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
         ready = await self._read_line()
         if not ready.get("ok"):
+            await self._kill_proc()  # reap — don't leak the failed worker
             raise DaisyError(ready.get("error", "worker failed to start"))
 
     async def close(self) -> None:
@@ -58,12 +62,18 @@ class DaisyBridge:
             return
         try:
             if self._proc.stdin:
-                self._proc.stdin.close()
+                # A crashed worker makes close() raise BrokenPipeError, which
+                # would skip the wait/kill below — guard it so we still reap.
+                try:
+                    self._proc.stdin.close()
+                except Exception:
+                    pass
             await asyncio.wait_for(self._proc.wait(), timeout=5)
         except (asyncio.TimeoutError, ProcessLookupError):
             try:
                 self._proc.kill()
-            except ProcessLookupError:
+                await self._proc.wait()  # reap to avoid a zombie
+            except (ProcessLookupError, Exception):
                 pass
         finally:
             self._proc = None
@@ -79,6 +89,9 @@ class DaisyBridge:
         assert self._proc and self._proc.stdout
         raw = await self._proc.stdout.readline()
         if not raw:
+            # EOF = the worker died. Drop the handle so the next _call()
+            # restarts it instead of writing to a closed stdin (BrokenPipe).
+            self._proc = None
             raise DaisyError("CustomerDaisy worker exited unexpectedly")
         return json.loads(raw.decode("utf-8"))
 
@@ -89,12 +102,32 @@ class DaisyBridge:
                 await self.start()
             assert self._proc and self._proc.stdin
             req = json.dumps({"cmd": cmd, "args": args or {}}) + "\n"
-            self._proc.stdin.write(req.encode("utf-8"))
-            await self._proc.stdin.drain()
-            resp = await asyncio.wait_for(self._read_line(), timeout=timeout)
+            try:
+                self._proc.stdin.write(req.encode("utf-8"))
+                await self._proc.stdin.drain()
+                resp = await asyncio.wait_for(self._read_line(), timeout=timeout)
+            except (BrokenPipeError, ConnectionResetError,
+                    asyncio.TimeoutError) as exc:
+                # Worker died/stalled around the write or hung on read — drop
+                # the dead handle so the next call restarts it cleanly.
+                await self._kill_proc()
+                raise DaisyError(f"{cmd} failed: {exc}") from exc
         if not resp.get("ok"):
             raise DaisyError(resp.get("error", f"{cmd} failed"))
         return resp["result"]
+
+    async def _kill_proc(self) -> None:
+        proc, self._proc = self._proc, None
+        if proc is None:
+            return
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        try:
+            await proc.wait()  # reap so we don't leak a zombie
+        except Exception:
+            pass
 
     # ── Commands ─────────────────────────────────────────────────────────────
 

@@ -27,9 +27,13 @@ class OrderStatus(StrEnum):
 
 class RefundStatus(StrEnum):
     unchecked = "unchecked"
-    refunded = "refunded"        # Refund line present, amount >= total
+    refunded = "refunded"        # Refund line present, amount >= total — done
     partial = "partial"          # Refund line present, 0 < amount < total
-    not_refunded = "not_refunded"  # no Refund line — pursue, even if "canceled"
+    # DoorDash offers a self-service "Choose your refund method" / Resolution
+    # ("Pending Refund" badge). We claim it by selecting ORIGINAL PAYMENT
+    # METHOD (not credits) and confirming — no agent chat needed.
+    pending_claim = "pending_claim"
+    not_refunded = "not_refunded"  # cancelled, no refund line, no claim — chat
     unknown = "unknown"          # unparseable — never silently pass
 
 

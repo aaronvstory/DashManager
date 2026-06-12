@@ -167,7 +167,9 @@ async def login_and_capture(page: Page, email: str, password: str,
             tried.add(code)
             _notify(emit, "otp_received", {"code": code})
             if await _enter_otp(page, code):
-                for _ in range(3):
+                # Up to 10s — slow networks/proxies; premature resend would
+                # invalidate this good code.
+                for _ in range(5):
                     await asyncio.sleep(2.0)
                     await handle_cloudflare(page)
                     if any(m in page.url for m in SUCCESS_URL_MARKERS):
@@ -176,11 +178,13 @@ async def login_and_capture(page: Page, email: str, password: str,
                         return "logged_in"
                 if await _resend(page, emit):  # expired/rejected → fresh code
                     last_resend = time.monotonic()
+                    tried.clear()  # a fresh code may reuse the digits
                 continue
             return "otp_failed"
         if (time.monotonic() - started > resend_after_s
                 and time.monotonic() - last_resend > resend_after_s):
             if await _resend(page, emit):
                 last_resend = time.monotonic()
+                tried.clear()  # a fresh code may reuse the digits
         await asyncio.sleep(3.0)
     return "otp_timeout"

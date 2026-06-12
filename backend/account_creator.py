@@ -143,20 +143,23 @@ async def create_account(*, location_origin: str | None,
             notes=_notes(identity, daisy_id))
 
         # Adopt the signup profile as the customer's persistent profile.
+        # Everything below is wrapped so the temp dir is cleaned on ANY failure
+        # (e.g. db.update_customer raising) — a successful move makes the
+        # final rmtree a no-op since temp_profile no longer exists.
         from backend.browser.driver import profile_dir
 
-        dest = profile_dir(cid)
-        shutil.rmtree(dest, ignore_errors=True)
         try:
+            dest = profile_dir(cid)
+            shutil.rmtree(dest, ignore_errors=True)
             shutil.move(str(temp_profile), str(dest))
-        except Exception:
+            final_storage = config.SESSIONS_DIR / f"{cid}_storage.json"
+            if storage_backup and Path(storage_backup).exists():
+                Path(storage_backup).replace(final_storage)
+            await db.update_customer(cid,
+                                     storage_state_path=str(final_storage),
+                                     session_status="active")
+        finally:
             shutil.rmtree(temp_profile, ignore_errors=True)
-        final_storage = config.SESSIONS_DIR / f"{cid}_storage.json"
-        if storage_backup and Path(storage_backup).exists():
-            Path(storage_backup).replace(final_storage)
-        await db.update_customer(cid,
-                                 storage_state_path=str(final_storage),
-                                 session_status="active")
 
         summary = {"customer_id": cid, "daisy_id": daisy_id,
                    "name": f"{identity.get('first_name','')} "

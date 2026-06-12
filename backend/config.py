@@ -50,6 +50,14 @@ DEFAULT_SETTINGS: dict[str, object] = {
             "order was canceled",
             "order was cancelled",
         ],
+        # Self-service "claim your refund" screen — pick ORIGINAL payment
+        # method and confirm (no agent chat). Verified live 2026-06-12.
+        "pending_texts": [
+            "pending refund",
+            "pending resolution",
+            "choose your refund method",
+            "to original payment method",
+        ],
     },
     "chat": {
         "opening_template": (
