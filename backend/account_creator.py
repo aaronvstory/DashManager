@@ -255,20 +255,48 @@ def _extract_orphan(rec: dict[str, Any]) -> dict[str, Any] | None:
         "api_url": meta.get("apicc_api_url") or rec.get("api_url") or "",
         "mirror_hosts": meta.get("apicc_mirror_hosts") or [],
         "ordernum": meta.get("apicc_ordernum") or "",
+        "created_at": rec.get("created_at") or "",
         "_daisy_name": f"{rec.get('first_name','')} "
                        f"{rec.get('last_name','')}".strip(),
     }
 
 
-async def orphan_numbers(*, daisy_root: str | None = None,
-                         limit: int = 30) -> list[dict[str, Any]]:
-    """Find already-bought api.cc numbers whose signup never completed.
+def _within_hours(created_at: str, now: datetime, max_age_hours: float) -> bool:
+    """True if an ISO `created_at` is within max_age_hours of `now`.
 
-    Returns reusable number dicts (newest first) to feed
-    create_account(reuse_number=...) so a paid number from a failed attempt
-    isn't wasted. Dedups against DashManager customers already holding that
-    token (those are done, not orphans).
+    An unparseable/empty timestamp is treated as TOO OLD (False) — we never
+    reuse a number we can't prove is recent (it could be an expired old one).
     """
+    if not created_at:
+        return False
+    try:
+        ts = datetime.fromisoformat(str(created_at))
+    except (ValueError, TypeError):
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return (now - ts).total_seconds() <= max_age_hours * 3600
+
+
+async def orphan_numbers(*, daisy_root: str | None = None,
+                         limit: int = 30,
+                         max_age_hours: float = 24.0,
+                         ) -> list[dict[str, Any]]:
+    """Find RECENTLY-bought api.cc numbers whose signup never completed.
+
+    "Orphan" = a number we paid for but the account never finished (e.g. a
+    VPN/Cloudflare block hit before/at the OTP step). Only numbers bought within
+    `max_age_hours` are returned — older records are almost certainly expired
+    (api.cc numbers die after ~60-80 days) and reusing them would just fail at
+    OTP, so they're excluded. Returns reusable number dicts (newest first) to
+    feed create_account(reuse_number=...). Dedups against DashManager customers
+    already holding that token (those are done, not orphans).
+
+    NOTE: this is a SAFETY NET. The primary reuse path is the skill tracking the
+    numbers IT bought this session and retrying those on a block — so reuse can
+    never touch unrelated old records even if this window were widened.
+    """
+    now = datetime.now(timezone.utc)
     used_tokens = {c.get("number_token") for c in await db.list_customers()
                    if c.get("number_token")}
     out: list[dict[str, Any]] = []
@@ -276,7 +304,8 @@ async def orphan_numbers(*, daisy_root: str | None = None,
         recents = await daisy.list_recent_customers(limit)
     for rec in recents:
         orphan = _extract_orphan(rec)
-        if orphan and orphan["number_token"] not in used_tokens:
+        if (orphan and orphan["number_token"] not in used_tokens
+                and _within_hours(orphan["created_at"], now, max_age_hours)):
             out.append(orphan)
     return out
 
