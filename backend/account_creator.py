@@ -32,11 +32,17 @@ def _emit(type: str, data: dict | None = None) -> None:
 async def create_account(*, location_origin: str | None,
                          radius_miles: float, bucket_date: str | None,
                          daisy_root: str | None = None,
-                         headless: bool | None = None) -> dict[str, Any]:
+                         headless: bool | None = None,
+                         batch_id: str | None = None,
+                         batch_label: str | None = None) -> dict[str, Any]:
     """Run the full create-account flow. Returns a summary dict.
 
     `headless` overrides the browser setting for this one run (None = use the
-    setting). Raises on fatal failure (caller emits account_failed); partial
+    setting). `batch_id`/`batch_label`, when given, are stamped onto the
+    CustomerDaisy record so several accounts created in one run cluster as a
+    single batch in CustomerDaisy's "recent batch OTPs" screen (the per-rental
+    `ordernum` is unique, so without a shared id they'd appear as N separate
+    entries). Raises on fatal failure (caller emits account_failed); partial
     progress is reported via events.
     """
     from playwright.async_api import async_playwright
@@ -116,7 +122,9 @@ async def create_account(*, location_origin: str | None,
         if outcome != "created":
             shutil.rmtree(temp_profile, ignore_errors=True)
             try:  # number/identity still useful — record the attempt
-                await daisy.save_customer(_daisy_record(identity, verified=False))
+                await daisy.save_customer(_daisy_record(
+                    identity, verified=False,
+                    batch_id=batch_id, batch_label=batch_label))
             except Exception:
                 pass
             raise RuntimeError(f"account not created (outcome={outcome})")
@@ -125,7 +133,8 @@ async def create_account(*, location_origin: str | None,
         daisy_id = ""
         try:
             daisy_id = await daisy.save_customer(
-                _daisy_record(identity, verified=True))
+                _daisy_record(identity, verified=True,
+                              batch_id=batch_id, batch_label=batch_label))
         except Exception as exc:
             _emit("log", {"level": "warn",
                           "message": f"CustomerDaisy save failed: {exc}"})
@@ -171,10 +180,21 @@ async def create_account(*, location_origin: str | None,
         return summary
 
 
-def _daisy_record(identity: dict[str, Any], *, verified: bool) -> dict[str, Any]:
-    """Shape an identity into CustomerDaisy's save_customer payload."""
+def _daisy_record(identity: dict[str, Any], *, verified: bool,
+                  batch_id: str | None = None,
+                  batch_label: str | None = None) -> dict[str, Any]:
+    """Shape an identity into CustomerDaisy's save_customer payload.
+
+    When `batch_id` is given it's written to the `apicc_batch_id`/
+    `apicc_batch_label` fields CustomerDaisy folds into customer metadata, so a
+    run of several accounts groups under one batch in its "recent batch OTPs"
+    screen.
+    """
     rec = dict(identity)
     rec["verification_completed"] = verified
+    if batch_id:
+        rec["apicc_batch_id"] = batch_id
+        rec["apicc_batch_label"] = batch_label or batch_id
     return rec
 
 
