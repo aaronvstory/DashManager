@@ -222,3 +222,22 @@ async def screenshot(page: Page, name: str) -> str:
         return str(path)
     except Exception:
         return ""
+
+
+async def proof_screenshot(page: Page, bucket: str, customer_id: int,
+                           name: str, *, full_page: bool = True) -> str:
+    """Capture a FULL-PAGE proof screenshot into data/screenshots/<bucket>/.
+
+    Used for the visual audit trail (orders page per customer, receipt per
+    order, claim/chat outcome). Returns the saved path ("" on failure). Never
+    raises — proof is best-effort and must not break the run.
+    """
+    safe = _FILENAME_UNSAFE.sub("_", name).strip("_") or "shot"
+    out_dir = config.SCREENSHOTS_DIR / bucket
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"c{customer_id}_{safe}.png"
+        await page.screenshot(path=str(path), full_page=full_page)
+        return str(path)
+    except Exception:
+        return ""

@@ -13,6 +13,8 @@ def _sample_model() -> dict:
                 "session_status": "active", "password": "S3cr3tPass!",
                 "number_token": "tok1234567890abcdef", "_seq": 1,
                 "_copy_id": "06-12 1 Ada", "created_at": "2026-06-10 12:00:00",
+                "screenshots": [{"kind": "orders", "label": "Orders page",
+                                 "path": "x/data/screenshots/2026-06-12/c1_orders.png"}],
                 "notes": "created via signup · 901 Bayshore Blvd, Tampa, FL · daisy:abc",
                 "orders": [
                     {"id": 10, "store_name": "Dairy Queen",
@@ -68,10 +70,11 @@ def test_render_is_self_contained_html():
     out = report.render_report(_sample_model())
     assert out.startswith("<!doctype html>")
     assert "<style>" in out and "</style>" in out
-    # inline JS is allowed (dropdowns/copy) but NO external resources — opens
-    # straight from disk, survives offline.
+    # inline JS + LOCAL relative <img> are allowed, but NO external resources —
+    # opens straight from disk, survives offline. (img src uses ../screenshots.)
     assert "http://" not in out and "https://" not in out
-    assert "src=" not in out and "cdn" not in out.lower()
+    assert "cdn" not in out.lower()
+    assert 'src="http' not in out and 'src="//' not in out
 
 
 def test_render_shows_customers_orders_and_transcript():
@@ -183,3 +186,28 @@ def test_render_index_lists_days():
 def test_render_index_empty():
     out = report.render_index({"generated_at": "x", "entries": []})
     assert "No reports yet" in out
+
+
+def test_proof_rel_makes_relative_path():
+    p = r"F:\claude\DashManager\data\screenshots\2026-06-13\c1_orders.png"
+    assert report._proof_rel(p) == "../screenshots/2026-06-13/c1_orders.png"
+    # forward-slash variant
+    p2 = "data/screenshots/2026-06-13/c1_receipt_5.png"
+    assert report._proof_rel(p2) == "../screenshots/2026-06-13/c1_receipt_5.png"
+
+
+def test_proof_row_renders_thumbnails():
+    shots = [
+        {"kind": "orders", "label": "Orders page",
+         "path": r"x\data\screenshots\2026-06-13\c1_orders.png"},
+        {"kind": "receipt", "label": "Dairy Queen receipt",
+         "path": r"x\data\screenshots\2026-06-13\c1_receipt_5.png"},
+    ]
+    out = report._proof_row(shots)
+    assert "Orders page" in out and "Dairy Queen receipt" in out
+    assert "../screenshots/2026-06-13/c1_orders.png" in out
+    assert "<img" in out and "loading=\"lazy\"" in out
+
+
+def test_proof_row_empty():
+    assert "no screenshots yet" in report._proof_row([])

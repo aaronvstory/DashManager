@@ -153,9 +153,11 @@ class RunManager:
         from backend.browser.driver import (SessionExpiredError,
                                              export_storage_state,
                                              open_customer_profile,
-                                             profile_lock)
+                                             profile_lock, proof_screenshot)
         from backend.browser.orders import open_receipt, scrape_orders
         from backend.browser.refund_detector import detect
+
+        bucket = cust.get("bucket_date") or ""
 
         # Everything is inside the try so a KeyError on cust/cfg (or any
         # setup error) is logged, not silently swallowed by gather(
@@ -195,6 +197,12 @@ class RunManager:
                 emit("session_invalid", {"customer_id": cid})
                 return
             await export_storage_state(ctx, cid)  # refresh portable backup
+            # Proof: full-page shot of this customer's orders page (the visual
+            # audit trail — catches scrape/detection misses at a glance).
+            shot = await proof_screenshot(page, bucket, cid, "orders")
+            if shot:
+                await db.add_screenshot(cid, shot, kind="orders",
+                                        label="Orders page", run_id=run_id)
             emit("orders_found", {"customer_id": cid, "count": len(scraped)})
 
             # Replace prior in-progress rows (no stable identity) so phantoms
@@ -245,6 +253,13 @@ class RunManager:
                 try:
                     text = await open_receipt(page, so.receipt_url)
                     rr = detect(text, cfg["refund"])
+                    # Proof: full-page shot of this order's receipt page.
+                    rshot = await proof_screenshot(
+                        page, bucket, cid, f"receipt_{oid}")
+                    if rshot:
+                        await db.add_screenshot(
+                            cid, rshot, kind="receipt", order_id=oid,
+                            label=f"{so.store_name} receipt", run_id=run_id)
                 except Exception as exc:  # one bad receipt ≠ dead customer
                     await self._bump(stats, "errors")
                     await db.add_run_order(run_id, oid, cid, error=str(exc))
