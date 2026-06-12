@@ -311,6 +311,57 @@ async def orphan_numbers(*, daisy_root: str | None = None,
     return out
 
 
+async def adopt_from_daisy(name: str, bucket_date: str | None = None, *,
+                           daisy_root: str | None = None,
+                           limit: int = 40) -> dict[str, Any]:
+    """Create a DashManager customer row from a CustomerDaisy record by name.
+
+    For the manual-create workflow: the user signs an account up in a REAL
+    browser (which passes DoorDash's signup bot check that blocks automation),
+    and this pulls that account's identity + api.cc token from CustomerDaisy
+    into DashManager so the normal login/refund pipeline can take over. After
+    this, call relogin_customer(customer_id) to log in (login has NO bot gate)
+    + capture the session via the api.cc OTP.
+
+    `name` is matched case-insensitively against "First Last". Returns the new
+    customer row dict (incl. its DashManager `id`). Raises if not found or if a
+    DashManager customer with that email already exists.
+    """
+    bucket = bucket_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    target = name.strip().lower()
+    async with DaisyBridge(root=daisy_root) as daisy:
+        recents = await daisy.list_recent_customers(limit)
+    rec = next(
+        (c for c in recents
+         if f"{c.get('first_name','')} {c.get('last_name','')}".strip().lower()
+         == target), None)
+    if rec is None:
+        raise ValueError(f"no CustomerDaisy record named {name!r} "
+                         f"(checked {len(recents)} recent)")
+
+    email = rec.get("email", "")
+    existing = await db.list_customers()
+    dup = next((c for c in existing if c.get("email") == email and email), None)
+    if dup:
+        return dup  # already adopted — idempotent
+
+    hosts = rec.get("mirror_hosts") or []
+    cid = await db.create_customer(
+        bucket,
+        first_name=rec.get("first_name", ""),
+        last_name=rec.get("last_name", ""),
+        email=email,
+        phone=rec.get("phone", ""),
+        password=rec.get("password", ""),
+        number_token=rec.get("number_token", ""),
+        api_url=rec.get("api_url", ""),
+        mirror_hosts=json.dumps(hosts),
+        notes=_notes({"full_address": rec.get("full_address", "")},
+                     str(rec.get("customer_id", ""))) + " · adopted (manual)")
+    row = await db.get_customer(cid)
+    return row or {"id": cid}
+
+
 def _notes(identity: dict[str, Any], daisy_id: str) -> str:
     bits = ["created via signup"]
     if identity.get("full_address"):
