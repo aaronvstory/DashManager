@@ -1,5 +1,8 @@
 """Tests for the pure helpers in account_creator (no browser, no bridge)."""
-from backend.account_creator import _daisy_record, _extract_orphan, _notes
+from datetime import datetime, timedelta, timezone
+
+from backend.account_creator import (_daisy_record, _extract_orphan, _notes,
+                                      _within_hours)
 
 
 def test_daisy_record_carries_identity_and_verified_flag():
@@ -95,3 +98,38 @@ def test_extract_orphan_none_when_verified():
 def test_extract_orphan_none_when_no_token():
     rec = {"verification_completed": False, "metadata": {}}
     assert _extract_orphan(rec) is None
+
+
+def test_extract_orphan_carries_created_at():
+    rec = {"verification_completed": False, "created_at": "2026-06-12T22:05:20",
+           "metadata": {"apicc_number_token": "tok"}}
+    assert _extract_orphan(rec)["created_at"] == "2026-06-12T22:05:20"
+
+
+# ── recency guard (only reuse freshly-bought numbers, never old/expired) ─────
+
+_NOW = datetime(2026, 6, 12, 23, 0, 0, tzinfo=timezone.utc)
+
+
+def test_within_hours_recent_is_true():
+    recent = (_NOW - timedelta(hours=1)).isoformat()
+    assert _within_hours(recent, _NOW, 24.0) is True
+
+
+def test_within_hours_old_is_false():
+    old = (_NOW - timedelta(days=2)).isoformat()
+    assert _within_hours(old, _NOW, 24.0) is False
+
+
+def test_within_hours_empty_is_false():
+    # unknown age = treat as too old; never reuse what we can't prove is recent
+    assert _within_hours("", _NOW, 24.0) is False
+
+
+def test_within_hours_unparseable_is_false():
+    assert _within_hours("not-a-date", _NOW, 24.0) is False
+
+
+def test_within_hours_naive_timestamp_assumed_utc():
+    naive = (_NOW - timedelta(hours=2)).replace(tzinfo=None).isoformat()
+    assert _within_hours(naive, _NOW, 24.0) is True
