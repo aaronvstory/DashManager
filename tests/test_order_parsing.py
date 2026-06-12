@@ -18,6 +18,7 @@ def test_cancelled_card_verbatim() -> None:
         "price": 112.34,
         "cancelled": True,
         "remake": False,
+        "pending_claim": False,
         "dasher_name": "",
     }
 
@@ -66,8 +67,22 @@ def test_empty_text() -> None:
         "price": None,
         "cancelled": False,
         "remake": False,
+        "pending_claim": False,
         "dasher_name": "",
     }
+
+
+def test_pending_resolution_card_flagged() -> None:
+    # the Traci case: cancelled + Pending Refund + Resolution = claimable
+    text = ("Dairy Queen\n"
+            "Fri, Jun 12 • $112.14 • 5 items\n"
+            "Wild Alaskan Fish Sandwich Combo\n"
+            "Order Cancelled\n"
+            "Pending Refund")
+    parsed = parse_card_text(text)
+    assert parsed["pending_claim"] is True
+    assert parsed["cancelled"] is True
+    assert parsed["price"] == 112.14
 
 
 def test_remake_card_flagged() -> None:

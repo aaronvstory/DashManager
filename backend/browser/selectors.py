@@ -63,6 +63,12 @@ CANCELLED_BADGE_TEXTS = ["order cancelled", "order canceled"]
 # A remade/redelivered order's card may carry a remake badge — a remake
 # usually doesn't auto-refund, so flag it for the chat to call out.
 REMAKE_BADGE_TEXTS = ["remade", "remake", "reordered for you"]
+# A self-claimable order: cancelled with a refund available to claim. The card
+# shows a "Resolution" button + "Pending Refund"/"Pending Resolution" text and
+# CRUCIALLY has NO /orders/<uuid> receipt link yet (verified live 2026-06-13 on
+# Traci). The scrape must keep these (as pending_claim) instead of dropping them
+# for lacking a UUID — they self-claim to the original card, no chat needed.
+PENDING_CLAIM_BADGE_TEXTS = ["pending refund", "pending resolution"]
 SCROLL_MAX_ITERS = 40       # scroll-until-stable loop bounds (harvest)
 SCROLL_STABLE_ITERS = 2
 

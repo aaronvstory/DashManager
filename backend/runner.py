@@ -222,6 +222,23 @@ class RunManager:
                                            "status_text": so.status_text,
                                            "dasher_name": so.dasher_name})
                     continue
+                # A "Pending Refund/Resolution" card with no receipt URL (the
+                # Resolution button is on the card itself) — it's self-claimable
+                # right here, no receipt page to open. Mark pending_claim and
+                # queue the self-claim. (Fixes the live miss of 2 self-serve
+                # refunds 2026-06-13 where these cards were dropped.)
+                if so.claimable_from_card and not so.receipt_url:
+                    await db.update_order_refund(
+                        oid, RefundStatus.pending_claim.value, so.price, None)
+                    await db.add_run_order(
+                        run_id, oid, cid,
+                        refund_status=RefundStatus.pending_claim.value)
+                    emit("order_checked",
+                         {"order_id": oid,
+                          "refund_status": RefundStatus.pending_claim.value})
+                    await self._bump(stats, "checked")
+                    claimables.append((oid, so))
+                    continue
                 emit("order_checking", {"order_id": oid,
                                         "store": so.store_name,
                                         "url": so.receipt_url})

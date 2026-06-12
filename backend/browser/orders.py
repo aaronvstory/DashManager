@@ -16,6 +16,7 @@ from backend.browser.driver import SessionExpiredError, handle_cloudflare
 from backend.browser.pacing import human_pause
 from backend.browser.selectors import (
     CANCELLED_BADGE_TEXTS,
+    PENDING_CLAIM_BADGE_TEXTS,
     REMAKE_BADGE_TEXTS,
     IN_PROGRESS_SECTION,
     IN_PROGRESS_STATUS_TEXTS,
@@ -135,6 +136,10 @@ def parse_card_text(text: str) -> dict[str, Any]:
     lowered = (text or "").lower()
     cancelled = any(b in lowered for b in CANCELLED_BADGE_TEXTS)
     remake = any(b in lowered for b in REMAKE_BADGE_TEXTS)
+    # Pending Refund / Pending Resolution card = a claimable refund (self-claim
+    # to original card). These cards often lack a /orders/<uuid> link, so the
+    # scrape must NOT drop them for missing a UUID.
+    pending_claim = any(b in lowered for b in PENDING_CLAIM_BADGE_TEXTS)
 
     description = ""
     if price_line_idx is not None and price_line_idx + 1 < len(lines):
@@ -152,6 +157,7 @@ def parse_card_text(text: str) -> dict[str, Any]:
         "price": price,
         "cancelled": cancelled,
         "remake": remake,
+        "pending_claim": pending_claim,
         "dasher_name": _extract_dasher(text or ""),
     }
 
@@ -251,14 +257,37 @@ async def scrape_orders_full(
             emit("log", {"message": f"completed card selector: {chosen}"})
         raw: list[dict[str, str]] = await page.evaluate(
             _EXTRACT_CARDS_JS, {"card": chosen, "link": ORDER_LINK_SELECTOR})
+        claim_idx = 0
         for item in raw:
             href = item.get("href") or ""
             uuid = extract_order_uuid(href)
-            if uuid is None or uuid in seen:
-                continue  # no receipt UUID → it's an in-progress card, handled
-            seen.add(uuid)
             text = item.get("text") or ""
             parsed = parse_card_text(text)
+            if uuid is None:
+                # No receipt UUID. A "Pending Refund/Resolution" card is a REAL,
+                # self-claimable order (no receipt link until resolved) — keep
+                # it with a synthetic id so it isn't silently dropped (this bug
+                # lost 2 easy self-serve refunds live 2026-06-13). Anything else
+                # uuid-less is an in-progress card, handled separately.
+                if not parsed.get("pending_claim"):
+                    continue
+                claim_idx += 1
+                synth = f"pendingclaim:{parsed['store_name']}:{claim_idx}"
+                if synth in seen:
+                    continue
+                seen.add(synth)
+                orders.append(ScrapedOrder(
+                    order_uuid=synth, receipt_url="",
+                    store_name=parsed["store_name"],
+                    description=parsed["description"],
+                    items_count=parsed["items_count"], price=parsed["price"],
+                    order_status=OrderStatus.cancelled,
+                    claimable_from_card=True,
+                    dasher_name=parsed.get("dasher_name", "")))
+                continue
+            if uuid in seen:
+                continue
+            seen.add(uuid)
             lifecycle = (OrderStatus.cancelled if parsed["cancelled"]
                          else OrderStatus.completed)
             orders.append(ScrapedOrder(
@@ -267,6 +296,7 @@ async def scrape_orders_full(
                 description=parsed["description"],
                 items_count=parsed["items_count"], price=parsed["price"],
                 order_status=lifecycle,
+                claimable_from_card=parsed.get("pending_claim", False),
                 dasher_name=parsed.get("dasher_name", "")))
 
     n_prog = sum(1 for o in orders if o.order_status == OrderStatus.in_progress)

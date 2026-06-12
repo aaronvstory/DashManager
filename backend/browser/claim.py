@@ -201,20 +201,29 @@ async def run_claim(page: Page, order_uuid: str, receipt_url: str,
 
     try:
         from backend.browser.driver import handle_cloudflare, screenshot
-        from backend.browser.orders import open_receipt
+        from backend.browser.orders import ORDERS_URL, open_receipt
 
-        # Land on the order's page where the Resolution button lives.
-        await page.goto(receipt_url, wait_until="domcontentloaded")
+        # Land where the Resolution button lives. Card-based pending-claim orders
+        # have NO receipt URL (the Resolution button is on the orders-list card
+        # itself), so go to the orders page; otherwise open the receipt.
+        from_card = not receipt_url
+        await page.goto(receipt_url or ORDERS_URL,
+                        wait_until="domcontentloaded")
         await handle_cloudflare(page)
         await human_pause(1.5, 3.0)
 
-        # Click "Resolution" -> "Choose your refund method".
+        # Click "Resolution" -> "Choose your refund method". On the orders page
+        # there may be several Resolution buttons (one per pending card); the
+        # caller claims them one at a time, so the first visible one is correct
+        # for this pass (claimed cards drop off on re-scrape).
         try:
             await page.get_by_role(
                 "button", name=RESOLUTION_BUTTON).first.click(timeout=8_000)
         except Exception:
-            return ClaimResult(outcome="failed",
-                               error="Resolution button not found")
+            return ClaimResult(
+                outcome="failed",
+                error="Resolution button not found"
+                + (" on orders page" if from_card else ""))
         await human_pause(CLAIM_NAV_SETTLE_S, CLAIM_NAV_SETTLE_S + 1.5)
 
         # REMAKE-OFFER variant: click "Get refund" first to reach the
@@ -244,8 +253,16 @@ async def run_claim(page: Page, order_uuid: str, receipt_url: str,
                                error="Confirm button not found")
         await human_pause(2.0, 4.0)  # let the refund post + banner render
 
-        # Re-read the receipt to verify a real Refund line landed.
-        text = await open_receipt(page, receipt_url)
+        # Re-read to verify a real Refund line landed. A card-based claim has no
+        # receipt URL to reopen (it gains a /orders/<uuid> only AFTER claiming),
+        # so read the CURRENT page — the confirmation usually shows the refund
+        # banner/line right there.
+        if receipt_url:
+            text = await open_receipt(page, receipt_url)
+        else:
+            await human_pause(1.0, 2.0)
+            text = await page.evaluate(
+                "() => document.body ? document.body.innerText : ''")
         result = claim_succeeded(text, refund_cfg)
         _emit("log", {"level": "info",
                       "message": f"claim {order_uuid}: {result.outcome} "
