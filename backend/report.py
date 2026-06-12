@@ -1,15 +1,18 @@
 """Daily working-report generator — a self-contained, hand-designed HTML file.
 
-One report per day at ``data/reports/YYYY-MM-DD.html``. It is the shared spine
-between the ``/dash-create`` and ``/dash-refunds`` skills: create writes the
-customer roster, refunds writes order outcomes + chat transcripts onto the same
-file. Re-runnable and idempotent — it always rebuilds the whole day from the DB,
-so either skill (or a fresh session) can regenerate the current state at will.
+One report per day at ``data/reports/YYYY-MM-DD.html`` plus an ``index.html``
+landing page linking every day. It is the shared spine between the
+``/dash-create`` and ``/dash-refunds`` skills: prep writes the customer roster
+(full account info), refunds writes order outcomes + chat transcripts onto the
+same file. Re-runnable and idempotent — it rebuilds the whole day from the DB.
 
-Design intent (no template-slop): a calm near-black/parchment surface, a single
-DoorDash-red accent, real type hierarchy (display + grotesk + mono for data),
-status as quiet pills, transcripts as honest chat bubbles. Zero JS, zero CDN —
-opens straight from disk, prints clean, survives offline.
+Design intent (no template-slop): a calm warm near-black/parchment surface, a
+single DoorDash-red accent, real type hierarchy (sans + mono for data), status
+as quiet pills, transcripts as honest chat bubbles. Each customer is a
+collapsible card showing every operational detail (phone/email/address/password/
+api.cc ID/session/dates) with copy-to-clipboard chips and reveal toggles for the
+sensitive fields. Small self-contained inline JS — no CDN, opens from disk
+offline, prints clean.
 """
 from __future__ import annotations
 
@@ -25,19 +28,25 @@ from backend import config, db
 
 async def build_daily_report(report_date: str | None = None,
                              out_dir: Path | None = None) -> Path:
-    """Rebuild the whole day's report from the DB and write it to disk.
+    """Rebuild the day's report (and refresh the index) from the DB.
 
-    `report_date` is a 'YYYY-MM-DD' bucket; defaults to today (UTC). Customers
-    are selected by their `bucket_date`. Returns the written file path.
+    `report_date` is a 'YYYY-MM-DD' bucket; defaults to today (UTC). Returns the
+    written daily-report path. Also (re)writes index.html listing all reports.
     """
     report_date = report_date or _today()
     out_dir = out_dir or (config.DATA_DIR / "reports")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     model = await _collect(report_date)
-    html_doc = render_report(model)
     out_path = out_dir / f"{report_date}.html"
-    out_path.write_text(html_doc, encoding="utf-8")
+    out_path.write_text(render_report(model), encoding="utf-8")
+
+    # refresh the index across all known buckets
+    try:
+        (out_dir / "index.html").write_text(
+            render_index(await _index_model(out_dir)), encoding="utf-8")
+    except Exception:
+        pass  # index is a convenience; never fail the daily build over it
     return out_path
 
 
@@ -45,9 +54,10 @@ async def _collect(report_date: str) -> dict[str, Any]:
     """Pull every customer in the bucket plus their orders, claims, chats."""
     customers = [c for c in await db.list_customers()
                  if c.get("bucket_date") == report_date]
+    customers.sort(key=lambda c: c.get("id", 0))
 
     rows: list[dict[str, Any]] = []
-    for c in customers:
+    for idx, c in enumerate(customers, 1):
         orders = await db.list_orders(c["id"])
         enriched_orders = []
         for o in orders:
@@ -59,7 +69,9 @@ async def _collect(report_date: str) -> dict[str, Any]:
                 chat_views.append({**ch, "messages": msgs})
             enriched_orders.append(
                 {**o, "claims": claims, "chats": chat_views})
-        rows.append({**c, "orders": enriched_orders})
+        rows.append({**c, "orders": enriched_orders,
+                     "_seq": idx,
+                     "_copy_id": _short_id(c, report_date, idx)})
 
     return {
         "date": report_date,
@@ -69,10 +81,37 @@ async def _collect(report_date: str) -> dict[str, Any]:
     }
 
 
+async def _index_model(out_dir: Path) -> dict[str, Any]:
+    """Collect a per-bucket summary for the index, newest first."""
+    by_bucket: dict[str, list[dict[str, Any]]] = {}
+    for c in await db.list_customers():
+        by_bucket.setdefault(c.get("bucket_date", ""), []).append(c)
+
+    # only list buckets that actually have a rendered report file
+    entries = []
+    for f in sorted(out_dir.glob("*.html"), reverse=True):
+        bucket = f.stem
+        if bucket == "index":
+            continue
+        custs = by_bucket.get(bucket, [])
+        active = sum(1 for c in custs if c.get("session_status") == "active")
+        entries.append({
+            "bucket": bucket,
+            "pretty": _pretty_date(bucket),
+            "file": f.name,
+            "customers": len(custs),
+            "active": active,
+        })
+    return {"entries": entries, "generated_at": _now_human()}
+
+
 def _summarize(rows: list[dict[str, Any]]) -> dict[str, int]:
     s = {"customers": len(rows), "orders": 0, "refunded": 0,
-         "pursuing": 0, "no_orders": 0, "needs_you": 0}
+         "pursuing": 0, "no_orders": 0, "needs_you": 0,
+         "active": 0}
     for c in rows:
+        if c.get("session_status") == "active":
+            s["active"] += 1
         orders = c["orders"]
         if not orders:
             s["no_orders"] += 1
@@ -83,19 +122,16 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, int]:
                 s["refunded"] += 1
             elif st in ("not_refunded", "partial", "pending_claim", "remake"):
                 s["pursuing"] += 1
-            # a chat that ended needing a human, or an unresolved pursuit
             if _order_needs_you(o):
                 s["needs_you"] += 1
     return s
 
 
 def _order_needs_you(o: dict[str, Any]) -> bool:
-    """True when an order is unresolved in a way the user should glance at."""
     st = o.get("refund_status", "unchecked")
     if st == "refunded":
         return False
     if st in ("not_refunded", "partial", "pending_claim", "remake", "unknown"):
-        # if the latest chat won, it's effectively resolved
         for ch in o.get("chats", []):
             if ch.get("outcome") == "success":
                 return False
@@ -103,16 +139,17 @@ def _order_needs_you(o: dict[str, Any]) -> bool:
     return False
 
 
-# ── rendering ────────────────────────────────────────────────────────────────
+# ── rendering: daily report ──────────────────────────────────────────────────
 
 
 def render_report(model: dict[str, Any]) -> str:
     """Pure: model dict -> full HTML document string (no I/O, unit-testable)."""
     date = esc(model["date"])
     pretty_date = _pretty_date(model["date"])
-    summary = model["summary"]
-    cards = _summary_cards(summary)
-    customers_html = "\n".join(_customer_section(c) for c in model["customers"])
+    s = model["summary"]
+    cards = _summary_cards(s)
+    customers_html = "\n".join(_customer_section(c)
+                               for c in model["customers"])
     if not model["customers"]:
         customers_html = _empty_state()
 
@@ -128,8 +165,11 @@ def render_report(model: dict[str, Any]) -> str:
 <div class="shell">
   <header class="masthead">
     <div class="brand">
-      <span class="brand-dot"></span>
-      <span class="brand-name">DashManager</span>
+      <a class="brand-link" href="index.html" title="All reports">
+        <span class="brand-dot"></span>
+        <span class="brand-name">DashManager</span>
+      </a>
+      <a class="index-link" href="index.html">All reports →</a>
     </div>
     <div class="masthead-meta">
       <div class="eyebrow">Daily refund worklog</div>
@@ -142,14 +182,22 @@ def render_report(model: dict[str, Any]) -> str:
     {cards}
   </section>
 
+  <div class="toolbar">
+    <button class="tbtn" onclick="dmAll(true)">Expand all</button>
+    <button class="tbtn" onclick="dmAll(false)">Collapse all</button>
+  </div>
+
   <main class="roster">
     {customers_html}
   </main>
 
   <footer class="footer">
-    <span>DashManager — local refund audit · all amounts pursued to the original payment method, never store credit.</span>
+    <span>DashManager — local refund audit · all amounts pursued to the
+    original payment method, never store credit.</span>
   </footer>
 </div>
+<div class="toast" id="dmToast">Copied</div>
+{_SCRIPT}
 </body>
 </html>"""
 
@@ -157,6 +205,7 @@ def render_report(model: dict[str, Any]) -> str:
 def _summary_cards(s: dict[str, int]) -> str:
     items = [
         ("Customers", s["customers"], "neutral"),
+        ("Sessions live", s.get("active", 0), "good"),
         ("Orders", s["orders"], "neutral"),
         ("Refunded", s["refunded"], "good"),
         ("Pursuing", s["pursuing"], "warn"),
@@ -174,37 +223,107 @@ def _summary_cards(s: dict[str, int]) -> str:
 def _customer_section(c: dict[str, Any]) -> str:
     name = esc(_full_name(c)) or "Unnamed customer"
     initials = esc(_initials(c))
-    phone = esc(c.get("phone") or "—")
-    email = esc(c.get("email") or "—")
-    address = esc(_address(c))
     session = _session_pill(c.get("session_status", ""))
+    seq = c.get("_seq", "")
     orders = c["orders"]
+
+    # account detail grid (the operational info)
+    details = _account_details(c)
 
     if not orders:
         body = ('<div class="no-orders">'
                 '<span class="no-orders-mark">∅</span>'
                 '<div><div class="no-orders-title">No orders to audit</div>'
-                '<div class="subtle">Account has no DoorDash order history yet.</div>'
-                '</div></div>')
+                '<div class="subtle">No DoorDash order history scraped yet '
+                '(run a refund check to populate).</div></div></div>')
     else:
         body = "\n".join(_order_block(o) for o in orders)
 
-    return f"""<article class="customer">
-  <div class="customer-head">
-    <div class="avatar">{initials}</div>
-    <div class="customer-id">
-      <div class="customer-name">{name} {session}</div>
-      <div class="customer-contact">
-        <span class="contact"><span class="contact-key">tel</span>{phone}</span>
-        <span class="contact"><span class="contact-key">email</span>{email}</span>
-      </div>
-      <div class="customer-addr">{address}</div>
+    # quick summary line shown on the collapsed header
+    quick = _customer_quick(c)
+
+    return f"""<details class="customer" open>
+  <summary class="customer-head">
+    <span class="seq">{esc(str(seq))}</span>
+    <span class="avatar">{initials}</span>
+    <span class="customer-id">
+      <span class="customer-name">{name} {session}</span>
+      <span class="customer-quick">{quick}</span>
+    </span>
+    <span class="chevron">▾</span>
+  </summary>
+  <div class="customer-inner">
+    <div class="account-grid">
+      {details}
+    </div>
+    <div class="customer-body">
+      {body}
     </div>
   </div>
-  <div class="customer-body">
-    {body}
-  </div>
-</article>"""
+</details>"""
+
+
+def _customer_quick(c: dict[str, Any]) -> str:
+    """One-line summary shown on the collapsed customer header."""
+    orders = c["orders"]
+    if not orders:
+        return '<span class="q-mut">no orders yet</span>'
+    refunded = sum(1 for o in orders if o.get("refund_status") == "refunded")
+    pursue = sum(1 for o in orders
+                 if o.get("refund_status") in
+                 ("not_refunded", "partial", "pending_claim", "remake"))
+    bits = [f'{len(orders)} order' + ("s" if len(orders) != 1 else "")]
+    if refunded:
+        bits.append(f'<span class="q-good">{refunded} refunded</span>')
+    if pursue:
+        bits.append(f'<span class="q-warn">{pursue} pursuing</span>')
+    return " · ".join(bits)
+
+
+def _account_details(c: dict[str, Any]) -> str:
+    """The operational info grid: contact, address, credentials, ids, session."""
+    rows = []
+
+    def field(label: str, value: str, *, copy: bool = False,
+              mono: bool = True, secret: bool = False) -> str:
+        v = value or "—"
+        cls = "av mono" if mono else "av"
+        if v == "—":
+            return (f'<div class="af"><div class="ak">{esc(label)}</div>'
+                    f'<div class="{cls} dim">—</div></div>')
+        safe = esc(v)
+        attr = f' data-copy="{safe}"' if copy else ""
+        inner = safe
+        if secret:
+            inner = (f'<span class="secret" data-val="{safe}">••••••••</span>'
+                     f'<button class="reveal" onclick="dmReveal(this)" '
+                     f'title="Reveal">show</button>')
+        copybtn = (f'<button class="copy" onclick="dmCopy(this)"{attr} '
+                   f'title="Copy">⧉</button>') if copy else ""
+        return (f'<div class="af"><div class="ak">{esc(label)}</div>'
+                f'<div class="{cls}">{inner}{copybtn}</div></div>')
+
+    copy_id = c.get("_copy_id", "")
+    token = c.get("number_token") or ""
+    token_short = (token[:12] + "…") if len(token) > 12 else token
+
+    rows.append(field("Copy ID", copy_id, copy=True))
+    rows.append(field("Phone", c.get("phone") or "", copy=True))
+    rows.append(field("Email", c.get("email") or "", copy=True))
+    rows.append(field("Address", _address(c), copy=True, mono=False))
+    rows.append(field("Password", c.get("password") or "", copy=True,
+                      secret=True))
+    rows.append(field("api.cc token", token_short, copy=False, secret=bool(token)))
+    rows.append(_session_field(c))
+    rows.append(field("Added", _date_only(c.get("created_at"))))
+    return "\n".join(rows)
+
+
+def _session_field(c: dict[str, Any]) -> str:
+    st = c.get("session_status", "")
+    pill = _session_pill(st) or '<span class="dim">—</span>'
+    return (f'<div class="af"><div class="ak">Session</div>'
+            f'<div class="av">{pill}</div></div>')
 
 
 def _order_block(o: dict[str, Any]) -> str:
@@ -266,7 +385,8 @@ def _chat_block(ch: dict[str, Any]) -> str:
     agent = bool(ch.get("agent_reached"))
     attempt = ch.get("attempt_no", 1)
     tone = {"success": "good", "failed": "alert", "blocked": "alert",
-            "manual_flag": "warn", "review_blocked": "warn"}.get(outcome, "muted")
+            "manual_flag": "warn", "review_blocked": "warn"}.get(
+                outcome, "muted")
     head = (f'attempt {attempt} · '
             f'{"reached a human" if agent else "no human reached"} · '
             f'{esc(outcome)}')
@@ -286,12 +406,14 @@ def _chat_block(ch: dict[str, Any]) -> str:
             f'<span class="bubble-text">{content}</span></div>')
     transcript = ("".join(bubbles)
                   or '<div class="bubble bubble--sys">'
-                     '<span class="bubble-text">No messages captured.</span></div>')
+                     '<span class="bubble-text">No messages captured.</span>'
+                     '</div>')
 
-    return f"""<div class="chat chat--{tone}">
-  <div class="chat-head"><span class="chat-tag">transcript</span>{head}</div>
+    return f"""<details class="chat chat--{tone}">
+  <summary class="chat-head"><span class="chat-tag">transcript</span>{head}
+    <span class="chevron sm">▾</span></summary>
   <div class="chat-thread">{transcript}</div>
-</div>"""
+</details>"""
 
 
 def _empty_state() -> str:
@@ -300,6 +422,56 @@ def _empty_state() -> str:
             '<div class="page-empty-title">Nothing on the board yet</div>'
             '<div class="subtle">Create customers or run a refund check to '
             'populate today\'s worklog.</div></div>')
+
+
+# ── rendering: index ─────────────────────────────────────────────────────────
+
+
+def render_index(model: dict[str, Any]) -> str:
+    """Pure: index model -> the all-reports landing page."""
+    entries = model["entries"]
+    if entries:
+        cards = "\n".join(
+            f'<a class="day" href="{esc(e["file"])}">'
+            f'<div class="day-date">{esc(e["pretty"])}</div>'
+            f'<div class="day-bucket mono">{esc(e["bucket"])}</div>'
+            f'<div class="day-meta">'
+            f'<span class="day-count">{e["customers"]} customer'
+            f'{"s" if e["customers"] != 1 else ""}</span>'
+            f'<span class="day-active">{e["active"]} live</span></div>'
+            f'</a>' for e in entries)
+    else:
+        cards = ('<div class="page-empty"><div class="page-empty-mark">◷</div>'
+                 '<div class="page-empty-title">No reports yet</div></div>')
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DashManager · Reports</title>
+{_STYLE}
+</head>
+<body>
+<div class="shell">
+  <header class="masthead">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span class="brand-name">DashManager</span>
+    </div>
+    <div class="masthead-meta">
+      <div class="eyebrow">Refund worklog</div>
+      <h1 class="title">All reports</h1>
+      <div class="subtle">Updated {esc(model['generated_at'])}</div>
+    </div>
+  </header>
+  <main class="days">
+    {cards}
+  </main>
+  <footer class="footer"><span>DashManager — local refund audit.</span></footer>
+</div>
+</body>
+</html>"""
 
 
 # ── small pure helpers ───────────────────────────────────────────────────────
@@ -347,21 +519,34 @@ def _initials(c: dict[str, Any]) -> str:
     return out or "•"
 
 
-def _address(c: dict[str, Any]) -> str:
-    """Pull a human address out of the free-text notes field if present.
+def _short_id(c: dict[str, Any], bucket: str, seq: int) -> str:
+    """The compact copy-paste id like CustomerDaisy's '06-13 1 Kelly'."""
+    mmdd = bucket[5:] if len(bucket) >= 10 else bucket
+    return f"{mmdd} {seq} {c.get('first_name','')}".strip()
 
-    create_account stores notes like "created via signup · <full address> ·
-    daisy:<id>". The middle segment is the address; fall back to the raw notes.
-    """
+
+def _address(c: dict[str, Any]) -> str:
+    """Pull a human address out of the free-text notes field if present."""
     notes = (c.get("notes") or "").strip()
     if not notes:
         return "—"
     parts = [p.strip() for p in notes.split("·")]
     for p in parts:
-        if p and not p.lower().startswith(("created via", "daisy:",
-                                           "no-orders", "imported")):
+        low = p.lower()
+        if p and not low.startswith(("created via", "daisy:", "no-orders",
+                                     "imported from customerdaisy", "imported",
+                                     "adopted")):
+            return p
+    # the address often follows "imported from CustomerDaisy"
+    for p in parts:
+        if any(ch.isdigit() for ch in p) and "," in p:
             return p
     return parts[-1] if parts else "—"
+
+
+def _date_only(v: Any) -> str:
+    s = str(v or "")
+    return s[:10] if len(s) >= 10 else (s or "—")
 
 
 def esc(v: Any) -> str:
@@ -384,53 +569,64 @@ def _pretty_date(iso: str) -> str:
         return iso
 
 
-# ── the stylesheet (one place; restrained, modern, print-clean) ──────────────
+# ── inline script (self-contained, offline) ─────────────────────────────────
+
+_SCRIPT = """<script>
+function dmToast(msg){var t=document.getElementById('dmToast');if(!t)return;
+  t.textContent=msg||'Copied';t.classList.add('show');
+  clearTimeout(window._dmt);window._dmt=setTimeout(function(){
+    t.classList.remove('show');},1200);}
+function dmCopy(btn){var v=btn.getAttribute('data-copy')||
+  (btn.parentNode&&btn.parentNode.textContent||'').trim();
+  navigator.clipboard&&navigator.clipboard.writeText(v).then(
+    function(){dmToast('Copied: '+v.slice(0,40));},
+    function(){dmToast('Copy failed');});}
+function dmReveal(btn){var s=btn.parentNode.querySelector('.secret');
+  if(!s)return;var v=s.getAttribute('data-val')||'';
+  if(s.dataset.shown==='1'){s.textContent='\\u2022\\u2022\\u2022\\u2022\\u2022\\u2022\\u2022\\u2022';
+    s.dataset.shown='0';btn.textContent='show';}
+  else{s.textContent=v;s.dataset.shown='1';btn.textContent='hide';}}
+function dmAll(open){document.querySelectorAll('details.customer').forEach(
+  function(d){d.open=open;});}
+</script>"""
+
+
+# ── the stylesheet ───────────────────────────────────────────────────────────
 
 _STYLE = """<style>
   :root {
-    --bg: #0f0e0c;          /* warm near-black */
-    --panel: #17161300;     /* layered over bg via gradient */
-    --surface: #1c1a17;
-    --surface-2: #232019;
-    --line: #2e2a24;
-    --ink: #f4efe7;         /* parchment text */
-    --ink-soft: #a8a097;
-    --ink-mute: #6f685f;
-    --red: #ef2b1f;         /* DoorDash-ish accent, used sparingly */
-    --red-soft: #ff5a4d;
-    --good: #4ec98a;
-    --warn: #e9b04b;
-    --alert: #ff6b5e;
+    --bg: #0f0e0c; --surface: #1c1a17; --surface-2: #232019; --line: #2e2a24;
+    --ink: #f4efe7; --ink-soft: #a8a097; --ink-mute: #6f685f;
+    --red: #ef2b1f; --red-soft: #ff5a4d;
+    --good: #4ec98a; --warn: #e9b04b; --alert: #ff6b5e;
     --radius: 16px;
     --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", monospace;
     --sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
   @media (prefers-color-scheme: light) {
-    :root {
-      --bg: #f5f2ec; --surface: #fffdf9; --surface-2: #f0ece3;
-      --line: #e3ddd1; --ink: #1c1916; --ink-soft: #5f574d; --ink-mute: #978d80;
-    }
+    :root { --bg: #f5f2ec; --surface: #fffdf9; --surface-2: #f0ece3;
+      --line: #e3ddd1; --ink: #1c1916; --ink-soft: #5f574d; --ink-mute: #978d80; }
   }
   * { box-sizing: border-box; }
-  html { -webkit-text-size-adjust: 100%; }
-  body {
-    margin: 0; background: var(--bg); color: var(--ink);
-    font-family: var(--sans);
-    font-feature-settings: "ss01","cv05","tnum";
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font-family: var(--sans); font-feature-settings: "ss01","cv05","tnum";
     line-height: 1.5; letter-spacing: -0.01em;
     background-image:
       radial-gradient(120% 90% at 100% 0%, rgba(239,43,31,0.10), transparent 55%),
-      radial-gradient(90% 70% at 0% 0%, rgba(239,43,31,0.05), transparent 50%);
-  }
-  .shell { max-width: 940px; margin: 0 auto; padding: 56px 28px 80px; }
+      radial-gradient(90% 70% at 0% 0%, rgba(239,43,31,0.05), transparent 50%); }
+  a { color: inherit; text-decoration: none; }
+  .shell { max-width: 980px; margin: 0 auto; padding: 52px 28px 80px; }
 
   /* masthead */
-  .masthead { display: flex; flex-direction: column; gap: 28px; margin-bottom: 40px; }
-  .brand { display: inline-flex; align-items: center; gap: 9px; }
-  .brand-dot { width: 9px; height: 9px; border-radius: 50%;
-    background: var(--red); box-shadow: 0 0 0 4px rgba(239,43,31,0.18); }
+  .masthead { display: flex; flex-direction: column; gap: 26px; margin-bottom: 36px; }
+  .brand { display: flex; align-items: center; justify-content: space-between; }
+  .brand-link { display: inline-flex; align-items: center; gap: 9px; }
+  .brand-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--red);
+    box-shadow: 0 0 0 4px rgba(239,43,31,0.18); }
   .brand-name { font-weight: 600; font-size: 0.82rem; letter-spacing: 0.16em;
     text-transform: uppercase; color: var(--ink-soft); }
+  .index-link { font-size: 0.78rem; color: var(--ink-mute); }
+  .index-link:hover { color: var(--red-soft); }
   .eyebrow { font-size: 0.74rem; letter-spacing: 0.18em; text-transform: uppercase;
     color: var(--red-soft); font-weight: 600; margin-bottom: 10px; }
   .title { margin: 0; font-size: clamp(1.9rem, 4vw, 2.9rem); font-weight: 680;
@@ -439,10 +635,10 @@ _STYLE = """<style>
   .masthead-meta .subtle { margin-top: 8px; }
 
   /* summary cards */
-  .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px;
-    margin-bottom: 44px; }
+  .cards { display: grid; grid-template-columns: repeat(6, 1fr); gap: 11px;
+    margin-bottom: 28px; }
   .card { background: var(--surface); border: 1px solid var(--line);
-    border-radius: var(--radius); padding: 18px 16px; position: relative;
+    border-radius: var(--radius); padding: 16px 14px; position: relative;
     overflow: hidden; }
   .card::after { content: ""; position: absolute; inset: 0 0 auto 0; height: 2px;
     background: var(--line); }
@@ -450,35 +646,73 @@ _STYLE = """<style>
   .card--warn::after { background: var(--warn); }
   .card--alert::after { background: var(--alert); }
   .card--muted::after { background: transparent; }
-  .card-value { font-family: var(--mono); font-size: 1.8rem; font-weight: 600;
+  .card-value { font-family: var(--mono); font-size: 1.7rem; font-weight: 600;
     letter-spacing: -0.04em; line-height: 1; }
-  .card-label { margin-top: 8px; font-size: 0.72rem; letter-spacing: 0.1em;
+  .card-label { margin-top: 7px; font-size: 0.68rem; letter-spacing: 0.09em;
     text-transform: uppercase; color: var(--ink-mute); }
-  @media (max-width: 720px) { .cards { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 820px) { .cards { grid-template-columns: repeat(3, 1fr); } }
+  @media (max-width: 520px) { .cards { grid-template-columns: repeat(2, 1fr); } }
 
-  /* customer */
-  .roster { display: flex; flex-direction: column; gap: 22px; }
+  /* toolbar */
+  .toolbar { display: flex; gap: 8px; margin-bottom: 16px; }
+  .tbtn { background: var(--surface); border: 1px solid var(--line);
+    color: var(--ink-soft); font-size: 0.74rem; padding: 6px 12px;
+    border-radius: 8px; cursor: pointer; font-family: var(--sans); }
+  .tbtn:hover { color: var(--ink); border-color: var(--ink-mute); }
+
+  /* customer (collapsible) */
+  .roster { display: flex; flex-direction: column; gap: 16px; }
   .customer { background: linear-gradient(180deg, var(--surface), var(--bg));
-    border: 1px solid var(--line); border-radius: 22px; overflow: hidden; }
-  .customer-head { display: flex; gap: 16px; padding: 22px 24px;
-    border-bottom: 1px solid var(--line); align-items: center; }
-  .avatar { flex: 0 0 auto; width: 46px; height: 46px; border-radius: 14px;
-    display: grid; place-items: center; font-weight: 650; font-size: 0.95rem;
-    letter-spacing: 0.02em; color: var(--ink);
-    background: var(--surface-2); border: 1px solid var(--line); }
-  .customer-name { font-size: 1.12rem; font-weight: 640; letter-spacing: -0.02em;
-    display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .customer-contact { margin-top: 5px; display: flex; gap: 16px; flex-wrap: wrap; }
-  .contact { font-size: 0.85rem; color: var(--ink-soft);
-    font-family: var(--mono); letter-spacing: -0.02em; }
-  .contact-key { color: var(--ink-mute); margin-right: 7px; font-size: 0.7rem;
-    text-transform: uppercase; letter-spacing: 0.08em; }
-  .customer-addr { margin-top: 4px; font-size: 0.82rem; color: var(--ink-mute); }
-  .customer-body { padding: 8px 24px 22px; display: flex; flex-direction: column; }
+    border: 1px solid var(--line); border-radius: 20px; overflow: hidden; }
+  .customer[open] { border-color: #3a352d; }
+  .customer-head { display: flex; align-items: center; gap: 14px;
+    padding: 18px 22px; cursor: pointer; list-style: none; user-select: none; }
+  .customer-head::-webkit-details-marker { display: none; }
+  .seq { font-family: var(--mono); font-size: 0.78rem; color: var(--ink-mute);
+    width: 18px; text-align: right; flex: 0 0 auto; }
+  .avatar { flex: 0 0 auto; width: 42px; height: 42px; border-radius: 13px;
+    display: grid; place-items: center; font-weight: 650; font-size: 0.9rem;
+    color: var(--ink); background: var(--surface-2); border: 1px solid var(--line); }
+  .customer-id { flex: 1 1 auto; min-width: 0; display: flex;
+    flex-direction: column; gap: 3px; }
+  .customer-name { font-size: 1.08rem; font-weight: 640; letter-spacing: -0.02em;
+    display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .customer-quick { font-size: 0.82rem; color: var(--ink-mute); }
+  .q-good { color: var(--good); } .q-warn { color: var(--warn); }
+  .q-mut { color: var(--ink-mute); }
+  .chevron { color: var(--ink-mute); font-size: 0.85rem; transition: transform .2s;
+    flex: 0 0 auto; }
+  .customer[open] > .customer-head .chevron { transform: rotate(180deg); }
+  .chevron.sm { margin-left: auto; }
+  .customer-inner { padding: 0 22px 20px; }
+
+  /* account detail grid */
+  .account-grid { display: grid; grid-template-columns: repeat(2, 1fr);
+    gap: 1px; background: var(--line); border: 1px solid var(--line);
+    border-radius: 14px; overflow: hidden; margin-bottom: 18px; }
+  @media (max-width: 640px) { .account-grid { grid-template-columns: 1fr; } }
+  .af { background: var(--surface); padding: 11px 14px; min-width: 0; }
+  .ak { font-size: 0.64rem; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--ink-mute); margin-bottom: 4px; }
+  .av { font-size: 0.9rem; display: flex; align-items: center; gap: 8px;
+    word-break: break-word; }
+  .av.mono { font-family: var(--mono); letter-spacing: -0.02em; font-size: 0.85rem; }
+  .av.dim, .dim { color: var(--ink-mute); }
+  .copy, .reveal { background: transparent; border: 1px solid var(--line);
+    color: var(--ink-mute); border-radius: 6px; cursor: pointer; flex: 0 0 auto;
+    font-family: var(--sans); }
+  .copy { padding: 1px 6px; font-size: 0.82rem; }
+  .reveal { padding: 1px 7px; font-size: 0.66rem; text-transform: uppercase;
+    letter-spacing: 0.06em; }
+  .copy:hover, .reveal:hover { color: var(--ink); border-color: var(--red-soft); }
+  .secret { font-family: var(--mono); letter-spacing: 0.1em; }
+
+  .customer-body { display: flex; flex-direction: column; }
 
   /* order */
-  .order { padding: 16px 0; border-bottom: 1px solid var(--line); }
+  .order { padding: 15px 0; border-bottom: 1px solid var(--line); }
   .order:last-child { border-bottom: none; }
+  .order:first-child { padding-top: 0; }
   .order-head { display: flex; justify-content: space-between; gap: 16px;
     align-items: flex-start; }
   .order-name { font-weight: 600; font-size: 1rem; }
@@ -489,10 +723,9 @@ _STYLE = """<style>
     letter-spacing: -0.03em; }
 
   /* pills */
-  .pill { display: inline-flex; align-items: center; gap: 6px;
-    font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em;
-    padding: 4px 11px; border-radius: 999px; border: 1px solid transparent;
-    white-space: nowrap; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 0.72rem;
+    font-weight: 600; letter-spacing: 0.02em; padding: 4px 11px; border-radius: 999px;
+    border: 1px solid transparent; white-space: nowrap; }
   .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%;
     background: currentColor; opacity: 0.9; }
   .pill--good { color: var(--good); background: rgba(78,201,138,0.10);
@@ -503,15 +736,14 @@ _STYLE = """<style>
     border-color: rgba(255,107,94,0.25); }
   .pill--muted { color: var(--ink-mute); background: rgba(120,110,100,0.10);
     border-color: var(--line); }
-  .pill--soft { font-weight: 500; font-size: 0.66rem; padding: 2px 9px; }
+  .pill--soft { font-weight: 500; font-size: 0.64rem; padding: 2px 9px; }
   .pill--soft::before { display: none; }
 
   /* claim + chat trail */
-  .order-trail { margin-top: 14px; display: flex; flex-direction: column;
-    gap: 10px; }
-  .trail-item { display: flex; gap: 11px; align-items: flex-start;
-    padding: 11px 14px; border-radius: 12px; background: var(--surface-2);
-    border: 1px solid var(--line); font-size: 0.86rem; }
+  .order-trail { margin-top: 13px; display: flex; flex-direction: column; gap: 10px; }
+  .trail-item { display: flex; gap: 11px; align-items: flex-start; padding: 11px 14px;
+    border-radius: 12px; background: var(--surface-2); border: 1px solid var(--line);
+    font-size: 0.86rem; }
   .trail-glyph { font-family: var(--mono); opacity: 0.7; }
   .trail-item--good { border-color: rgba(78,201,138,0.30); }
   .trail-item--good .trail-glyph { color: var(--good); }
@@ -521,44 +753,68 @@ _STYLE = """<style>
   .chat { border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
     background: var(--surface-2); }
   .chat-head { padding: 10px 14px; font-size: 0.76rem; color: var(--ink-soft);
-    border-bottom: 1px solid var(--line); display: flex; align-items: center;
-    gap: 10px; }
-  .chat-tag { font-size: 0.64rem; letter-spacing: 0.12em; text-transform: uppercase;
+    border-bottom: 1px solid transparent; display: flex; align-items: center;
+    gap: 10px; cursor: pointer; list-style: none; }
+  .chat-head::-webkit-details-marker { display: none; }
+  .chat[open] .chat-head { border-bottom-color: var(--line); }
+  .chat-tag { font-size: 0.62rem; letter-spacing: 0.12em; text-transform: uppercase;
     color: var(--ink-mute); border: 1px solid var(--line); padding: 2px 7px;
     border-radius: 6px; }
   .chat--good .chat-head { color: var(--good); }
   .chat--alert .chat-head { color: var(--alert); }
   .chat--warn .chat-head { color: var(--warn); }
   .chat-thread { padding: 14px; display: flex; flex-direction: column; gap: 8px; }
-  .bubble { max-width: 78%; padding: 9px 13px; border-radius: 14px;
-    font-size: 0.88rem; display: flex; flex-direction: column; gap: 3px;
-    line-height: 1.42; }
+  .bubble { max-width: 78%; padding: 9px 13px; border-radius: 14px; font-size: 0.88rem;
+    display: flex; flex-direction: column; gap: 3px; line-height: 1.42; }
   .bubble-who { font-size: 0.6rem; letter-spacing: 0.1em; text-transform: uppercase;
     opacity: 0.6; }
-  .bubble--out { align-self: flex-end; background: var(--red);
-    color: #fff; border-bottom-right-radius: 4px; }
+  .bubble--out { align-self: flex-end; background: var(--red); color: #fff;
+    border-bottom-right-radius: 4px; }
   .bubble--out .bubble-who { color: rgba(255,255,255,0.75); }
   .bubble--in { align-self: flex-start; background: var(--surface);
     border: 1px solid var(--line); border-bottom-left-radius: 4px; }
-  .bubble--sys { align-self: center; background: transparent;
-    color: var(--ink-mute); font-size: 0.78rem; max-width: 100%;
-    text-align: center; }
+  .bubble--sys { align-self: center; background: transparent; color: var(--ink-mute);
+    font-size: 0.78rem; max-width: 100%; text-align: center; }
 
   /* empty states */
-  .no-orders { display: flex; gap: 14px; align-items: center; padding: 14px 0; }
-  .no-orders-mark { font-size: 1.4rem; color: var(--ink-mute);
-    width: 40px; height: 40px; display: grid; place-items: center;
-    border: 1px dashed var(--line); border-radius: 12px; }
+  .no-orders { display: flex; gap: 14px; align-items: center; padding: 6px 0; }
+  .no-orders-mark { font-size: 1.4rem; color: var(--ink-mute); width: 40px;
+    height: 40px; display: grid; place-items: center; border: 1px dashed var(--line);
+    border-radius: 12px; flex: 0 0 auto; }
   .no-orders-title { font-weight: 600; }
   .page-empty { text-align: center; padding: 80px 20px; }
   .page-empty-mark { font-size: 2.4rem; color: var(--ink-mute); }
   .page-empty-title { font-size: 1.2rem; font-weight: 640; margin-top: 12px; }
 
-  .footer { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--line);
+  /* index */
+  .days { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px,1fr));
+    gap: 14px; }
+  .day { background: linear-gradient(180deg, var(--surface), var(--bg));
+    border: 1px solid var(--line); border-radius: 18px; padding: 20px;
+    transition: border-color .15s, transform .15s; display: block; }
+  .day:hover { border-color: var(--red-soft); transform: translateY(-2px); }
+  .day-date { font-weight: 640; font-size: 1.02rem; letter-spacing: -0.02em; }
+  .day-bucket { color: var(--ink-mute); font-size: 0.78rem; margin-top: 3px; }
+  .day-meta { display: flex; gap: 12px; margin-top: 14px; font-size: 0.8rem; }
+  .day-count { color: var(--ink-soft); }
+  .day-active { color: var(--good); }
+
+  .footer { margin-top: 44px; padding-top: 20px; border-top: 1px solid var(--line);
     color: var(--ink-mute); font-size: 0.78rem; text-align: center; }
+
+  /* toast */
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%)
+      translateY(20px); background: var(--ink); color: var(--bg); font-size: 0.82rem;
+    font-weight: 600; padding: 9px 16px; border-radius: 10px; opacity: 0;
+    pointer-events: none; transition: opacity .2s, transform .2s; max-width: 80vw;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .mono { font-family: var(--mono); }
 
   @media print {
     body { background: #fff; color: #111; }
-    .customer, .card, .chat { break-inside: avoid; }
+    .customer, .card, .chat, .day { break-inside: avoid; }
+    .toolbar, .copy, .reveal, .toast, .index-link { display: none; }
+    details { open: true; }
   }
 </style>"""
