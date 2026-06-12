@@ -408,7 +408,10 @@ class RunManager:
                                        THROTTLE_CAP_S)
             # failed / manual_flag → retry (until attempts exhausted).
 
-        if final_outcome != "success":
+        # Count an unresolved order as "manual" (needs a human) EXCEPT when its
+        # last attempt was blocked — that's already tallied under "blocked", and
+        # the UI shows the two separately, so double-counting would inflate it.
+        if final_outcome not in ("success", "blocked", "review_blocked"):
             await self._bump(stats, "manual")
 
 

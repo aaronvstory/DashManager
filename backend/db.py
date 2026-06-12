@@ -169,35 +169,55 @@ def _connect(db_path: Path | None = None) -> sqlite3.Connection:
 
 
 def _already_applied(exc: sqlite3.OperationalError) -> bool:
-    """Is this OperationalError just 'this migration already ran'?
+    """Is this OperationalError just 'this STATEMENT already ran'?
 
-    executescript() issues an implicit COMMIT before running, so the
-    user_version bump that follows it lands in a SEPARATE transaction. If the
-    process dies in that gap, a migration's DDL is on disk but user_version is
-    still behind — the next init_db re-runs the migration and SQLite raises
-    "duplicate column name" / "table ... already exists". We treat those as a
-    completed migration and let init_db advance the version, instead of
-    crashing the app on every subsequent boot.
+    Recognizes the idempotency errors SQLite raises when a DDL statement is
+    re-executed: a column or table that already exists. Used PER STATEMENT (not
+    per whole migration) so a migration interrupted partway through is fully
+    completed on the next boot — every statement that already landed is skipped,
+    and every statement that did NOT land still runs.
     """
     msg = str(exc).lower()
     return ("duplicate column name" in msg
             or "already exists" in msg)
 
 
+def _split_statements(script: str) -> list[str]:
+    """Split a migration script into individual statements on ';'.
+
+    The migrations here are plain DDL/UPDATE with no semicolons inside string
+    literals, so a naive split is safe and keeps the migrations readable as one
+    string. Blank fragments (trailing ';', comment-only lines) are dropped.
+    """
+    out: list[str] = []
+    for raw in script.split(";"):
+        stmt = raw.strip()
+        # Drop fragments that are only SQL line comments / whitespace.
+        lines = [ln for ln in stmt.splitlines()
+                 if ln.strip() and not ln.strip().startswith("--")]
+        if lines:
+            out.append(stmt)
+    return out
+
+
 def init_db(db_path: Path | None = None) -> None:
-    """Create/upgrade the schema. Safe to call repeatedly (and crash-safe:
-    a half-applied migration left by a power loss is recovered, not re-crashed).
+    """Create/upgrade the schema. Safe to call repeatedly AND crash-safe:
+    a migration interrupted partway (power loss between statements) is fully
+    completed on the next boot — applied statements are skipped per-statement,
+    unapplied ones still run, then user_version advances.
     """
     with _connect(db_path) as conn:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         for i in range(version, len(_MIGRATIONS)):
-            try:
-                conn.executescript(_MIGRATIONS[i])
-            except sqlite3.OperationalError as exc:
-                if not _already_applied(exc):
-                    raise
-                # DDL already on disk from a previous interrupted run — just
-                # advance the version below.
+            for stmt in _split_statements(_MIGRATIONS[i]):
+                try:
+                    conn.execute(stmt)
+                except sqlite3.OperationalError as exc:
+                    # Only skip a statement that's already applied (idempotent
+                    # re-run after an interrupted migration). A genuine DDL
+                    # error still raises and aborts — we never mask real bugs.
+                    if not _already_applied(exc):
+                        raise
             conn.execute(f"PRAGMA user_version = {i + 1}")
             conn.commit()
 

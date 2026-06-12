@@ -176,29 +176,63 @@ def test_v5_backfills_legacy_chat_order_id(tmp_path):
 
 
 def test_init_db_recovers_from_interrupted_migration(tmp_path):
-    """Simulate a power loss between a V5 ALTER and the user_version bump:
+    """Simulate a power loss after a full V5 ran but before the version bump:
     the columns/table exist but user_version is still 4. init_db must NOT
-    crash on the re-run; it should detect 'already applied' and advance."""
+    crash on the re-run; it should skip applied statements and advance."""
     import sqlite3
 
     db_path = tmp_path / "interrupted.db"
     db.init_db(db_path)  # fully migrate to the latest version
 
-    # Roll user_version back to 4 WITHOUT undoing V5's DDL — exactly the state
-    # a crash in the executescript→pragma gap would leave behind.
+    # Roll user_version back to 4 WITHOUT undoing V5's DDL.
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA user_version = 4")
     conn.commit()
     conn.close()
 
-    # Re-running init_db would re-execute SCHEMA_V5 (ALTER TABLE ... ADD
-    # order_id), which raises "duplicate column name" — must be swallowed.
     db.init_db(db_path)  # must not raise
 
     conn = sqlite3.connect(db_path)
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
     assert version == len(db._MIGRATIONS)
+
+
+def test_init_db_recovers_from_PARTIALLY_applied_migration(tmp_path):
+    """The real crash case: V5 ran only its FIRST statement before a power
+    loss (order_id column exists, but attempt_no / claims table do NOT) and
+    user_version is still 4. The re-run must SKIP the already-applied first
+    statement AND still apply every remaining one — not stop at the first
+    'duplicate column' and falsely mark V5 done.
+    """
+    import sqlite3
+
+    db_path = tmp_path / "partial.db"
+    # Build up to V4, then apply ONLY V5's first statement (the ADD order_id),
+    # leaving user_version at 4 — exactly a mid-V5 crash.
+    conn = sqlite3.connect(db_path)
+    for stmt in (db.SCHEMA_V1,):
+        conn.executescript(stmt)
+    for stmt in (db.SCHEMA_V2, db.SCHEMA_V3, db.SCHEMA_V4):
+        conn.executescript(stmt)
+    conn.execute("ALTER TABLE chats ADD COLUMN order_id INTEGER")  # 1st of V5
+    conn.execute("PRAGMA user_version = 4")
+    conn.commit()
+    conn.close()
+
+    db.init_db(db_path)  # must complete the rest of V5, not crash or skip it
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    # The remaining V5 statements must have run: attempt_no column + claims table.
+    cols = [r["name"] for r in conn.execute("PRAGMA table_info(chats)")]
+    tables = [r["name"] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")]
+    conn.close()
+    assert version == len(db._MIGRATIONS)
+    assert "order_id" in cols and "attempt_no" in cols  # both present
+    assert "claims" in tables                            # table created
 
 
 async def test_claims_roundtrip():
