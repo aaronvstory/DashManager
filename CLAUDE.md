@@ -51,3 +51,38 @@ Proactor event-loop policy before uvicorn; the `uvicorn` CLI breaks Playwright.
 Real login + identity capture; detect-only bucket run vs manual receipt
 inspection; one supervised scripted chat reaching a human; one supervised LLM
 chat. Record selector re-verification dates in HARVEST_NOTES.md.
+
+## Operating playbook (how Claude runs this — read before a refund session)
+
+This task is run **manually + intelligently by Claude**, headed, user watching.
+The `/dash-refunds` skill is the full playbook; the `/dash-create` skill is
+account prep. Key durable facts so a fresh session is fast:
+
+- **Account CREATION is bot-blocked** (DoorDash 403s automated browsers,
+  `user_assessment_bot`). The user creates accounts in **CustomerDaisy** (a real
+  browser). Claude only does everything AFTER: adopt → login (no bot gate) →
+  refund audit → report. Numbers from a failed signup are NOT burned.
+- **FOUR refund states:** refunded · pending_claim (self-claim Resolution button,
+  never pick credits) · not_refunded (chat) · credits-issued (chat → agent →
+  convert credits to the original card). Pending-claim cards often have NO
+  `/orders/<uuid>` link — kept by "Pending Refund" text (`claimable_from_card`).
+- **Refunds are lost forever after ~3 days** — resolve promptly.
+- **Live support-chat rules:** poll ≤30s (agents disconnect if you're slower);
+  reply briskly (short, blunt-but-polite); do ALL a customer's orders in one
+  chat; nudge if quiet; SUCCESS = the agent confirms EACH amount VERBATIM to the
+  CARD (a singular "the refund was issued" is NOT enough for multiple orders);
+  use the red "Reconnect with an Agent" button (carries context).
+- **Browser window is 1200x720** (fits the user's screen when resized). Never
+  kill chrome by name — kill the PID holding the profile's `--user-data-dir`,
+  and `rm data/profiles/<id>/SingletonLock` to clear a stale lock.
+- **REPL hygiene:** desktop-commander REPL mangles multi-line `async def` +
+  inline-JS regex — write single-line statements, or a real `.py` file (never a
+  /tmp heredoc; venv resolves /tmp as F:\tmp). Don't dump a DoorDash page's full
+  innerText (200KB+ GraphQL).
+- **Proof:** every run captures full-page screenshots (orders page per customer
+  + receipt per order + chat confirmation) into `data/screenshots/<date>/`,
+  linked as thumbnails in the report. The report shows a per-customer breakdown
+  table (amount · checked · refunded · method · confirmation + totals).
+- A card-based self-claim can succeed even when the runner's auto-verify flags
+  it "manual" — always VERIFY ground truth (reopen the receipt) before trusting
+  a self-reported outcome.
