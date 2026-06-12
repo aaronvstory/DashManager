@@ -75,7 +75,7 @@ async def open_customer_profile(
     headless: bool,
     *,
     seed_storage_state: str | None = None,
-    viewport: tuple[int, int] = (1400, 900),
+    viewport: tuple[int, int] = (1200, 720),
 ) -> BrowserContext:
     """Open the customer's persistent profile as an isolated context.
 
@@ -83,12 +83,18 @@ async def open_customer_profile(
     browser — close THE CONTEXT to clean up). When the profile dir is empty
     and a `seed_storage_state` file is given, its cookies are injected so a
     portable backup can repopulate a fresh profile.
+
+    Default size is 1200x720 (not 1400x900): when the user resizes the headed
+    window to fit their screen, a taller window cuts off at the bottom. The OS
+    window is sized to the viewport (+chrome) via --window-size.
     """
     d = profile_dir(customer_id)
     d.mkdir(parents=True, exist_ok=True)
     fresh = not any(d.iterdir())
+    win_args = [*CHROMIUM_ARGS,
+                f"--window-size={viewport[0]},{viewport[1] + 40}"]
     ctx = await p.chromium.launch_persistent_context(
-        str(d), headless=headless, args=CHROMIUM_ARGS, user_agent=UA,
+        str(d), headless=headless, args=win_args, user_agent=UA,
         viewport={"width": viewport[0], "height": viewport[1]})
     if fresh and seed_storage_state and Path(seed_storage_state).exists():
         try:
