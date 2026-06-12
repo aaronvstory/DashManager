@@ -49,8 +49,13 @@ OTP_INPUT_SELECTORS = [
     "input[aria-label*='code' i]",
     "input[inputmode='numeric']",
 ]
-# Split 6-box variant (not seen 2026-06-12, kept as a fallback).
+# Split 6-box variant. Two real-world shapes (verified live 2026-06-12):
+#   • maxlength=1 boxes (classic), and
+#   • input[type='number'] boxes whose aria-label is the box INDEX ("0".."5")
+#     and that carry NO maxlength — the passwordless OTP-first login uses these,
+#     so the maxlength selector alone MISSES them. Both are matched below.
 OTP_DIGIT_SELECTOR = "input[maxlength='1']"
+OTP_DIGIT_NUMBER_SELECTOR = "input[type='number'][aria-label]"
 # Verify button label varies: "Submit" in the signup/2-step dialog, "Sign In"
 # on the passwordless OTP-first login screen (verified live 2026-06-12).
 OTP_SUBMIT_SELECTORS = [
@@ -106,14 +111,46 @@ async def _fill_textbox(page: Page, name: str, value: str) -> None:
     await loc.fill(value)
 
 
+def looks_like_split_otp(aria_labels: list[str], min_boxes: int = 4) -> bool:
+    """Pure: do these input[type=number] aria-labels look like split OTP boxes?
+
+    The passwordless 6-box login labels each box with its INDEX ("0".."5").
+    We treat >= min_boxes numeric/short index-like labels as the split variant.
+    Empty labels (a single numeric code field has aria-label "...digit code")
+    are excluded by requiring the label be a bare small integer.
+    """
+    indices = [lbl for lbl in aria_labels
+               if lbl.strip().isdigit() and len(lbl.strip()) <= 2]
+    return len(indices) >= min_boxes
+
+
 async def _find_otp_input(page: Page):
     # Check split digit-boxes FIRST: the passwordless OTP-first screen uses 6
-    # separate maxlength=1 inputs, and a broad single-input selector below
-    # would otherwise match one box and stuff all 6 digits into it.
+    # separate inputs, and a broad single-input selector below would otherwise
+    # match one box and stuff all 6 digits into it. Two split shapes exist:
+    #   (1) maxlength=1 boxes, and
+    #   (2) input[type=number] boxes whose aria-label is the box index.
     digits = page.locator(OTP_DIGIT_SELECTOR)
     try:
         if await digits.count() >= 4 and await digits.first.is_visible():
             return ("digits", digits)
+    except Exception:
+        pass
+    num_boxes = page.locator(OTP_DIGIT_NUMBER_SELECTOR)
+    try:
+        count = await num_boxes.count()
+        if count >= 4:
+            labels = []
+            for i in range(count):
+                try:
+                    labels.append(
+                        (await num_boxes.nth(i).get_attribute("aria-label"))
+                        or "")
+                except Exception:
+                    labels.append("")
+            if (looks_like_split_otp(labels)
+                    and await num_boxes.first.is_visible()):
+                return ("digits", num_boxes)
     except Exception:
         pass
     for sel in OTP_INPUT_SELECTORS:
@@ -134,14 +171,23 @@ async def _enter_otp(page: Page, code: str) -> bool:
         if kind == "single":
             await loc.click()
             await loc.fill(code)
-        else:  # split digit boxes — click + key-press per box
-            # fill() can skip the keypress handlers these widgets use to
-            # auto-advance focus / update state, so type each digit as a key.
+        else:  # split digit boxes
+            # Live-proven sequence (2026-06-12): click the FIRST box, press the
+            # first digit, then keyboard.type the rest — the widget auto-
+            # advances focus per keystroke and auto-submits on the last box.
+            # (Per-box .press also works but relies on each box being clickable;
+            # type-from-box0 matches what the site's keypress handlers expect.)
             n = await loc.count()
-            for i, ch in enumerate(code[:n]):
-                box = loc.nth(i)
-                await box.click()
-                await box.press(ch)
+            digits = code[:n]
+            if not digits:
+                return False
+            await loc.first.click()
+            await page.keyboard.press(digits[0])
+            if len(digits) > 1:
+                # Type with a small per-key delay so React/Redux-backed boxes
+                # register each digit + auto-advance focus (a 0ms burst can
+                # drop digits on these controlled inputs).
+                await page.keyboard.type(digits[1:], delay=80)
         # Submit (some flows auto-advance on the last digit).
         for sel in OTP_SUBMIT_SELECTORS:
             btn = page.locator(sel).first

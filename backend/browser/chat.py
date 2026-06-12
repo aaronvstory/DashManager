@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from playwright.async_api import Locator, Page
 
+from backend.browser.pacing import human_pause
+
 if TYPE_CHECKING:  # runtime import is lazy — see run_chat
     from backend.browser.chat_strategy import ChatContext, ChatStrategy
 
@@ -28,6 +30,7 @@ from backend.browser.selectors import (
     GOT_IT_TEXT,
     HELP_ORDERS_URL,
     RECEIVED_RE,
+    RECONNECT_SELECTORS,
     REPLY_WAIT_S,
     SILENT_BLOCK_MIN_CHARS,
 )
@@ -259,13 +262,13 @@ async def navigate_to_chat(page: Page, order_uuid: str,
 
     if not await _click_order_link(page, order_uuid):
         return "failed"
-    await asyncio.sleep(1.5)  # lands on /help/orders/<uuid>?deliveryUUID=…
+    await human_pause(1.5, 3.0)  # lands on /help/orders/<uuid>?deliveryUUID=…
 
     text_before = await _click_contact_support(page)
     if text_before is None:
         return "failed"
 
-    await asyncio.sleep(2.0)  # widget settle (harvest)
+    await human_pause(2.0, 3.5)  # widget settle (harvest)
     got_it_clicks = 0
     deadline = time.monotonic() + NAV_POLL_S
     while time.monotonic() < deadline:
@@ -304,25 +307,54 @@ async def navigate_to_chat(page: Page, order_uuid: str,
     return "failed"
 
 
+async def try_reconnect(page: Page) -> bool:
+    """Click a reconnect/resume affordance if one is visible; True if clicked.
+
+    After an agent times out or ends the chat a "Reconnect" button often
+    appears — clicking it resumes the SAME session, which is cheaper and less
+    rate-limit-prone than reopening a fresh chat. Best-effort; never raises.
+    """
+    for sel in RECONNECT_SELECTORS:
+        # Click directly with a short timeout instead of gating on a
+        # zero-wait is_visible() — that would skip a reconnect button that
+        # takes a split second to render. The try/except still swallows the
+        # miss when the selector genuinely isn't present.
+        try:
+            await page.locator(sel).first.click(timeout=2_000)
+            await human_pause(1.5, 3.0)
+            return True
+        except Exception:
+            continue
+    return False
+
+
 # ── Driver loop ──────────────────────────────────────────────────────────────
 
 async def run_chat(page: Page, strategy: ChatStrategy, ctx: ChatContext, *,
                    chat_cfg: dict[str, Any], emit: Emit | None = None,
-                   record: Callable[..., Any] | None = None
+                   record: Callable[..., Any] | None = None,
+                   skip_nav: bool = False
                    ) -> tuple[str, bool]:
     """Run one full support chat. Returns (ChatOutcome value, agent_reached).
 
     ``record`` is an ASYNC callable(direction, content); ``emit`` is sync;
-    both may be None.
+    both may be None. ``skip_nav`` reuses an already-open widget (e.g. after a
+    successful reconnect on a retry) instead of navigating fresh.
     """
     # Lazy: chat_strategy pulls in backend.llm (sibling modules built in
     # parallel); pure helpers here must stay importable without them.
     from backend.browser.chat_strategy import ChatTurn
 
     order_uuid = ctx.orders[0].order_uuid
-    nav = await navigate_to_chat(page, order_uuid, emit)
-    if nav != "ok":
-        return _NAV_TO_OUTCOME.get(nav, ChatOutcome.failed.value), False
+    if not skip_nav:
+        nav = await navigate_to_chat(page, order_uuid, emit)
+        if nav != "ok":
+            return _NAV_TO_OUTCOME.get(nav, ChatOutcome.failed.value), False
+    elif await find_chat_input(page, wait_s=3.0) is None:
+        # Asked to reuse the widget but it's gone — fall back to a fresh nav.
+        nav = await navigate_to_chat(page, order_uuid, emit)
+        if nav != "ok":
+            return _NAV_TO_OUTCOME.get(nav, ChatOutcome.failed.value), False
 
     agent_reached = False
     transcript: list[ChatTurn] = []

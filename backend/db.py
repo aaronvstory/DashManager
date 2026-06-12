@@ -124,7 +124,39 @@ SCHEMA_V4 = """
 UPDATE orders SET order_status='completed' WHERE order_status='active';
 """
 
-_MIGRATIONS: list[str] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4]
+# V5: chats become ORDER-keyed (the spec's per-order transcript audit). A chat
+# now belongs to ONE order; an order can have MANY chats (attempt 1, attempt 2,
+# a reopened session after a timeout). `order_ids_json` is kept for backward
+# compatibility (old customer-keyed chats bundled several orders) and the new
+# `order_id` FK is backfilled from its first element. `attempt_no` numbers the
+# retries (1..3). A separate `claims` table records the non-chat resolution
+# path — self-claiming a pending_claim refund to the original payment method —
+# so the per-order audit covers claims as well as chats.
+SCHEMA_V5 = """
+ALTER TABLE chats ADD COLUMN order_id INTEGER REFERENCES orders(id);
+ALTER TABLE chats ADD COLUMN attempt_no INTEGER NOT NULL DEFAULT 1;
+UPDATE chats SET order_id = (
+  SELECT CAST(json_extract(order_ids_json, '$[0]') AS INTEGER)
+) WHERE order_id IS NULL AND json_valid(order_ids_json)
+       AND json_array_length(order_ids_json) > 0;
+CREATE INDEX idx_chats_order ON chats(order_id);
+
+CREATE TABLE claims (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id      INTEGER NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+  order_id    INTEGER NOT NULL REFERENCES orders(id),
+  customer_id INTEGER NOT NULL REFERENCES customers(id),
+  amount      REAL,
+  to_original_payment INTEGER NOT NULL DEFAULT 0,
+  confirmed   INTEGER NOT NULL DEFAULT 0,
+  outcome     TEXT NOT NULL DEFAULT '',
+  error       TEXT,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_claims_order ON claims(order_id);
+"""
+
+_MIGRATIONS: list[str] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5]
 
 
 def _connect(db_path: Path | None = None) -> sqlite3.Connection:
@@ -136,14 +168,58 @@ def _connect(db_path: Path | None = None) -> sqlite3.Connection:
     return conn
 
 
+def _already_applied(exc: sqlite3.OperationalError) -> bool:
+    """Is this OperationalError just 'this STATEMENT already ran'?
+
+    Recognizes the idempotency errors SQLite raises when a DDL statement is
+    re-executed: a column or table that already exists. Used PER STATEMENT (not
+    per whole migration) so a migration interrupted partway through is fully
+    completed on the next boot — every statement that already landed is skipped,
+    and every statement that did NOT land still runs.
+    """
+    msg = str(exc).lower()
+    return ("duplicate column name" in msg
+            or "already exists" in msg)
+
+
+def _split_statements(script: str) -> list[str]:
+    """Split a migration script into individual statements on ';'.
+
+    The migrations here are plain DDL/UPDATE with no semicolons inside string
+    literals, so a naive split is safe and keeps the migrations readable as one
+    string. Blank fragments (trailing ';', comment-only lines) are dropped.
+    """
+    out: list[str] = []
+    for raw in script.split(";"):
+        stmt = raw.strip()
+        # Drop fragments that are only SQL line comments / whitespace.
+        lines = [ln for ln in stmt.splitlines()
+                 if ln.strip() and not ln.strip().startswith("--")]
+        if lines:
+            out.append(stmt)
+    return out
+
+
 def init_db(db_path: Path | None = None) -> None:
-    """Create/upgrade the schema. Safe to call repeatedly."""
+    """Create/upgrade the schema. Safe to call repeatedly AND crash-safe:
+    a migration interrupted partway (power loss between statements) is fully
+    completed on the next boot — applied statements are skipped per-statement,
+    unapplied ones still run, then user_version advances.
+    """
     with _connect(db_path) as conn:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         for i in range(version, len(_MIGRATIONS)):
-            conn.executescript(_MIGRATIONS[i])
+            for stmt in _split_statements(_MIGRATIONS[i]):
+                try:
+                    conn.execute(stmt)
+                except sqlite3.OperationalError as exc:
+                    # Only skip a statement that's already applied (idempotent
+                    # re-run after an interrupted migration). A genuine DDL
+                    # error still raises and aborts — we never mask real bugs.
+                    if not _already_applied(exc):
+                        raise
             conn.execute(f"PRAGMA user_version = {i + 1}")
-        conn.commit()
+            conn.commit()
 
 
 def now_iso() -> str:
@@ -320,11 +396,22 @@ async def list_run_orders(run_id: int) -> list[dict[str, Any]]:
 # ── Chats ────────────────────────────────────────────────────────────────────
 
 async def create_chat(run_id: int, customer_id: int, order_ids: list[int],
-                      opening_message: str) -> int:
+                      opening_message: str, order_id: int | None = None,
+                      attempt_no: int = 1) -> int:
+    """Create a chat row. Chats are order-keyed (``order_id``); ``order_ids``
+    is kept for backward-compat and defaults its first element as order_id.
+
+    ``attempt_no`` numbers retries on the SAME order (1..3) so the per-order
+    transcript view can stack and label reopened sessions.
+    """
+    if order_id is None and order_ids:
+        order_id = order_ids[0]
     return await execute(
         """INSERT INTO chats (run_id, customer_id, order_ids_json,
-                              opening_message) VALUES (?,?,?,?)""",
-        (run_id, customer_id, json.dumps(order_ids), opening_message))
+                              opening_message, order_id, attempt_no)
+           VALUES (?,?,?,?,?,?)""",
+        (run_id, customer_id, json.dumps(order_ids), opening_message,
+         order_id, attempt_no))
 
 
 async def finish_chat(chat_id: int, outcome: str, agent_reached: bool) -> None:
@@ -347,6 +434,60 @@ async def list_chats(run_id: int) -> list[dict[str, Any]]:
 async def list_chat_messages(chat_id: int) -> list[dict[str, Any]]:
     return await query(
         "SELECT * FROM chat_messages WHERE chat_id=? ORDER BY id", (chat_id,))
+
+
+async def list_chats_for_order(order_id: int) -> list[dict[str, Any]]:
+    """Every chat for one order, oldest first — the per-order audit trail.
+
+    Spans runs: an order can be chatted across multiple runs, and each chat
+    stacks chronologically (attempt 1, attempt 2, reopened sessions).
+    """
+    return await query(
+        "SELECT * FROM chats WHERE order_id=? ORDER BY id", (order_id,))
+
+
+async def count_chats_for_order(order_id: int, run_id: int | None = None) -> int:
+    """How many chats already exist for an order (optionally within one run).
+
+    Drives the retry attempt number so reopened sessions are numbered 1..N.
+    """
+    if run_id is None:
+        row = await query_one(
+            "SELECT COUNT(*) AS n FROM chats WHERE order_id=?", (order_id,))
+    else:
+        row = await query_one(
+            "SELECT COUNT(*) AS n FROM chats WHERE order_id=? AND run_id=?",
+            (order_id, run_id))
+    return int(row["n"]) if row else 0
+
+
+# ── Claims (pending_claim self-claim audit) ─────────────────────────────────
+
+async def create_claim(run_id: int, order_id: int, customer_id: int,
+                       amount: float | None, to_original_payment: bool,
+                       confirmed: bool, outcome: str,
+                       error: str | None = None) -> int:
+    """Record one self-claim attempt (refund claimed to original payment).
+
+    ``outcome`` is 'success' | 'failed' | 'wrong_method' | 'error'. The audit
+    row exists even on failure so the per-order view shows what was attempted.
+    """
+    return await execute(
+        """INSERT INTO claims (run_id, order_id, customer_id, amount,
+                               to_original_payment, confirmed, outcome, error)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (run_id, order_id, customer_id, amount, int(to_original_payment),
+         int(confirmed), outcome, error))
+
+
+async def list_claims(run_id: int) -> list[dict[str, Any]]:
+    return await query("SELECT * FROM claims WHERE run_id=? ORDER BY id",
+                       (run_id,))
+
+
+async def list_claims_for_order(order_id: int) -> list[dict[str, Any]]:
+    return await query("SELECT * FROM claims WHERE order_id=? ORDER BY id",
+                       (order_id,))
 
 
 # ── Settings ─────────────────────────────────────────────────────────────────

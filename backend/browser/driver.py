@@ -16,14 +16,19 @@ import asyncio
 import json
 import re
 import shutil
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from playwright.async_api import BrowserContext, Page, Playwright
 
 from backend import config
+from backend.browser.pacing import human_pause
 from backend.browser.selectors import (
     CHROMIUM_ARGS,
+    CLOUDFLARE_B_MAX_WAIT_S,
+    CLOUDFLARE_B_POLL_S,
+    CLOUDFLARE_B_TEXTS,
     CLOUDFLARE_TEXT,
     CLOUDFLARE_WAIT_S,
     UA,
@@ -129,22 +134,79 @@ async def export_storage_state(ctx: BrowserContext, customer_id: int) -> str:
         return ""
 
 
+def classify_cloudflare(text: str) -> str:
+    """Pure: which Cloudflare gate (if any) a page's body text shows.
+
+    Returns "" (none), "a" (soft "Verifying you are human" — clears on
+    wait+reload), or "b" (the harder Turnstile "security verification" gate
+    that does NOT clear on a reload). Variant B is checked first because its
+    page can also contain generic verifying copy.
+    """
+    lo = (text or "").lower()
+    if any(t in lo for t in CLOUDFLARE_B_TEXTS):
+        return "b"
+    if CLOUDFLARE_TEXT.lower() in lo:
+        return "a"
+    return ""
+
+
+async def _page_text(page: Page) -> str:
+    try:
+        return await page.evaluate(
+            "() => document.body ? document.body.innerText : ''") or ""
+    except Exception:
+        # Page mid-navigation / context destroyed — caller treats as no gate.
+        return ""
+
+
 async def handle_cloudflare(page: Page) -> bool:
-    """Wait out the 'Verifying you are human' gate; True if it was present."""
-    try:
-        text = await page.evaluate(
-            "() => document.body ? document.body.innerText : ''")
-    except Exception:
-        # Page mid-navigation / context destroyed — no gate we can act on.
+    """Clear a Cloudflare gate if one is showing; True if a gate was present.
+
+    Variant A: wait + reload (harvest-proven).
+    Variant B: a harder Turnstile gate. Reloading does NOT help and can make
+    it worse, so we instead wait it out (Turnstile auto-solves in 30-60s),
+    polling the body text until the challenge copy is gone. If it persists,
+    try ONE fresh navigation to the same URL (a clean nav often passes where a
+    reload doesn't). If it STILL persists, return True and leave the gate up —
+    the caller decides whether to relogin or surface to the user.
+    """
+    variant = classify_cloudflare(await _page_text(page))
+    if variant == "":
         return False
-    if CLOUDFLARE_TEXT not in text:
-        return False
-    await asyncio.sleep(CLOUDFLARE_WAIT_S)
+    if variant == "a":
+        await asyncio.sleep(CLOUDFLARE_WAIT_S)
+        try:
+            await page.reload(wait_until="domcontentloaded")
+            await asyncio.sleep(3)
+        except Exception:
+            pass
+        return True
+
+    # ── Variant B: wait it out, don't hammer reload ──
+    target_url = page.url
+    deadline = time.monotonic() + CLOUDFLARE_B_MAX_WAIT_S
+    while time.monotonic() < deadline:
+        await asyncio.sleep(CLOUDFLARE_B_POLL_S)
+        variant = classify_cloudflare(await _page_text(page))
+        if variant == "":
+            return True  # fully cleared (no gate of any kind)
+        if variant == "a":
+            # B downgraded to the soft A gate — finish it with A's wait+reload.
+            await asyncio.sleep(CLOUDFLARE_WAIT_S)
+            try:
+                await page.reload(wait_until="domcontentloaded")
+                await asyncio.sleep(3)
+            except Exception:
+                pass
+            return True
+    # Still stuck on B — try exactly one fresh navigation (not a reload).
     try:
-        await page.reload(wait_until="domcontentloaded")
-        await asyncio.sleep(3)
+        await page.goto(target_url, wait_until="domcontentloaded")
     except Exception:
-        pass
+        return True
+    await human_pause(2.0, 4.0)  # let the fresh page settle before re-reading
+    # Whether it cleared or not, we're done trying here; caller handles a
+    # lingering gate (relogin / manual surface).
     return True
 
 

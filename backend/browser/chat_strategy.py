@@ -27,6 +27,7 @@ class ProblemOrder:
     store_name: str
     price: float | None
     refund_status: str
+    remake: bool = False  # DoorDash remade it without being asked → call out
 
 
 @dataclass
@@ -101,44 +102,122 @@ def _safe_format(template: str, fields: dict[str, str]) -> str:
         return template
 
 
+CREDIT_GUARD_TERMS = ("credit",)
+
+
+def has_success_phrase(text: str, phrases: list[str],
+                       guard_terms: tuple[str, ...] = CREDIT_GUARD_TERMS) -> bool:
+    """Case-insensitive success-phrase match, vetoed by credit terms.
+
+    Mirrors chat.detect_success so the strategy verdict and the driver-level
+    short-circuit agree: a reply mentioning credits is never a success even if
+    it also contains a refund phrase.
+    """
+    lo = (text or "").lower()
+    if any(g in lo for g in guard_terms):
+        return False
+    return any(str(p).lower() in lo for p in phrases)
+
+
+def _contains_any(text: str, patterns: list[str]) -> bool:
+    lo = (text or "").lower()
+    return any(str(p).lower() in lo for p in patterns if p)
+
+
+def classify_agent_turn(text: str, cfg: dict[str, Any]) -> str:
+    """Pure: what does the latest agent reply call for?
+
+    Returns one of 'success' | 'dashpass' | 'call' | 'question' | 'repush'.
+    Order matters: a confirmed refund wins outright; otherwise decline offers
+    (DashPass/call), answer a trailing question, else just re-push.
+    """
+    if has_success_phrase(text, cfg.get("success_phrases", [])):
+        return "success"
+    if _contains_any(text, cfg.get("dashpass_patterns", [])):
+        return "dashpass"
+    if _contains_any(text, cfg.get("call_offer_patterns", [])):
+        return "call"
+    # A genuine clarifying question ends a line with "?". Matching any "?"
+    # anywhere is too broad (it fires on "Is there anything else?" pleasantries
+    # and on our own quoted text), so require a trailing question mark on one
+    # of the agent's lines.
+    if _ends_with_question(text):
+        return "question"
+    return "repush"
+
+
+def _ends_with_question(text: str) -> bool:
+    for line in (text or "").splitlines():
+        if line.rstrip().endswith("?"):
+            return True
+    return False
+
+
 @register
 class ScriptedStrategy(ChatStrategy):
-    """Fixed follow-up sequence from settings, then phrase-based verdict.
+    """Re-push the refund request on every agent turn until confirmed.
 
-    Sends ctx.config["scripted_followups"] one at a time — the driver waits
-    for a support reply between sends; this strategy only sequences. When the
-    list is exhausted: end_success if any ctx.config["success_phrases"]
-    (case-insensitive substring) appears in an incoming turn, else
-    flag_manual.
+    The win condition (per the live walkthrough) is simply: keep restating the
+    request until the agent writes a confirmation phrase. No comprehension
+    needed. Each turn the strategy looks at the LAST incoming agent line and:
+
+      - success phrase (and no 'credits') → end_success
+      - DashPass offer → decline it, then keep going
+      - phone-call offer → decline it, then keep going
+      - a question → give a cheap plausible answer, then re-push
+      - anything else → re-send the refund request
+
+    The driver bounds the loop (max_turns / max_chat_seconds) and flags manual
+    if no confirmation arrives.
     """
 
     name = "scripted"
 
     def start(self, ctx: ChatContext) -> None:
         self._ctx = ctx
+        cfg = ctx.config
         fields = _format_fields(ctx)
-        self._followups: list[str] = [
-            _safe_format(t, fields)
-            for t in ctx.config.get("scripted_followups", [])
-        ]
-        self._next_idx = 0
+        note = (cfg.get("remake_note", "")
+                if any(o.remake for o in ctx.orders) else "")
+        template = cfg.get(
+            "repush_template",
+            "Please make sure {amounts} is refunded back to my original "
+            "payment card (not credits), and confirm the amount.")
+        self._repush = _safe_format(template, fields) + note
+        self._dashpass_decline = cfg.get(
+            "dashpass_decline", "No thank you, I don't want DashPass.")
+        self._call_decline = cfg.get(
+            "call_decline", "I can't take a call right now, please ensure "
+            "it's refunded to my original card.")
+        self._offscript = cfg.get(
+            "offscript_answer",
+            "The store canceled it because items were unavailable.")
+
+    def _last_incoming(self, transcript: list[ChatTurn]) -> str:
+        for turn in reversed(transcript):
+            if turn.direction == "in":
+                return turn.content
+        return ""
 
     async def next_action(self, transcript: list[ChatTurn]) -> ChatAction:
-        if self._next_idx < len(self._followups):
-            message = self._followups[self._next_idx]
-            self._next_idx += 1
-            return ChatAction(kind="send", message=message)
-
-        phrases = [str(p).lower()
-                   for p in self._ctx.config.get("success_phrases", [])]
-        incoming = "\n".join(t.content.lower() for t in transcript
-                             if t.direction == "in")
-        if any(p in incoming for p in phrases):
+        last = self._last_incoming(transcript)
+        kind = classify_agent_turn(last, self._ctx.config)
+        if kind == "success":
             return ChatAction(kind="end_success",
                               reason="success phrase detected in support reply")
-        return ChatAction(
-            kind="flag_manual",
-            reason="scripted follow-ups exhausted without a success phrase")
+        if kind == "dashpass":
+            # Decline, but pair it with the re-push so the agent stays on task.
+            return ChatAction(kind="send",
+                              message=f"{self._dashpass_decline} {self._repush}")
+        if kind == "call":
+            # Decline the call AND re-push, same as DashPass — keep the agent
+            # on the refund task rather than letting the thread drift to a call.
+            return ChatAction(kind="send",
+                              message=f"{self._call_decline} {self._repush}")
+        if kind == "question":
+            return ChatAction(kind="send",
+                              message=f"{self._offscript} {self._repush}")
+        return ChatAction(kind="send", message=self._repush)
 
 
 _CORRECTIVE_PROMPT = (

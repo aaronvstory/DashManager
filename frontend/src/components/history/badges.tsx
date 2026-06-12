@@ -60,9 +60,17 @@ const REFUND_STATUS: Record<RefundStatus, { label: string; className: string }> 
     label: "Partial",
     className: "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400",
   },
+  pending_claim: {
+    label: "Self-claim",
+    className: "border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-400",
+  },
   not_refunded: {
     label: "Not refunded",
     className: "border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400",
+  },
+  remake: {
+    label: "Remake",
+    className: "border-orange-500/30 bg-orange-500/10 text-orange-600 dark:text-orange-400",
   },
   unknown: {
     label: "Unknown",
@@ -125,6 +133,42 @@ export function ChatOutcomeBadge({ outcome }: { outcome: ChatOutcome | null }) {
     )
   }
   const def = OUTCOME[outcome] ?? { label: outcome, className: REFUND_STATUS.unknown.className }
+  return (
+    <Badge variant="outline" className={def.className}>
+      {def.label}
+    </Badge>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Claim outcome (self-claim, no agent chat)
+// ---------------------------------------------------------------------------
+
+const CLAIM_OUTCOME: Record<string, { label: string; className: string }> = {
+  success: {
+    label: "Claimed to card",
+    className:
+      "border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  },
+  wrong_method: {
+    label: "Wrong method",
+    className: "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  },
+  failed: {
+    label: "Claim failed",
+    className: "border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400",
+  },
+  error: {
+    label: "Claim error",
+    className: "border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400",
+  },
+}
+
+export function ClaimOutcomeBadge({ outcome }: { outcome: string }) {
+  const def = CLAIM_OUTCOME[outcome] ?? {
+    label: outcome || "Claim",
+    className: REFUND_STATUS.unknown.className,
+  }
   return (
     <Badge variant="outline" className={def.className}>
       {def.label}

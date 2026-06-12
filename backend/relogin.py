@@ -68,19 +68,38 @@ def _emit(type: str, data: dict | None = None) -> None:
 
 
 async def relogin_customer(customer_id: int,
-                           headless: bool | None = None) -> dict[str, Any]:
+                           headless: bool | None = None,
+                           wipe_profile: bool = False) -> dict[str, Any]:
     """Fresh login + OTP + session capture for one customer.
 
     `headless` overrides the browser setting for this login (None = setting).
+    `wipe_profile` deletes the on-disk Chromium profile dir BEFORE logging in —
+    the reliable recovery from a Cloudflare variant-B block, which is a
+    stale/flagged-session signal (verified live 2026-06-12): wiping the profile
+    and logging in fresh clears the gate where waits/reloads/fresh-navs do not.
+    The wipe must happen under the per-customer profile lock so a concurrent
+    run/test-session isn't using the dir; we acquire it here, then customer_
+    profile re-acquires the (reentrant-by-ownership) lock — so wipe inside the
+    lock, release, then open.
     """
     from playwright.async_api import async_playwright
 
-    from backend.browser.driver import customer_profile, export_storage_state
+    from backend.browser.driver import (customer_profile, export_storage_state,
+                                         profile_lock, remove_profile)
     from backend.browser.login_flow import login_and_capture
 
     customer = await db.get_customer(customer_id)
     if customer is None:
         raise ValueError("customer not found")
+
+    if wipe_profile:
+        # Hold the lock only for the wipe; customer_profile acquires it again
+        # for the open→use→close span below. asyncio.Lock is NOT reentrant, so
+        # we must release before customer_profile tries to acquire.
+        async with profile_lock(customer_id):
+            remove_profile(customer_id)
+        _emit("log", {"customer_id": customer_id,
+                      "message": "wiped profile dir for fresh relogin"})
     token, api_url, hosts = _token_fields(customer)
     if not token:
         raise ValueError("customer has no saved number token for OTP login")

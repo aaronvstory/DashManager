@@ -69,4 +69,5 @@ async def run_detail(run_id: int) -> dict:
         chats.append(chat)
     return {"run": _parse_run(run),
             "orders": await db.list_run_orders(run_id),
-            "chats": chats}
+            "chats": chats,
+            "claims": await db.list_claims(run_id)}

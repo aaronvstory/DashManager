@@ -10,7 +10,14 @@
  */
 
 import { formatDistanceStrict } from "date-fns"
-import type { Chat, ChatMessage, OrderStatus, RefundStatus, Run } from "@/lib/types"
+import type {
+  Chat,
+  ChatMessage,
+  Claim,
+  OrderStatus,
+  RefundStatus,
+  Run,
+} from "@/lib/types"
 
 export interface RunsResponse {
   runs: Run[]
@@ -43,6 +50,54 @@ export interface RunDetailResponse {
   run: Run
   orders: RunOrderRow[]
   chats: ChatWithMessages[]
+  /** Self-claim records (pending_claim orders resolved without a chat). */
+  claims?: Claim[]
+}
+
+/**
+ * One order's full audit trail: the order row + every chat attempt for it
+ * (stacked, attempt 1..N) + any self-claim records. This is the per-order
+ * transcript view the spec calls for.
+ */
+export interface OrderAudit {
+  order: RunOrderRow
+  chats: ChatWithMessages[]
+  claims: Claim[]
+}
+
+/**
+ * Group chats + claims under their order. Chats with no order_id (legacy,
+ * customer-keyed) fall back to their first order_ids entry; anything still
+ * unmatched is surfaced under a synthetic "unassigned" bucket so nothing is
+ * silently dropped from the audit.
+ */
+export function groupByOrder(detail: RunDetailResponse): {
+  perOrder: OrderAudit[]
+  orphanChats: ChatWithMessages[]
+} {
+  const byId = new Map<number, OrderAudit>()
+  for (const order of detail.orders) {
+    byId.set(order.order_id, { order, chats: [], claims: [] })
+  }
+  const orphanChats: ChatWithMessages[] = []
+  for (const chat of detail.chats) {
+    const oid = chat.order_id ?? chat.order_ids[0] ?? null
+    const audit = oid != null ? byId.get(oid) : undefined
+    if (audit) audit.chats.push(chat)
+    else orphanChats.push(chat)
+  }
+  for (const claim of detail.claims ?? []) {
+    byId.get(claim.order_id)?.claims.push(claim)
+  }
+  // Order the chats within each order by attempt number for a clean stack.
+  for (const audit of byId.values()) {
+    audit.chats.sort((a, b) => a.attempt_no - b.attempt_no || a.id - b.id)
+  }
+  // Only orders that actually have chats or claims are "audit" rows.
+  const perOrder = [...byId.values()].filter(
+    (a) => a.chats.length > 0 || a.claims.length > 0,
+  )
+  return { perOrder, orphanChats }
 }
 
 /** SQLite datetime('now') is UTC without a timezone marker — pin it to UTC. */

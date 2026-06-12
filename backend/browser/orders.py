@@ -13,8 +13,10 @@ from typing import Any, Callable
 from playwright.async_api import Page
 
 from backend.browser.driver import SessionExpiredError, handle_cloudflare
+from backend.browser.pacing import human_pause
 from backend.browser.selectors import (
     CANCELLED_BADGE_TEXTS,
+    REMAKE_BADGE_TEXTS,
     IN_PROGRESS_SECTION,
     IN_PROGRESS_STATUS_TEXTS,
     LOGIN_URL_MARKERS,
@@ -132,12 +134,15 @@ def parse_card_text(text: str) -> dict[str, Any]:
 
     lowered = (text or "").lower()
     cancelled = any(b in lowered for b in CANCELLED_BADGE_TEXTS)
+    remake = any(b in lowered for b in REMAKE_BADGE_TEXTS)
 
     description = ""
     if price_line_idx is not None and price_line_idx + 1 < len(lines):
         candidate = lines[price_line_idx + 1]
-        # A cancelled badge directly after the price line is not a description.
-        if not any(b in candidate.lower() for b in CANCELLED_BADGE_TEXTS):
+        cand_lo = candidate.lower()
+        # A cancelled/remake badge directly after the price line is not a
+        # description.
+        if not any(b in cand_lo for b in CANCELLED_BADGE_TEXTS + REMAKE_BADGE_TEXTS):
             description = candidate
 
     return {
@@ -146,6 +151,7 @@ def parse_card_text(text: str) -> dict[str, Any]:
         "items_count": items_count,
         "price": price,
         "cancelled": cancelled,
+        "remake": remake,
         "dasher_name": _extract_dasher(text or ""),
     }
 
@@ -285,7 +291,9 @@ async def open_receipt(page: Page, receipt_url: str) -> str:
     """Open one order's receipt page and return its full body innerText."""
     await page.goto(receipt_url, wait_until="domcontentloaded")
     await handle_cloudflare(page)
-    await asyncio.sleep(1.5)
+    # Jittered settle after the load — human-paced, and gives the breakdown a
+    # beat to render so the detector reads a complete receipt (not a partial).
+    await human_pause(1.5, 3.0)
     return await page.evaluate(
         "() => document.body ? document.body.innerText : ''")
 

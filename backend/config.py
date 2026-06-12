@@ -58,6 +58,14 @@ DEFAULT_SETTINGS: dict[str, object] = {
             "choose your refund method",
             "to original payment method",
         ],
+        # A remade/redelivered order usually does NOT auto-refund — flag it so
+        # the chat calls it out. Matched as a substring on the receipt text.
+        "remake_texts": [
+            "remade",
+            "remake",
+            "reordered for you",
+            "we remade your order",
+        ],
     },
     "chat": {
         "opening_template": (
@@ -66,6 +74,20 @@ DEFAULT_SETTINGS: dict[str, object] = {
             "original payment card (not credits)."
         ),
         "agent_word": "AGENT",
+        # The request the scripted strategy RE-SENDS on every agent turn until
+        # a success phrase appears (the spec's win condition). {amounts} is the
+        # filled order amount(s).
+        "repush_template": (
+            "Please make sure {amounts} is refunded back to my original "
+            "payment card (not credits), and confirm the amount."
+        ),
+        # Appended to the re-push when the order was a remake DoorDash made
+        # without being asked.
+        "remake_note": (
+            " This was an automatic remake I never asked for."
+        ),
+        # Legacy fixed sequence — unused by the re-push model, kept so an older
+        # settings row / LLM toggle still resolves.
         "scripted_followups": [
             "Can you please confirm the refund has been processed back to my "
             "original payment card?",
@@ -84,12 +106,28 @@ DEFAULT_SETTINGS: dict[str, object] = {
             "refund has been issued",
             "processing your refund",
             "issued a refund",
+            "back to your card",
+            "back to your original",
         ],
-        "max_turns": 12,
+        # DashPass offers to decline (credits ≠ refund; DashPass ≠ refund).
+        "dashpass_patterns": ["dashpass"],
+        "dashpass_decline": "No thank you, I don't want DashPass.",
+        # Phone-call offers (sent when an agent thinks we're unresponsive).
+        "call_offer_patterns": ["give you a call", "call you", "phone call",
+                                "reach you by phone"],
+        "call_decline": ("I can't take a call right now, please ensure it's "
+                         "refunded to my original card."),
+        # Off-script clarifying questions get a cheap plausible answer, then
+        # the re-push. Matched on a trailing "?" plus these hints.
+        "offscript_answer": ("The store canceled it because items were "
+                             "unavailable."),
+        "max_turns": 16,
         "max_chat_seconds": 300,
         # How long to wait for a reply after sending the AGENT word — humans
         # take far longer to connect than the bot takes to answer.
         "human_wait_seconds": 90,
+        # Up to this many chat attempts per order before flagging for manual.
+        "max_attempts": 3,
     },
     "llm": {
         "model": "anthropic/claude-sonnet-4.5",

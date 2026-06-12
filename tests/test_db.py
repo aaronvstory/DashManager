@@ -120,6 +120,149 @@ async def test_settings_unknown_key_raises():
         await db.set_setting("definitely_not_a_key", 1)
 
 
+async def test_chat_order_keyed_and_attempts():
+    """Chats are order-keyed; an order can have several stacked attempts."""
+    cid = await db.create_customer("2026-06-12", first_name="P")
+    oid = await db.upsert_order(cid, "u1", "https://x/orders/u1",
+                                store_name="DQ", order_status="cancelled")
+    run_id = await db.create_run({"customer_ids": [cid]}, "scripted")
+
+    # order_id defaults from order_ids[0] when not passed explicitly.
+    c1 = await db.create_chat(run_id, cid, [oid], "opening 1")
+    assert await db.count_chats_for_order(oid) == 1
+    n = await db.count_chats_for_order(oid, run_id) + 1
+    c2 = await db.create_chat(run_id, cid, [oid], "opening 2",
+                              order_id=oid, attempt_no=n)
+
+    chats = await db.list_chats_for_order(oid)
+    assert [c["id"] for c in chats] == [c1, c2]
+    assert chats[0]["order_id"] == oid
+    assert chats[1]["attempt_no"] == 2
+    assert await db.count_chats_for_order(oid) == 2
+
+
+def test_v5_backfills_legacy_chat_order_id(tmp_path):
+    """A pre-V5 (customer-keyed) chat gets order_id backfilled from its
+    order_ids_json first element when the migration runs."""
+    import sqlite3
+
+    db_path = tmp_path / "legacy.db"
+    # Build the schema up to V4, then insert a legacy chat the old way.
+    conn = sqlite3.connect(db_path)
+    conn.executescript(db.SCHEMA_V1)
+    for stmt in (db.SCHEMA_V2, db.SCHEMA_V3, db.SCHEMA_V4):
+        conn.executescript(stmt)
+    conn.execute("PRAGMA user_version = 4")
+    conn.execute("INSERT INTO customers (bucket_date) VALUES ('2026-06-12')")
+    conn.execute(
+        "INSERT INTO runs (scope_json, chat_strategy) VALUES ('{}','scripted')")
+    conn.execute(
+        """INSERT INTO orders (customer_id, order_uuid, receipt_url)
+           VALUES (1, 'u1', 'https://x/orders/u1')""")
+    conn.execute(
+        """INSERT INTO chats (run_id, customer_id, order_ids_json,
+                              opening_message) VALUES (1, 1, '[1, 2]', 'hi')""")
+    conn.commit()
+    conn.close()
+
+    # Now run init_db — it should apply V5 and backfill order_id = 1.
+    db.init_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT order_id, attempt_no FROM chats").fetchone()
+    conn.close()
+    assert row["order_id"] == 1   # first element of [1, 2]
+    assert row["attempt_no"] == 1
+
+
+def test_init_db_recovers_from_interrupted_migration(tmp_path):
+    """Simulate a power loss after a full V5 ran but before the version bump:
+    the columns/table exist but user_version is still 4. init_db must NOT
+    crash on the re-run; it should skip applied statements and advance."""
+    import sqlite3
+
+    db_path = tmp_path / "interrupted.db"
+    db.init_db(db_path)  # fully migrate to the latest version
+
+    # Roll user_version back to 4 WITHOUT undoing V5's DDL.
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA user_version = 4")
+    conn.commit()
+    conn.close()
+
+    db.init_db(db_path)  # must not raise
+
+    conn = sqlite3.connect(db_path)
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    conn.close()
+    assert version == len(db._MIGRATIONS)
+
+
+def test_init_db_recovers_from_PARTIALLY_applied_migration(tmp_path):
+    """The real crash case: V5 ran only its FIRST statement before a power
+    loss (order_id column exists, but attempt_no / claims table do NOT) and
+    user_version is still 4. The re-run must SKIP the already-applied first
+    statement AND still apply every remaining one — not stop at the first
+    'duplicate column' and falsely mark V5 done.
+    """
+    import sqlite3
+
+    db_path = tmp_path / "partial.db"
+    # Build up to V4, then apply ONLY V5's first statement (the ADD order_id),
+    # leaving user_version at 4 — exactly a mid-V5 crash.
+    conn = sqlite3.connect(db_path)
+    for stmt in (db.SCHEMA_V1,):
+        conn.executescript(stmt)
+    for stmt in (db.SCHEMA_V2, db.SCHEMA_V3, db.SCHEMA_V4):
+        conn.executescript(stmt)
+    conn.execute("ALTER TABLE chats ADD COLUMN order_id INTEGER")  # 1st of V5
+    conn.execute("PRAGMA user_version = 4")
+    conn.commit()
+    conn.close()
+
+    db.init_db(db_path)  # must complete the rest of V5, not crash or skip it
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    # The remaining V5 statements must have run: attempt_no column + claims table.
+    cols = [r["name"] for r in conn.execute("PRAGMA table_info(chats)")]
+    tables = [r["name"] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")]
+    conn.close()
+    assert version == len(db._MIGRATIONS)
+    assert "order_id" in cols and "attempt_no" in cols  # both present
+    assert "claims" in tables                            # table created
+
+
+async def test_claims_roundtrip():
+    cid = await db.create_customer("2026-06-12", first_name="P")
+    oid = await db.upsert_order(cid, "u1", "https://x/orders/u1",
+                                store_name="DQ", order_status="cancelled")
+    run_id = await db.create_run({"customer_ids": [cid]}, "scripted")
+
+    claim_id = await db.create_claim(
+        run_id, oid, cid, amount=112.24, to_original_payment=True,
+        confirmed=True, outcome="success")
+    assert claim_id
+
+    claims = await db.list_claims(run_id)
+    assert len(claims) == 1
+    assert claims[0]["amount"] == 112.24
+    assert claims[0]["to_original_payment"] == 1
+    assert claims[0]["confirmed"] == 1
+    assert claims[0]["outcome"] == "success"
+
+    by_order = await db.list_claims_for_order(oid)
+    assert [c["id"] for c in by_order] == [claim_id]
+
+    # A failed claim still records an audit row (error preserved).
+    await db.create_claim(run_id, oid, cid, amount=None,
+                          to_original_payment=False, confirmed=False,
+                          outcome="error", error="radio not found")
+    assert len(await db.list_claims_for_order(oid)) == 2
+
+
 async def test_clear_in_progress_orders():
     """Re-scrape replaces in-progress rows, never accumulates phantoms."""
     cid = await db.create_customer("2026-06-12", first_name="P")
