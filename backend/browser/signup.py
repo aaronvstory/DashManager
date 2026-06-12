@@ -20,6 +20,7 @@ from typing import Any, Awaitable, Callable
 from playwright.async_api import Page
 
 from backend.browser.driver import handle_cloudflare, screenshot
+from backend.browser.pacing import key_delay_ms, pause_seconds
 
 # Signup form — direct URL avoids the homepage modal ambiguity. state is a
 # throwaway value; DoorDash issues a real one during the flow.
@@ -106,9 +107,22 @@ def normalize_phone(phone: str) -> str:
 
 
 async def _fill_textbox(page: Page, name: str, value: str) -> None:
+    """Type a field like a human — per-key delay, not an instant fill().
+
+    DoorDash's signup form flags instant `fill()` value-setting as a bot and
+    returns "Something went wrong, please refresh and retry." Typing each
+    character with a jittered delay (and a small settle after focusing the
+    field) reads like a real person. `clear()` first so a re-attempt doesn't
+    append to a partially-filled field.
+    """
     loc = page.get_by_role("textbox", name=name).first
     await loc.click()
-    await loc.fill(value)
+    await asyncio.sleep(pause_seconds(0.2, 0.5))
+    try:
+        await loc.clear()
+    except Exception:
+        pass  # empty field / clear unsupported — typing still overwrites
+    await loc.type(value, delay=key_delay_ms())
 
 
 def looks_like_split_otp(aria_labels: list[str], min_boxes: int = 4) -> bool:
