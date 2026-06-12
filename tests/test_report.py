@@ -211,3 +211,69 @@ def test_proof_row_renders_thumbnails():
 
 def test_proof_row_empty():
     assert "no screenshots yet" in report._proof_row([])
+
+
+# ── resolution method derivation ─────────────────────────────────────────────
+
+
+def test_method_already_refunded():
+    o = {"refund_status": "refunded", "claims": [], "chats": []}
+    assert report.resolution_method(o)[0] == "Already refunded"
+
+
+def test_method_self_claim():
+    o = {"refund_status": "refunded",
+         "claims": [{"confirmed": 1, "amount": 112.24,
+                     "to_original_payment": 1}],
+         "chats": []}
+    label, conf = report.resolution_method(o)
+    assert label == "Self-claim"
+    assert "to original card" in conf
+
+
+def test_method_credits_to_card_agent_chat():
+    o = {"refund_status": "refunded", "claims": [],
+         "chats": [{"outcome": "success", "agent_reached": 1, "messages": [
+             {"direction": "out", "content": "convert credits please"},
+             {"direction": "in", "content":
+              "both amounts have been issued back to the charged card. "
+              "I have exchanged the credits for a refund."}]}]}
+    label, conf = report.resolution_method(o)
+    assert label == "Credits→card (agent chat)"
+    assert "exchanged the credits" in conf
+
+
+def test_method_agent_chat_plain():
+    o = {"refund_status": "refunded", "claims": [],
+         "chats": [{"outcome": "success", "agent_reached": 1, "messages": [
+             {"direction": "in", "content":
+              "I've refunded $88 to your original payment method."}]}]}
+    assert report.resolution_method(o)[0] == "Agent chat"
+
+
+def test_method_pending():
+    o = {"refund_status": "not_refunded", "claims": [], "chats": []}
+    assert report.resolution_method(o)[0] == "Pending"
+
+
+def test_breakdown_table_totals_and_methods():
+    orders = [
+        {"store_name": "Dairy Queen", "price": 112.44, "refund_status":
+         "refunded", "refund_amount": 112.44, "last_checked_at":
+         "2026-06-13 02:00:00", "claims": [], "chats": [
+             {"outcome": "success", "agent_reached": 1, "messages": [
+                 {"direction": "in", "content":
+                  "issued back to the charged card, exchanged the credits"}]}]},
+        {"store_name": "Dairy Queen", "price": 112.34, "refund_status":
+         "refunded", "refund_amount": 112.34, "last_checked_at":
+         "2026-06-13 02:00:00",
+         "claims": [{"confirmed": 1, "amount": 112.34,
+                     "to_original_payment": 1}], "chats": []},
+    ]
+    out = report._breakdown_table(orders)
+    assert "<table" in out and "Confirmation" in out
+    assert "$112.44" in out and "$112.34" in out
+    assert "Credits→card (agent chat)" in out
+    assert "Self-claim" in out
+    assert "2/2" in out
+    assert "$224.78 refunded to card" in out
