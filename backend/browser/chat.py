@@ -315,12 +315,14 @@ async def try_reconnect(page: Page) -> bool:
     rate-limit-prone than reopening a fresh chat. Best-effort; never raises.
     """
     for sel in RECONNECT_SELECTORS:
+        # Click directly with a short timeout instead of gating on a
+        # zero-wait is_visible() — that would skip a reconnect button that
+        # takes a split second to render. The try/except still swallows the
+        # miss when the selector genuinely isn't present.
         try:
-            loc = page.locator(sel).first
-            if await loc.is_visible():
-                await loc.click(timeout=4_000)
-                await human_pause(1.5, 3.0)
-                return True
+            await page.locator(sel).first.click(timeout=2_000)
+            await human_pause(1.5, 3.0)
+            return True
         except Exception:
             continue
     return False

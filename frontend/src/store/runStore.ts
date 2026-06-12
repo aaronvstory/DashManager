@@ -290,10 +290,19 @@ export const useRunStore = create<RunState>((set) => ({
 
         case "chat_opened": {
           const id = num(d.chat_id) ?? -1
-          const orderIds = Array.isArray(d.order_ids)
+          const rawOrderIds = Array.isArray(d.order_ids)
             ? (d.order_ids as number[])
             : []
-          const orderId = num(d.order_id) ?? orderIds[0] ?? null
+          const orderId = num(d.order_id) ?? rawOrderIds[0] ?? null
+          // The runner emits per-order chats with `order_id` (not the legacy
+          // `order_ids` array), so seed order_ids from it — otherwise the live
+          // UI shows "0 orders" for an active per-order chat.
+          const orderIds =
+            rawOrderIds.length > 0
+              ? rawOrderIds
+              : orderId !== null
+                ? [orderId]
+                : []
           return {
             ...base,
             chats: {

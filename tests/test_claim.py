@@ -1,7 +1,11 @@
 """Pure tests for the self-claim result parser (no browser)."""
 from __future__ import annotations
 
-from backend.browser.claim import claim_succeeded, is_remake_offer_page
+from backend.browser.claim import (
+    claim_succeeded,
+    decide_original_selected,
+    is_remake_offer_page,
+)
 from backend.config import DEFAULT_SETTINGS
 
 CFG = DEFAULT_SETTINGS["refund_signal"]
@@ -83,3 +87,27 @@ def test_direct_variant_not_remake_offer():
              "$112.24 to your original payment method")
     assert is_remake_offer_page(wendy) is False
     assert is_remake_offer_page("") is False
+
+
+# ── radio-selection verification (order-independent) ─────────────────────────
+
+def test_original_selected_when_original_checked():
+    assert decide_original_selected(
+        ["$112.24 to your original payment method"]) is True
+
+
+def test_credits_selected_aborts():
+    assert decide_original_selected(["$112.24 credits"]) is False
+
+
+def test_original_wins_even_if_credits_also_checked_first():
+    # A stray credits-labelled checked element appearing BEFORE the original
+    # radio must not abort — original-checked-anywhere wins (the bug gemini
+    # caught: an early-credits element returned False prematurely).
+    checked = ["some credits toggle", "$112.24 to your original payment method"]
+    assert decide_original_selected(checked) is True
+
+
+def test_empty_checked_is_optimistic():
+    # Nothing reported checked -> optimistic True (the receipt is the guard).
+    assert decide_original_selected([]) is True
