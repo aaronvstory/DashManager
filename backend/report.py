@@ -244,7 +244,8 @@ def _customer_section(c: dict[str, Any]) -> str:
                 '<div class="subtle">No DoorDash order history scraped yet '
                 '(run a refund check to populate).</div></div></div>')
     else:
-        body = "\n".join(_order_block(o) for o in orders)
+        body = _breakdown_table(orders) + "\n".join(
+            _order_block(o) for o in orders)
 
     # quick summary line shown on the collapsed header
     quick = _customer_quick(c)
@@ -368,6 +369,94 @@ def _session_field(c: dict[str, Any]) -> str:
     pill = _session_pill(st) or '<span class="dim">—</span>'
     return (f'<div class="af"><div class="ak">Session</div>'
             f'<div class="av">{pill}</div></div>')
+
+
+def resolution_method(o: dict[str, Any]) -> tuple[str, str]:
+    """Pure: HOW was this order resolved? Returns (label, confirmation).
+
+    Derived from the order's claims + chats (no extra DB column needed):
+      - a confirmed claim          → "Self-claim"
+      - a successful chat that reached an agent → "Agent chat" (covers the
+        credits→card conversion and ordinary refund pursuit)
+      - a successful chat, no agent (bot self-serve) → "Self-serve chat"
+      - refunded with neither       → "Already refunded"
+      - still pursuing              → "Pending"
+    The confirmation string surfaces the proof (claim amount / the agent's
+    confirming line) so the table shows WHY we trust it.
+    """
+    status = o.get("refund_status", "unchecked")
+    claims = o.get("claims") or []
+    chats = o.get("chats") or []
+    won_claim = next((c for c in claims if c.get("confirmed")), None)
+    won_chat = next((ch for ch in chats if ch.get("outcome") == "success"),
+                    None)
+
+    if won_chat is not None:
+        # find the agent line that confirms (last inbound message)
+        conf = ""
+        for m in reversed(won_chat.get("messages", [])):
+            if m.get("direction") == "in":
+                conf = (m.get("content") or "")[:140]
+                break
+        if won_chat.get("agent_reached"):
+            # credits→card conversions go through an agent; label by content
+            lo = conf.lower()
+            if "credit" in lo or "exchanged" in lo:
+                return ("Credits→card (agent chat)", conf)
+            return ("Agent chat", conf)
+        return ("Self-serve chat", conf)
+    if won_claim is not None:
+        amt = won_claim.get("amount")
+        dest = ("to original card" if won_claim.get("to_original_payment")
+                else "refunded")
+        return ("Self-claim", f"{_money(amt)} {dest}")
+    if status == "refunded":
+        return ("Already refunded", "receipt shows refund to original card")
+    if status in ("not_refunded", "partial", "pending_claim", "remake"):
+        return ("Pending", "not yet resolved")
+    return ("—", "")
+
+
+def _breakdown_table(orders: list[dict[str, Any]]) -> str:
+    """A per-customer order breakdown: row per order + totals footer."""
+    rows = []
+    total_refunded = 0.0
+    n_ref = 0
+    for i, o in enumerate(orders, 1):
+        store = esc(o.get("store_name") or "Order")
+        amt = o.get("price")
+        amt_s = _money(amt)
+        date = esc(_date_only(o.get("last_checked_at")) or "—")
+        st = o.get("refund_status", "unchecked")
+        refunded = st == "refunded"
+        if refunded and o.get("refund_amount") is not None:
+            total_refunded += float(o["refund_amount"])
+            n_ref += 1
+        elif refunded and amt is not None:
+            total_refunded += float(amt)
+            n_ref += 1
+        check = ('<span class="bk-yes">✓ refunded</span>' if refunded
+                 else _refund_pill(st))
+        method, conf = resolution_method(o)
+        conf_html = (f'<span class="bk-conf" title="{esc(conf)}">{esc(conf)}'
+                     f'</span>') if conf else "—"
+        rows.append(
+            f'<tr><td class="bk-n">{i}</td><td>{store}</td>'
+            f'<td class="bk-amt mono">{amt_s}</td>'
+            f'<td class="bk-date mono">{date}</td>'
+            f'<td>{check}</td><td class="bk-method">{esc(method)}</td>'
+            f'<td class="bk-confcell">{conf_html}</td></tr>')
+    foot = (f'<tr class="bk-foot"><td></td><td>{len(orders)} order'
+            f'{"s" if len(orders) != 1 else ""}</td>'
+            f'<td class="bk-amt mono">—</td><td></td>'
+            f'<td class="mono">{n_ref}/{len(orders)}</td>'
+            f'<td colspan="2" class="bk-total mono">'
+            f'{_money(total_refunded)} refunded to card</td></tr>')
+    return (
+        '<table class="breakdown"><thead><tr>'
+        '<th>#</th><th>Store</th><th>Amount</th><th>Checked</th>'
+        '<th>Refunded</th><th>Method</th><th>Confirmation</th>'
+        f'</tr></thead><tbody>{"".join(rows)}{foot}</tbody></table>')
 
 
 def _order_block(o: dict[str, Any]) -> str:
@@ -770,6 +859,29 @@ _STYLE = """<style>
     color: var(--ink-soft); white-space: nowrap; overflow: hidden;
     text-overflow: ellipsis; }
   .thumb--receipt { border-color: rgba(78,201,138,0.25); }
+
+  /* breakdown table */
+  .breakdown { width: 100%; border-collapse: collapse; margin-bottom: 18px;
+    font-size: 0.84rem; border: 1px solid var(--line); border-radius: 12px;
+    overflow: hidden; }
+  .breakdown thead th { text-align: left; font-size: 0.62rem;
+    letter-spacing: 0.09em; text-transform: uppercase; color: var(--ink-mute);
+    padding: 9px 12px; background: var(--surface-2);
+    border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .breakdown td { padding: 9px 12px; border-bottom: 1px solid var(--line);
+    vertical-align: top; }
+  .breakdown tbody tr:last-child td { border-bottom: none; }
+  .bk-n { color: var(--ink-mute); font-family: var(--mono); width: 24px; }
+  .bk-amt { font-weight: 600; white-space: nowrap; }
+  .bk-date { color: var(--ink-mute); white-space: nowrap; }
+  .bk-yes { color: var(--good); font-weight: 600; white-space: nowrap; }
+  .bk-method { color: var(--ink-soft); white-space: nowrap; }
+  .bk-confcell { color: var(--ink-mute); font-size: 0.78rem; max-width: 240px; }
+  .bk-conf { display: inline-block; max-width: 240px; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+  .bk-foot td { border-top: 1px solid var(--line); font-weight: 600;
+    background: var(--surface-2); }
+  .bk-total { color: var(--good); text-align: right; }
 
   .customer-body { display: flex; flex-direction: column; }
 
