@@ -19,6 +19,13 @@ dev = [
     "pytest-asyncio>=0.24",
     "respx>=0.21",
 ]
+# Account creation uses an undetected browser (SeleniumBase UC mode) because
+# DoorDash's signup endpoint 403s normal automation as user_assessment_bot.
+# Optional — only needed for the create-account flow; login/scrape/refunds and
+# the test suite don't require it (uc_signup imports it lazily).
+signup = [
+    "seleniumbase>=4.30",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

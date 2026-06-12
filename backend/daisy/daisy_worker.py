@@ -129,7 +129,13 @@ def _list_recent_customers(limit: int) -> list[dict]:
             meta = json.loads(r.get("metadata") or "{}")
         except (json.JSONDecodeError, TypeError):
             meta = {}
-        hosts = meta.get("apicc_mirror_hosts") or ""
+        # apicc_mirror_hosts may be a JSON list OR a comma string, depending on
+        # which CustomerDaisy code path wrote the row — normalize both.
+        raw_hosts = meta.get("apicc_mirror_hosts") or ""
+        if isinstance(raw_hosts, list):
+            hosts_list = [h for h in raw_hosts if h]
+        else:
+            hosts_list = [h for h in str(raw_hosts).split(",") if h]
         out.append({
             "customer_id": r.get("customer_id", ""),
             "first_name": r.get("first_name", ""),
@@ -141,7 +147,7 @@ def _list_recent_customers(limit: int) -> list[dict]:
             "number_token": (meta.get("apicc_number_token")
                              or r.get("primary_verification_id") or ""),
             "api_url": meta.get("apicc_api_url", ""),
-            "mirror_hosts": [h for h in hosts.split(",") if h] if hosts else [],
+            "mirror_hosts": hosts_list,
             "created_at": r.get("created_at", ""),
         })
     return out
