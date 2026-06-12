@@ -10,7 +10,9 @@ def _sample_model() -> dict:
             {
                 "id": 1, "first_name": "Ada", "last_name": "Vance",
                 "phone": "+1 863 555 0142", "email": "av@example.net",
-                "session_status": "active",
+                "session_status": "active", "password": "S3cr3tPass!",
+                "number_token": "tok1234567890abcdef", "_seq": 1,
+                "_copy_id": "06-12 1 Ada", "created_at": "2026-06-10 12:00:00",
                 "notes": "created via signup · 901 Bayshore Blvd, Tampa, FL · daisy:abc",
                 "orders": [
                     {"id": 10, "store_name": "Dairy Queen",
@@ -66,9 +68,10 @@ def test_render_is_self_contained_html():
     out = report.render_report(_sample_model())
     assert out.startswith("<!doctype html>")
     assert "<style>" in out and "</style>" in out
-    # no external resources — opens straight from disk, survives offline
+    # inline JS is allowed (dropdowns/copy) but NO external resources — opens
+    # straight from disk, survives offline.
     assert "http://" not in out and "https://" not in out
-    assert "<script" not in out.lower()
+    assert "src=" not in out and "cdn" not in out.lower()
 
 
 def test_render_shows_customers_orders_and_transcript():
@@ -127,3 +130,56 @@ def test_money_and_address_helpers():
     assert report._address({"notes": "created via signup · 12 Main St · daisy:x"}) \
         == "12 Main St"
     assert report._address({"notes": ""}) == "—"
+
+
+def test_address_from_imported_notes():
+    # adopted accounts: "imported from CustomerDaisy · <address>"
+    n = {"notes": "imported from CustomerDaisy · 1231 Macedonia Rd, Edenton, NC"}
+    assert report._address(n) == "1231 Macedonia Rd, Edenton, NC"
+
+
+def test_account_details_capture_all_info():
+    out = report.render_report(_sample_model())
+    # operational fields surfaced
+    assert "06-12 1 Ada" in out          # copy id
+    assert "+1 863 555 0142" in out      # phone
+    assert "av@example.net" in out       # email
+    assert "901 Bayshore Blvd" in out    # address
+    assert "Added" in out and "2026-06-10" in out  # date
+
+
+def test_password_is_masked_not_plaintext_in_body():
+    out = report.render_report(_sample_model())
+    # the secret value lives in a data-val attr (for reveal), but the visible
+    # default is masked dots, never shown inline as the label's text
+    assert 'data-val="S3cr3tPass!"' in out
+    assert "secret" in out and "reveal" in out
+
+
+def test_copy_and_dropdown_affordances_present():
+    out = report.render_report(_sample_model())
+    assert "dmCopy" in out and "data-copy=" in out   # copy buttons
+    assert "<details" in out                          # collapsible cards
+    assert "Expand all" in out and "Collapse all" in out
+
+
+def test_short_id_format():
+    sid = report._short_id({"first_name": "Kelly"}, "2026-06-13", 1)
+    assert sid == "06-13 1 Kelly"
+
+
+def test_render_index_lists_days():
+    model = {"generated_at": "2026-06-13 10:00 UTC", "entries": [
+        {"bucket": "2026-06-13", "pretty": "Saturday, June 13, 2026",
+         "file": "2026-06-13.html", "customers": 6, "active": 6},
+        {"bucket": "2026-06-11", "pretty": "Thursday, June 11, 2026",
+         "file": "2026-06-11.html", "customers": 5, "active": 4}]}
+    out = report.render_index(model)
+    assert out.startswith("<!doctype html>")
+    assert "2026-06-13.html" in out and "2026-06-11.html" in out
+    assert "6 customers" in out and "6 live" in out
+
+
+def test_render_index_empty():
+    out = report.render_index({"generated_at": "x", "entries": []})
+    assert "No reports yet" in out
