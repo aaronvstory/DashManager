@@ -99,6 +99,10 @@ class ScrapedOrder(BaseModel):
     order_status: OrderStatus = OrderStatus.completed
     status_text: str = ""   # e.g. "Heading to you" for in-progress orders
     dasher_name: str = ""   # assigned dasher, when shown (e.g. "Erin")
+    # A "Pending Refund/Resolution" card with a Resolution button but NO receipt
+    # UUID yet — a self-claimable refund. Set from the card scrape so the runner
+    # treats it as pending_claim even though it can't open a receipt page.
+    claimable_from_card: bool = False
 
 
 class OrdersScrapeResult(BaseModel):

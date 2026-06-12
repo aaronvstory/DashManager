@@ -69,7 +69,13 @@ async def _collect(report_date: str) -> dict[str, Any]:
                 chat_views.append({**ch, "messages": msgs})
             enriched_orders.append(
                 {**o, "claims": claims, "chats": chat_views})
+        shots = []
+        try:
+            shots = await db.list_screenshots_for_customer(c["id"])
+        except Exception:
+            pass  # screenshots table may not exist on old DBs
         rows.append({**c, "orders": enriched_orders,
+                     "screenshots": shots,
                      "_seq": idx,
                      "_copy_id": _short_id(c, report_date, idx)})
 
@@ -229,6 +235,7 @@ def _customer_section(c: dict[str, Any]) -> str:
 
     # account detail grid (the operational info)
     details = _account_details(c)
+    proof = _proof_row(c.get("screenshots", []))
 
     if not orders:
         body = ('<div class="no-orders">'
@@ -256,6 +263,7 @@ def _customer_section(c: dict[str, Any]) -> str:
     <div class="account-grid">
       {details}
     </div>
+    {proof}
     <div class="customer-body">
       {body}
     </div>
@@ -317,6 +325,42 @@ def _account_details(c: dict[str, Any]) -> str:
     rows.append(_session_field(c))
     rows.append(field("Added", _date_only(c.get("created_at"))))
     return "\n".join(rows)
+
+
+def _proof_rel(path: str) -> str:
+    """Relative href from the report (data/reports/) to a screenshot.
+
+    Screenshots live at data/screenshots/<bucket>/...; the report sits at
+    data/reports/<bucket>.html. So the link is ../screenshots/<bucket>/file.
+    Falls back to the raw path if it isn't under data/screenshots.
+    """
+    p = str(path or "").replace("\\", "/")
+    marker = "/screenshots/"
+    i = p.find(marker)
+    if i != -1:
+        return "../screenshots/" + p[i + len(marker):]
+    return p
+
+
+def _proof_row(shots: list[dict[str, Any]]) -> str:
+    """A 'Proof' strip of clickable screenshot thumbnails for one customer."""
+    if not shots:
+        return ('<div class="proof"><div class="proof-key">Proof</div>'
+                '<div class="proof-none">no screenshots yet '
+                '(captured on the next refund check)</div></div>')
+    thumbs = []
+    for s in shots:
+        href = esc(_proof_rel(s.get("path", "")))
+        label = esc(s.get("label") or s.get("kind") or "shot")
+        kind = esc(s.get("kind") or "")
+        thumbs.append(
+            f'<a class="thumb thumb--{kind}" href="{href}" target="_blank" '
+            f'title="{label}">'
+            f'<img loading="lazy" src="{href}" alt="{label}">'
+            f'<span class="thumb-cap">{label}</span></a>')
+    return (f'<div class="proof"><div class="proof-key">Proof '
+            f'<span class="proof-n">{len(shots)}</span></div>'
+            f'<div class="proof-strip">{"".join(thumbs)}</div></div>')
 
 
 def _session_field(c: dict[str, Any]) -> str:
@@ -706,6 +750,26 @@ _STYLE = """<style>
     letter-spacing: 0.06em; }
   .copy:hover, .reveal:hover { color: var(--ink); border-color: var(--red-soft); }
   .secret { font-family: var(--mono); letter-spacing: 0.1em; }
+
+  /* proof strip */
+  .proof { margin-bottom: 18px; }
+  .proof-key { font-size: 0.64rem; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--ink-mute); margin-bottom: 8px; display: flex; align-items: center;
+    gap: 7px; }
+  .proof-n { background: var(--surface-2); border: 1px solid var(--line);
+    border-radius: 999px; padding: 0 7px; font-size: 0.62rem; color: var(--ink-soft); }
+  .proof-none { font-size: 0.82rem; color: var(--ink-mute); }
+  .proof-strip { display: flex; gap: 10px; flex-wrap: wrap; }
+  .thumb { display: block; width: 150px; border: 1px solid var(--line);
+    border-radius: 10px; overflow: hidden; background: var(--surface-2);
+    transition: border-color .15s, transform .15s; }
+  .thumb:hover { border-color: var(--red-soft); transform: translateY(-2px); }
+  .thumb img { width: 100%; height: 92px; object-fit: cover; object-position: top;
+    display: block; }
+  .thumb-cap { display: block; padding: 5px 8px; font-size: 0.68rem;
+    color: var(--ink-soft); white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; }
+  .thumb--receipt { border-color: rgba(78,201,138,0.25); }
 
   .customer-body { display: flex; flex-direction: column; }
 

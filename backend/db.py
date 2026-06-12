@@ -156,7 +156,28 @@ CREATE TABLE claims (
 CREATE INDEX idx_claims_order ON claims(order_id);
 """
 
-_MIGRATIONS: list[str] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5]
+# V6: screenshot proof — a visual audit trail (orders page per customer, receipt
+# per order, claim/chat outcome screens). Each row points at a PNG on disk
+# (data/screenshots/<bucket>/...). `kind` = orders|receipt|claim|chat. order_id
+# is NULL for a customer-level shot (the orders page). Lets the report link
+# thumbnails so the user can breeze through and catch detection misses.
+SCHEMA_V6 = """
+CREATE TABLE screenshots (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id INTEGER NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  order_id    INTEGER REFERENCES orders(id),
+  run_id      INTEGER REFERENCES runs(id),
+  kind        TEXT NOT NULL DEFAULT 'orders',
+  label       TEXT NOT NULL DEFAULT '',
+  path        TEXT NOT NULL,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_screenshots_customer ON screenshots(customer_id);
+CREATE INDEX idx_screenshots_order ON screenshots(order_id);
+"""
+
+_MIGRATIONS: list[str] = [SCHEMA_V1, SCHEMA_V2, SCHEMA_V3, SCHEMA_V4, SCHEMA_V5,
+                          SCHEMA_V6]
 
 
 def _connect(db_path: Path | None = None) -> sqlite3.Connection:
@@ -488,6 +509,29 @@ async def list_claims(run_id: int) -> list[dict[str, Any]]:
 async def list_claims_for_order(order_id: int) -> list[dict[str, Any]]:
     return await query("SELECT * FROM claims WHERE order_id=? ORDER BY id",
                        (order_id,))
+
+
+# ── Screenshots (visual proof) ───────────────────────────────────────────────
+
+async def add_screenshot(customer_id: int, path: str, *, kind: str = "orders",
+                         label: str = "", order_id: int | None = None,
+                         run_id: int | None = None) -> int:
+    return await execute(
+        "INSERT INTO screenshots (customer_id, order_id, run_id, kind, label, "
+        "path) VALUES (?,?,?,?,?,?)",
+        (customer_id, order_id, run_id, kind, label, path))
+
+
+async def list_screenshots_for_customer(customer_id: int
+                                        ) -> list[dict[str, Any]]:
+    return await query(
+        "SELECT * FROM screenshots WHERE customer_id=? ORDER BY id",
+        (customer_id,))
+
+
+async def list_screenshots_for_order(order_id: int) -> list[dict[str, Any]]:
+    return await query(
+        "SELECT * FROM screenshots WHERE order_id=? ORDER BY id", (order_id,))
 
 
 # ── Settings ─────────────────────────────────────────────────────────────────
