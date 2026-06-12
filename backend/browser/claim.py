@@ -118,17 +118,21 @@ async def _maybe_click_get_refund(page: Page) -> bool:
 
 
 async def _select_original_payment(page: Page) -> bool:
-    """Click the 'to original payment method' option; return True if clicked.
+    """Click the 'to (your) original payment method' option; True if clicked.
 
     Credits is the default — selecting the original-payment radio is the whole
-    point. We click the visible text (the radio has no stable testid).
+    point. We click the visible text (the radio has no stable testid). Live
+    copy varies ("to original payment method" vs "to your original payment
+    method"), so try the full label then fall back to the core phrase.
     """
-    try:
-        await page.get_by_text(REFUND_METHOD_ORIGINAL_TEXT,
-                               exact=False).first.click(timeout=8_000)
-        return True
-    except Exception:
-        return False
+    for needle in (REFUND_METHOD_ORIGINAL_TEXT, "original payment method"):
+        try:
+            await page.get_by_text(needle, exact=False).first.click(
+                timeout=8_000)
+            return True
+        except Exception:
+            continue
+    return False
 
 
 async def _verify_original_selected(page: Page) -> bool:
@@ -155,15 +159,30 @@ async def _verify_original_selected(page: Page) -> bool:
             }""")
     except Exception:
         return True  # unreadable DOM — let the receipt verification decide
+    return decide_original_selected(checked)
+
+
+def decide_original_selected(checked: list[str]) -> bool:
+    """Pure: given the texts of every CHECKED element, is original-payment the
+    selected refund method? (Optimistic when ambiguous — the receipt is the
+    real guard.)
+
+    Evaluate ALL checked elements before deciding: if the original-payment
+    radio is checked anywhere, that's the win — even if a stray credits-
+    labelled element (a checkbox, an unrelated toggle) also reads as checked.
+    Only abort when credits is checked AND original is NOT checked anywhere.
+    """
+    # Match the CORE phrase "original payment" so both live phrasings —
+    # "to original payment method" and "to your original payment method" —
+    # count as the original-card option.
+    orig = "original payment"
+    cred = REFUND_METHOD_CREDITS_TEXT.lower()
     if not checked:
         return True  # nothing reported checked — rely on the receipt
-    orig = REFUND_METHOD_ORIGINAL_TEXT.lower()
-    cred = REFUND_METHOD_CREDITS_TEXT.lower()
-    for txt in checked:
-        if orig in txt:
-            return True
-        if cred in txt and orig not in txt:
-            return False  # credits is the selected one — abort the confirm
+    if any(orig in txt for txt in checked):
+        return True
+    if any(cred in txt and orig not in txt for txt in checked):
+        return False  # credits is the selected one — abort the confirm
     return True
 
 
@@ -201,8 +220,9 @@ async def run_claim(page: Page, order_uuid: str, receipt_url: str,
         # REMAKE-OFFER variant: click "Get refund" first to reach the
         # credits-vs-card screen (the DIRECT variant skips straight to it).
         if await _maybe_click_get_refund(page):
-            _emit("log", {"msg": f"claim {order_uuid}: remake-offer variant, "
-                                 "clicked Get refund"})
+            _emit("log", {"level": "info",
+                          "message": f"claim {order_uuid}: remake-offer "
+                                     "variant, clicked Get refund"})
             await human_pause(CLAIM_NAV_SETTLE_S, CLAIM_NAV_SETTLE_S + 1.5)
 
         if not await _select_original_payment(page):
@@ -227,8 +247,9 @@ async def run_claim(page: Page, order_uuid: str, receipt_url: str,
         # Re-read the receipt to verify a real Refund line landed.
         text = await open_receipt(page, receipt_url)
         result = claim_succeeded(text, refund_cfg)
-        _emit("log", {"msg": f"claim {order_uuid}: {result.outcome} "
-                             f"(amount={result.amount})"})
+        _emit("log", {"level": "info",
+                      "message": f"claim {order_uuid}: {result.outcome} "
+                                 f"(amount={result.amount})"})
         return result
     except Exception as exc:
         try:
