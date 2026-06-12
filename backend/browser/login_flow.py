@@ -44,6 +44,11 @@ EMAIL_INPUT = "input[type='email']"
 PASSWORD_INPUT = "input[type='password']"
 CONTINUE_BUTTON = "Continue to Sign In"
 SIGNIN_BUTTON = "Sign In"
+# Some accounts route to a "Login with phone number" screen (enter phone -> get
+# a 6-digit code) instead of email->password (verified live 2026-06-13). It has
+# a "Use password instead" link back to the known password branch — click it.
+USE_PASSWORD_LINK = "text=/use password instead/i"
+PHONE_LOGIN_MARKER = "login with phone number"
 
 
 async def _click_button_text(page: Page, text: str, timeout: float = 8000
@@ -100,6 +105,7 @@ async def login_and_capture(page: Page, email: str, password: str,
     # Wait for whichever appears and handle it.
     deadline = time.monotonic() + 20
     branch = None  # "password" | "otp" | "done"
+    tried_use_password = False
     while time.monotonic() < deadline:
         if any(m in page.url for m in SUCCESS_URL_MARKERS):
             branch = "done"
@@ -114,6 +120,20 @@ async def login_and_capture(page: Page, email: str, password: str,
                 break
         except Exception:
             pass
+        # "Login with phone number" variant: no password/OTP field is shown yet
+        # (you'd enter a phone first). Click "Use password instead" ONCE to fall
+        # back to the email->password branch we already handle.
+        if not tried_use_password:
+            try:
+                link = page.locator(USE_PASSWORD_LINK).first
+                if await link.is_visible():
+                    await link.click()
+                    tried_use_password = True
+                    await asyncio.sleep(1.5)
+                    continue
+            except Exception:
+                pass
+            tried_use_password = True  # don't spin on it if absent
         await asyncio.sleep(1.0)
 
     if branch == "done":
