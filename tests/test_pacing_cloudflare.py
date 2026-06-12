@@ -4,7 +4,9 @@ from __future__ import annotations
 import random
 
 from backend.browser.driver import classify_cloudflare
-from backend.browser.pacing import DEFAULT_MAX_S, DEFAULT_MIN_S, pause_seconds
+from backend.browser.pacing import (DEFAULT_MAX_S, DEFAULT_MIN_S,
+                                    KEY_DELAY_MAX_MS, KEY_DELAY_MIN_MS,
+                                    key_delay_ms, pause_seconds)
 
 
 # ── Pacing ───────────────────────────────────────────────────────────────────
@@ -26,6 +28,18 @@ def test_pause_seconds_degenerate_inputs():
     assert pause_seconds(5.0, 1.0, rng=random.Random(2)) == 5.0
     v = pause_seconds(-3.0, -1.0, rng=random.Random(3))
     assert v == 0.0
+
+
+def test_key_delay_within_range():
+    rng = random.Random(0)
+    for _ in range(200):
+        v = key_delay_ms(rng=rng)
+        assert KEY_DELAY_MIN_MS <= v <= KEY_DELAY_MAX_MS
+
+
+def test_key_delay_is_humanlike_not_instant():
+    # the whole point: never 0 (instant fill is the bot tell)
+    assert key_delay_ms(rng=random.Random(7)) > 0
 
 
 # ── Cloudflare classification ────────────────────────────────────────────────

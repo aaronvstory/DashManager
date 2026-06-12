@@ -38,3 +38,17 @@ async def human_pause(min_s: float = DEFAULT_MIN_S,
                       max_s: float = DEFAULT_MAX_S) -> None:
     """Sleep a jittered ``pause_seconds`` — call between clicks/navigations."""
     await asyncio.sleep(pause_seconds(min_s, max_s))
+
+
+# Per-keystroke delay (ms) for typing form fields like a human. Playwright's
+# ``locator.fill()`` sets a field's value INSTANTLY (0ms) — a dead giveaway to
+# DoorDash's signup anti-bot ("Something went wrong, please refresh and retry").
+# Typing each char with a jittered ~60-140ms delay reads like a real person.
+KEY_DELAY_MIN_MS = 60.0
+KEY_DELAY_MAX_MS = 140.0
+
+
+def key_delay_ms(rng: random.Random | None = None) -> float:
+    """A jittered per-keystroke delay in ms for human-like typing."""
+    r = rng or random
+    return r.uniform(KEY_DELAY_MIN_MS, KEY_DELAY_MAX_MS)
