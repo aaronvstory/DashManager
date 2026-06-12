@@ -46,12 +46,12 @@ async def create_account(*, location_origin: str | None,
     `ordernum` is unique, so without a shared id they'd appear as N separate
     entries).
 
-    `reuse_number`, when given, is an already-bought number dict (with
-    `number_token`/`api_url`/`mirror_hosts`/`phone_number`, e.g. from
-    `orphan_numbers()`) — the rent step is SKIPPED and this number is used,
-    so a signup that failed after renting (VPN/Cloudflare block) can be retried
-    without paying for a fresh number. A fresh identity is still generated for
-    the address; only the phone number is reused.
+    `reuse_number`, when given, is an already-bought number dict — the rent step
+    is SKIPPED and this number is used. ⚠️ USE WITH CARE: if the number's prior
+    signup SUBMITTED and failed, DoorDash blocklists it (HTTP 403 forever), so
+    reusing a failed-signup number just re-triggers the failure. Only pass a
+    number whose signup never submitted. The skill rents fresh by default for
+    this reason; this param is an escape hatch, not the norm.
 
     Raises on fatal failure (caller emits account_failed); partial progress is
     reported via events.
@@ -284,17 +284,18 @@ async def orphan_numbers(*, daisy_root: str | None = None,
                          ) -> list[dict[str, Any]]:
     """Find RECENTLY-bought api.cc numbers whose signup never completed.
 
-    "Orphan" = a number we paid for but the account never finished (e.g. a
-    VPN/Cloudflare block hit before/at the OTP step). Only numbers bought within
-    `max_age_hours` are returned — older records are almost certainly expired
-    (api.cc numbers die after ~60-80 days) and reusing them would just fail at
-    OTP, so they're excluded. Returns reusable number dicts (newest first) to
-    feed create_account(reuse_number=...). Dedups against DashManager customers
-    already holding that token (those are done, not orphans).
+    ⚠️ REUSE IS USUALLY UNSAFE — verified live 2026-06-12. If a signup got far
+    enough to SUBMIT and then failed, DoorDash blocklists that phone number and
+    returns HTTP 403 on every later signup with it ("Something went wrong,
+    please refresh and retry"). So a number from a *failed signup* is BURNED —
+    reusing it just re-triggers the 403 forever. Only a number bought but whose
+    signup NEVER submitted (e.g. a pure pre-submit VPN block) is safely
+    reusable, and that's hard to tell apart after the fact.
 
-    NOTE: this is a SAFETY NET. The primary reuse path is the skill tracking the
-    numbers IT bought this session and retrying those on a block — so reuse can
-    never touch unrelated old records even if this window were widened.
+    Because of this, the skill no longer reuses by default — it rents a fresh
+    number per account. This function remains for the rare known-safe case and
+    for diagnostics. `max_age_hours` still excludes old/expired records.
+    Dedups against DashManager customers already holding that token.
     """
     now = datetime.now(timezone.utc)
     used_tokens = {c.get("number_token") for c in await db.list_customers()
