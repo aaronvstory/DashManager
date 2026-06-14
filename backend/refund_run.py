@@ -13,6 +13,7 @@ Wraps the gotchas that otherwise get rediscovered every session:
 
 Usage (always inside the venv, run as a module — never the uvicorn CLI):
 
+    .venv\\Scripts\\python.exe -m backend.refund_run login   --bucket 2026-06-15
     .venv\\Scripts\\python.exe -m backend.refund_run detect  --bucket 2026-06-15
     .venv\\Scripts\\python.exe -m backend.refund_run claim   --bucket 2026-06-15
     .venv\\Scripts\\python.exe -m backend.refund_run all     --bucket 2026-06-15
@@ -21,9 +22,12 @@ Usage (always inside the venv, run as a module — never the uvicorn CLI):
     # scope by ids instead of a whole bucket:
     .venv\\Scripts\\python.exe -m backend.refund_run claim --ids 17,20,21
 
+`login`   = log in every in-scope customer with no session yet (skips ones
+            already logged in). OTP via api.cc internally.
 `detect`  = scrape + classify only (no claims/chats).
 `claim`   = detect, then self-claim pending_claim orders, then verify by receipt.
-`all`     = claim + (re)build the daily report. The everyday command.
+`all`     = login (no-op if all logged in) + claim + (re)build the daily report.
+            The everyday command — runs a freshly-adopted batch end to end.
 `status`  = print the current DB state for the scope (no browser).
 
 Live support CHAT is intentionally NOT automated here — that is the
@@ -45,6 +49,13 @@ from backend import db  # noqa: E402  (after the event-loop policy)
 from backend.models import RefundStatus  # noqa: E402
 
 ORDERS_URL = "https://www.doordash.com/orders"
+
+
+def _p(msg: str) -> None:
+    """Print a progress line and FLUSH immediately, so a session driving this
+    headed for many minutes can stream live updates to the user instead of a
+    silent black box. `PROGRESS:`-prefixed lines are the ones meant to surface."""
+    print(msg, flush=True)
 
 
 # ── scope ────────────────────────────────────────────────────────────────────
@@ -145,8 +156,11 @@ async def _verify_unconfirmed(customers: list[dict], headless: bool) -> int:
         return 0
 
     async with async_playwright() as p:
-        for c in needs:
+        for i, c in enumerate(needs, 1):
             cid = c["id"]
+            name = f"{c.get('first_name','')} {c.get('last_name','')}".strip()
+            _p(f"PROGRESS: verifying {i}/{len(needs)} — [{cid}] {name} "
+               f"(reopening receipts)…")
             try:
                 async with customer_profile(
                         p, cid, headless=headless, viewport=(1200, 720)) as ctx:
@@ -155,9 +169,11 @@ async def _verify_unconfirmed(customers: list[dict], headless: bool) -> int:
                     await handle_cloudflare(page)
                     await asyncio.sleep(2.5)
                     fresh = await scrape_orders(page)
-                    promoted += await _reconcile_customer(cid, fresh, cfg, page)
+                    promoted += await _reconcile_customer(cid, fresh, cfg, page,
+                                                          name)
             except Exception as exc:  # one bad customer ≠ kill the pass
-                print(f"  [{cid}] verify failed: {type(exc).__name__}: {exc}")
+                _p(f"PROGRESS:   [{cid}] {name}: verify failed — "
+                   f"{type(exc).__name__}: {exc}")
     return promoted
 
 
@@ -181,7 +197,8 @@ def resolution_write(rr, fallback_price):
     return (rr.status.value, rr.total_amount, rr.refund_amount, False)
 
 
-async def _reconcile_customer(cid: int, fresh: list, cfg: dict, page) -> int:
+async def _reconcile_customer(cid: int, fresh: list, cfg: dict, page,
+                              name: str = "") -> int:
     """Reconcile one customer's orders by REAL UUID — never by price.
 
     Prices collide (orders can be identical or cents apart), so a price-based
@@ -202,7 +219,10 @@ async def _reconcile_customer(cid: int, fresh: list, cfg: dict, page) -> int:
             if o.receipt_url and not o.order_uuid.startswith(
                 ("pendingclaim:", "inprogress:"))]
 
-    for o in real:
+    who = f"[{cid}] {name}".strip()
+    for j, o in enumerate(real, 1):
+        _p(f"PROGRESS:   {who} — order {j}/{len(real)} "
+           f"({o.store_name} ${o.price}): reading receipt…")
         text = await open_receipt(page, o.receipt_url)
         rr = detect(text, cfg)
         status, total, amount, promotion = resolution_write(rr, o.price)
@@ -215,7 +235,7 @@ async def _reconcile_customer(cid: int, fresh: list, cfg: dict, page) -> int:
             promoted += 1
         tag = {"refunded": "✅ refunded", "partial": "◐ PARTIAL → needs chat"}\
             .get(status, f"{status} → needs chat/human")
-        print(f"  [{cid}] {o.store_name} ${o.price}: {tag}")
+        _p(f"PROGRESS:   {who} — {o.store_name} ${o.price}: {tag}")
 
     # Drop synthetic rows now superseded by a real-UUID order at the same store.
     # Count-based, not price-based: if the store now has >= as many real orders
@@ -262,9 +282,9 @@ async def cmd_status(bucket, ids):
 async def cmd_detect(bucket, ids, headless):
     db.init_db()
     scope = _scope_dict(bucket, ids)
-    print("→ detect pass (scrape + classify)…")
+    _p("PROGRESS: phase 1/1 — detect (scrape + classify all orders headed)…")
     rid = await _run_pass(scope, "none", headless)
-    print(f"  run {rid} done.")
+    _p(f"PROGRESS: detect run {rid} complete.")
     customers = await _scope_customers(bucket, ids)
     await _print_status(customers)
 
@@ -272,31 +292,65 @@ async def cmd_detect(bucket, ids, headless):
 async def cmd_claim(bucket, ids, headless):
     db.init_db()
     scope = _scope_dict(bucket, ids)
-    print("→ detect pass…")
+    _p("PROGRESS: phase 1/3 — detect (scraping + classifying orders)…")
     await _run_pass(scope, "none", headless)
-    print("→ self-claim pass (scripted; code-gated to card)…")
+    _p("PROGRESS: phase 2/3 — self-claim (selecting original card, never credits)…")
     await _run_pass(scope, "scripted", headless)
-    print("→ verifying claims against receipts (zero-tolerance)…")
+    _p("PROGRESS: phase 3/3 — verifying claims against receipts (zero-tolerance)…")
     customers = await _scope_customers(bucket, ids)
     n = await _verify_unconfirmed(customers, headless)
-    print(f"  promoted {n} claim(s) to refunded on receipt proof.")
+    _p(f"PROGRESS: {n} claim(s) proven on receipt → refunded.")
     await _print_status(customers)
 
 
+async def cmd_login(bucket, ids, headless):
+    """Log in every in-scope customer that has no DoorDash session yet.
+
+    Skips customers already logged in (a carried-over customer keeps yesterday's
+    session). One at a time, headed — the OTP is fetched via api.cc internally.
+    """
+    db.init_db()
+    from backend.relogin import relogin_customer
+    customers = await _scope_customers(bucket, ids)
+    need = [c for c in customers if not (c.get("storage_state_path") or "").strip()]
+    skip = len(customers) - len(need)
+    if skip:
+        _p(f"PROGRESS: {skip} customer(s) already logged in — skipping.")
+    if not need:
+        _p("PROGRESS: login phase — nothing to log in.")
+        return
+    for i, c in enumerate(need, 1):
+        name = f"{c.get('first_name','')} {c.get('last_name','')}".strip()
+        _p(f"PROGRESS: logging in {i}/{len(need)} — [{c['id']}] {name}…")
+        try:
+            res = await relogin_customer(c["id"], headless=headless)
+            _p(f"PROGRESS:   [{c['id']}] {name}: {res.get('outcome', '?')}")
+        except Exception as exc:
+            _p(f"PROGRESS:   [{c['id']}] {name}: LOGIN FAILED — "
+               f"{type(exc).__name__}: {exc}")
+
+
 async def cmd_all(bucket, ids, headless):
+    # Log in any not-yet-logged-in customer first (no-op if all have sessions),
+    # so a freshly-adopted batch runs end-to-end from one command.
+    _p("PROGRESS: === full run starting (login → detect → claim → verify → "
+       "report) ===")
+    await cmd_login(bucket, ids, headless)
     await cmd_claim(bucket, ids, headless)
     if bucket:
         from backend import report
+        _p("PROGRESS: building daily report…")
         path = await report.build_daily_report(bucket)
-        print(f"→ report: {path}")
+        _p(f"PROGRESS: report ready → {path}")
     else:
-        print("→ (no bucket given; skipped report build — pass --bucket to build)")
+        _p("PROGRESS: (no bucket given; skipped report — pass --bucket to build)")
+    _p("PROGRESS: === full run complete ===")
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(prog="refund_run")
     ap.add_argument("command",
-                    choices=["detect", "claim", "all", "status"])
+                    choices=["login", "detect", "claim", "all", "status"])
     ap.add_argument("--bucket", help="bucket date YYYY-MM-DD")
     ap.add_argument("--ids", help="comma-separated customer ids")
     ap.add_argument("--headless", action="store_true",
@@ -313,6 +367,8 @@ def main() -> None:
 
     if args.command == "status":
         asyncio.run(cmd_status(args.bucket, ids))
+    elif args.command == "login":
+        asyncio.run(cmd_login(args.bucket, ids, headless))
     elif args.command == "detect":
         asyncio.run(cmd_detect(args.bucket, ids, headless))
     elif args.command == "claim":
