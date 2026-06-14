@@ -520,6 +520,9 @@ class RunManager:
                 # already captured in the chat transcript as the audit proof.
                 await self._bump(stats, "chats_won")
                 await self._bump(stats, "unconfirmed")
+                # Count as manual too — an unconfirmed order needs a human, same
+                # as a claim-originated unconfirmed (consistent stats bucket).
+                await self._bump(stats, "manual")
                 await db.update_order_refund(
                     oid, RefundStatus.unconfirmed.value, so.price, None)
                 return

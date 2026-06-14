@@ -398,27 +398,43 @@ def resolution_method(o: dict[str, Any]) -> tuple[str, str]:
     won_chat = next((ch for ch in chats if ch.get("outcome") == "success"),
                     None)
 
+    # Last inbound agent line (the promise / confirmation), if any chat won.
+    chat_conf = ""
     if won_chat is not None:
-        # find the agent line that confirms (last inbound message)
-        conf = ""
         for m in reversed(won_chat.get("messages", [])):
             if m.get("direction") == "in":
-                conf = (m.get("content") or "")[:140]
+                chat_conf = (m.get("content") or "")[:140]
                 break
-        if won_chat.get("agent_reached"):
-            # credits→card conversions go through an agent; label by content
-            lo = conf.lower()
-            if "credit" in lo or "exchanged" in lo:
-                return ("Credits→card (agent chat)", conf)
-            return ("Agent chat", conf)
-        return ("Self-serve chat", conf)
-    if won_claim is not None:
-        amt = won_claim.get("amount")
-        dest = ("to original card" if won_claim.get("to_original_payment")
-                else "refunded")
-        return ("Self-claim", f"{_money(amt)} {dest}")
+
+    # ZERO-TOLERANCE display rule: an affirmative "this got refunded via X"
+    # label is only honest once the receipt PROVED it (status == "refunded").
+    # An `unconfirmed` order (agent promised, or a claim we couldn't verify to
+    # the card) must NOT read as resolved — it shows "Pending" with the promise
+    # as context, matching the ⚠ Unconfirmed status badge beside it.
+    if status == "unconfirmed":
+        if won_chat is not None:
+            return ("Pending — agent promised", chat_conf
+                    or "awaiting receipt proof")
+        if won_claim is not None:
+            return ("Pending — claim unverified",
+                    "claim ran; card destination not yet proven on receipt")
+        return ("Pending — unconfirmed", "awaiting receipt proof")
+
     if status == "refunded":
+        if won_chat is not None:
+            if won_chat.get("agent_reached"):
+                lo = chat_conf.lower()
+                if "credit" in lo or "exchanged" in lo:
+                    return ("Credits→card (agent chat)", chat_conf)
+                return ("Agent chat", chat_conf)
+            return ("Self-serve chat", chat_conf)
+        if won_claim is not None:
+            amt = won_claim.get("amount")
+            dest = ("to original card" if won_claim.get("to_original_payment")
+                    else "refunded")
+            return ("Self-claim", f"{_money(amt)} {dest}")
         return ("Already refunded", "receipt shows refund to original card")
+
     if status in ("not_refunded", "partial", "pending_claim", "remake"):
         return ("Pending", "not yet resolved")
     return ("—", "")

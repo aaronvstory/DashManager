@@ -128,6 +128,33 @@ def test_needs_you_logic():
         assert report._order_needs_you({"refund_status": st}) is True
 
 
+def test_resolution_method_unconfirmed_never_reads_resolved():
+    # ZERO-TOLERANCE display: an `unconfirmed` order with a "won" chat must NOT
+    # show an affirmative "Agent chat" resolution — that would contradict its
+    # ⚠ Unconfirmed status badge. It reads "Pending — agent promised".
+    o = {"refund_status": "unconfirmed",
+         "chats": [{"outcome": "success", "agent_reached": True,
+                    "messages": [{"direction": "in",
+                                  "content": "Refund issued to your card"}]}],
+         "claims": []}
+    label, _conf = report.resolution_method(o)
+    assert label.startswith("Pending")
+    assert "Agent chat" not in label
+
+    # Same order once the receipt PROVES it -> now it may read "Agent chat".
+    o["refund_status"] = "refunded"
+    label2, _ = report.resolution_method(o)
+    assert label2 == "Agent chat"
+
+    # An unconfirmed claim also reads pending, never "Self-claim".
+    oc = {"refund_status": "unconfirmed", "chats": [],
+          "claims": [{"confirmed": True, "amount": 50.0,
+                      "to_original_payment": True}]}
+    lbl, _ = report.resolution_method(oc)
+    assert lbl.startswith("Pending")
+    assert "Self-claim" not in lbl
+
+
 def test_money_and_address_helpers():
     assert report._money(112.2) == "$112.20"
     assert report._money(None) == "—"
