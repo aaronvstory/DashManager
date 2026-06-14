@@ -6,12 +6,18 @@ import json
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
 from backend import config, db
 from backend.events import bus
-from backend.routes import customers, runs, settings as settings_routes
+from backend.routes import (
+    customers,
+    reports as reports_routes,
+    runs,
+    settings as settings_routes,
+)
 
 HEARTBEAT_S = 15
 
@@ -33,6 +39,8 @@ def create_app() -> FastAPI:
     app.include_router(runs.router, prefix="/api/runs", tags=["runs"])
     app.include_router(settings_routes.router, prefix="/api/settings",
                        tags=["settings"])
+    app.include_router(reports_routes.router, prefix="/api/reports",
+                       tags=["reports"])
 
     @app.get("/api/health")
     async def health() -> dict:
@@ -65,11 +73,39 @@ def create_app() -> FastAPI:
 
         return EventSourceResponse(gen())
 
+    # Daily report HTML + proof screenshots, served static. Mounted under
+    # /report-files (NOT /reports — that path is the SPA's client route, and a
+    # StaticFiles mount there would shadow it on direct load/refresh). The
+    # report HTML links screenshots via ``../screenshots/<bucket>/file``
+    # relative to /report-files/<date>.html → /screenshots/..., so the two
+    # mounts line up.
+    app.mount("/report-files",
+              StaticFiles(directory=config.REPORTS_DIR, html=True),
+              name="report-files")
+    app.mount("/screenshots",
+              StaticFiles(directory=config.SCREENSHOTS_DIR),
+              name="screenshots")
+
     # Built frontend (when present) is served from the same origin, so the
-    # whole app is just `python -m backend`.
+    # whole app is just `python -m backend`. We serve hashed assets straight
+    # off disk and fall back to index.html for everything else, so a hard load
+    # or refresh on a client route (/reports, /database, …) hits the SPA shell
+    # instead of 404ing. This catch-all must stay LAST — it owns every path
+    # not claimed by an /api route or a static mount above.
     if config.FRONTEND_DIST.exists():
-        app.mount("/", StaticFiles(directory=config.FRONTEND_DIST, html=True),
-                  name="frontend")
+        index_html = config.FRONTEND_DIST / "index.html"
+
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def spa(full_path: str):
+            candidate = (config.FRONTEND_DIST / full_path).resolve()
+            # Serve a real built file only if it's inside the dist dir.
+            if (
+                full_path
+                and candidate.is_file()
+                and config.FRONTEND_DIST.resolve() in candidate.parents
+            ):
+                return FileResponse(candidate)
+            return FileResponse(index_html)
 
     return app
 

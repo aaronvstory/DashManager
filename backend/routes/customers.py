@@ -93,13 +93,33 @@ async def list_customers() -> dict[str, Any]:
 
 @router.get("/full")
 async def customers_full() -> dict[str, Any]:
-    """Everything the DB viewer needs: customers (+pills) and their orders."""
+    """Everything the DB viewer needs: customers (+pills) and their orders,
+    each order enriched with its self-claim records, full chat transcripts, and
+    a derived ``resolution`` (HOW the refund happened + the proof line) — so the
+    customer view can show the method category and the transcript inline,
+    matching the daily report.
+    """
+    from backend.report import resolution_method
+
     rows = await db.list_customers()
     out = []
     for c in rows:
         c = dict(c)
         c["pills"] = _derive_pills(c)
-        c["orders"] = await db.list_orders(c["id"])
+        orders = []
+        for o in await db.list_orders(c["id"]):
+            o = dict(o)
+            o["claims"] = await db.list_claims_for_order(o["id"])
+            chats = []
+            for ch in await db.list_chats_for_order(o["id"]):
+                ch = dict(ch)
+                ch["messages"] = await db.list_chat_messages(ch["id"])
+                chats.append(ch)
+            o["chats"] = chats
+            label, confirmation = resolution_method(o)
+            o["resolution"] = {"label": label, "confirmation": confirmation}
+            orders.append(o)
+        c["orders"] = orders
         out.append(c)
     return {"customers": out}
 
