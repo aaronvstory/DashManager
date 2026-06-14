@@ -138,8 +138,8 @@ async def report_data(report_date: str) -> dict:
                "total_refunded": 0.0}
     for c in customers:
         c = dict(c)
-        # Strip every credential/secret the report view never needs
-        # (number_token is the api.cc SIM token — a credential — include it).
+        # Strip every credential/secret the report view never needs.
+        # number_token is the api.cc SIM token (a credential) — STRIP it too.
         for k in ("password", "storage_state_path", "cookies_path",
                   "api_url", "mirror_hosts", "number_token"):
             c.pop(k, None)

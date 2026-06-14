@@ -157,8 +157,10 @@ export default function ReportsPage() {
             </div>
           ) : null}
 
-          {/* The native report, full width */}
-          {detail.isPending ? (
+          {/* The native report, full width. Guard on `selected` so a disabled
+              detail query (isPending=true before any date is chosen) doesn't
+              flash a ghost skeleton + layout jump on first load. */}
+          {!selected ? null : detail.isPending ? (
             <Skeleton className="h-[60vh] w-full" />
           ) : detail.isError ? (
             <div className="border border-border bg-card px-6 py-10 text-center text-sm text-muted-foreground">

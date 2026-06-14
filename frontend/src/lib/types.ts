@@ -166,7 +166,7 @@ export interface ReportCustomer {
   notes: string
   bucket_date: string
   session_status: SessionStatus
-  number_token?: string
+  // (credentials like number_token are stripped server-side — not present here)
   orders: Order[]
   screenshots?: ProofShot[]
 }
