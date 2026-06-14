@@ -46,10 +46,6 @@ from backend.models import RefundStatus  # noqa: E402
 
 ORDERS_URL = "https://www.doordash.com/orders"
 
-# Receipt amount tolerance when matching a claimed order to its fresh-scrape
-# twin (the synthetic-UUID case): same store, price within a few cents.
-_PRICE_TOL = 0.50
-
 
 # ── scope ────────────────────────────────────────────────────────────────────
 
@@ -129,8 +125,7 @@ async def _verify_unconfirmed(customers: list[dict], headless: bool) -> int:
     """
     from playwright.async_api import async_playwright
     from backend.browser.driver import customer_profile, handle_cloudflare
-    from backend.browser.orders import scrape_orders, open_receipt
-    from backend.browser.refund_detector import detect
+    from backend.browser.orders import scrape_orders
 
     cfg = await db.get_setting("refund_signal")
     promoted = 0
@@ -147,9 +142,6 @@ async def _verify_unconfirmed(customers: list[dict], headless: bool) -> int:
     async with async_playwright() as p:
         for c in needs:
             cid = c["id"]
-            db_orders = await db.list_orders(cid)
-            pend = [o for o in db_orders
-                    if o.get("refund_status") in ("unconfirmed", "pending_claim")]
             try:
                 async with customer_profile(
                         p, cid, headless=headless, viewport=(1200, 720)) as ctx:
@@ -158,61 +150,99 @@ async def _verify_unconfirmed(customers: list[dict], headless: bool) -> int:
                     await handle_cloudflare(page)
                     await asyncio.sleep(2.5)
                     fresh = await scrape_orders(page)
-
-                    for dbo in pend:
-                        twin = _match_twin(dbo, fresh)
-                        if twin is None or not twin.receipt_url:
-                            print(f"  [{cid}] {dbo.get('store_name','')} "
-                                  f"${dbo.get('price')}: no receipt yet — "
-                                  f"left {dbo.get('refund_status')}")
-                            continue
-                        text = await open_receipt(page, twin.receipt_url)
-                        rr = detect(text, cfg)
-                        if rr.status in (RefundStatus.refunded,
-                                         RefundStatus.partial):
-                            # Promote: ensure the order row carries the REAL uuid
-                            # (synthetic pendingclaim:* rows get superseded).
-                            oid = await db.upsert_order(
-                                customer_id=cid, order_uuid=twin.order_uuid,
-                                receipt_url=twin.receipt_url,
-                                store_name=twin.store_name, price=twin.price)
-                            amt = rr.refund_amount or twin.price
-                            await db.update_order_refund(
-                                oid, RefundStatus.refunded.value, amt, amt)
-                            promoted += 1
-                            print(f"  [{cid}] {twin.store_name} ${twin.price}: "
-                                  f"✅ receipt-proven refund → refunded")
-                        else:
-                            print(f"  [{cid}] {twin.store_name} ${twin.price}: "
-                                  f"no Refund line → left {dbo.get('refund_status')}"
-                                  f" (needs chat/human)")
+                    promoted += await _reconcile_customer(cid, fresh, cfg, page)
             except Exception as exc:  # one bad customer ≠ kill the pass
                 print(f"  [{cid}] verify failed: {type(exc).__name__}: {exc}")
     return promoted
 
 
-def _match_twin(dbo: dict, fresh: list):
-    """Find the fresh-scrape order matching a stored (possibly synthetic-UUID)
-    one: exact uuid if real, else same store + the CLOSEST price within
-    tolerance. Closest (not first) matters when a customer has two orders only
-    cents apart — picking the wrong twin could promote the wrong order."""
-    uuid = dbo.get("order_uuid", "")
-    if uuid and not uuid.startswith("pendingclaim:"):
-        for o in fresh:
-            if o.order_uuid == uuid:
-                return o
-    price = dbo.get("price")
-    store = (dbo.get("store_name") or "").lower()
-    if price is None:
-        return None
-    best, best_delta = None, _PRICE_TOL
-    for o in fresh:
-        if o.price is None or (o.store_name or "").lower() != store:
+def resolution_write(rr, fallback_price):
+    """Pure: given a receipt detect() result, decide what to WRITE.
+
+    Returns ``(status, total_amount, refund_amount, is_promotion)``. The
+    zero-tolerance rules live here so they're unit-testable without a browser:
+      - ``refunded`` ONLY for a full receipt-proven refund (is_promotion=True).
+      - ``partial`` stays ``partial`` — a partial refund is NEVER written as
+        ``refunded`` (the shortfall must stay visible for the chat step).
+      - every other status is written through as-is (pending_claim /
+        not_refunded / unknown) — none count as a promotion.
+    """
+    if rr.status == RefundStatus.refunded:
+        amt = rr.refund_amount if rr.refund_amount is not None else fallback_price
+        return (RefundStatus.refunded.value, rr.total_amount, amt, True)
+    if rr.status == RefundStatus.partial:
+        return (RefundStatus.partial.value, rr.total_amount,
+                rr.refund_amount, False)
+    return (rr.status.value, rr.total_amount, rr.refund_amount, False)
+
+
+async def _reconcile_customer(cid: int, fresh: list, cfg: dict, page) -> int:
+    """Reconcile one customer's orders by REAL UUID — never by price.
+
+    Prices collide (orders can be identical or cents apart), so a price-based
+    twin match is unsafe and is NOT used here. Instead: every freshly-scraped
+    COMPLETED order carries a real /orders/<uuid>. We open each such receipt,
+    read its refund state directly, and write the result keyed by that real
+    UUID (idempotent upsert). Synthetic ``pendingclaim:*`` / ``inprogress:*``
+    rows that have been superseded by a real-UUID twin for the same store are
+    then dropped. A refund is recorded ONLY on a receipt-proven line, and a
+    PARTIAL refund is recorded as ``partial`` (never ``refunded``).
+    """
+    from backend.browser.orders import open_receipt
+    from backend.browser.refund_detector import detect
+
+    promoted = 0
+    # Real-UUID completed orders only — these are the ground truth.
+    real = [o for o in fresh
+            if o.receipt_url and not o.order_uuid.startswith(
+                ("pendingclaim:", "inprogress:"))]
+
+    for o in real:
+        text = await open_receipt(page, o.receipt_url)
+        rr = detect(text, cfg)
+        status, total, amount, promotion = resolution_write(rr, o.price)
+        # Always (idempotent) upsert the real-UUID row so the DB tracks it.
+        oid = await db.upsert_order(
+            customer_id=cid, order_uuid=o.order_uuid,
+            receipt_url=o.receipt_url, store_name=o.store_name, price=o.price)
+        await db.update_order_refund(oid, status, total, amount)
+        if promotion:
+            promoted += 1
+        tag = {"refunded": "✅ refunded", "partial": "◐ PARTIAL → needs chat"}\
+            .get(status, f"{status} → needs chat/human")
+        print(f"  [{cid}] {o.store_name} ${o.price}: {tag}")
+
+    # Drop synthetic rows now superseded by a real-UUID order at the same store.
+    # Count-based, not price-based: if the store now has >= as many real orders
+    # as it had synthetic rows, the synthetics are stale duplicates.
+    db_orders = await db.list_orders(cid)
+    real_by_store: dict[str, int] = {}
+    for o in real:
+        real_by_store[(o.store_name or "").lower()] = \
+            real_by_store.get((o.store_name or "").lower(), 0) + 1
+    for dbo in db_orders:
+        uuid = dbo.get("order_uuid", "")
+        if not uuid.startswith(("pendingclaim:", "inprogress:")):
             continue
-        delta = abs(o.price - price)
-        if delta < best_delta:
-            best, best_delta = o, delta
-    return best
+        store = (dbo.get("store_name") or "").lower()
+        if real_by_store.get(store, 0) > 0:
+            # A real-UUID twin exists for this store; the synthetic row is stale.
+            await _delete_order(dbo["id"])
+            print(f"  [{cid}] dropped stale synthetic row "
+                  f"{uuid[:28]} (superseded by real order)")
+    return promoted
+
+
+async def _delete_order(order_id: int) -> None:
+    """Delete an order row and its run_orders FK refs (stale synthetic rows)."""
+    await db.execute("DELETE FROM run_orders WHERE order_id=?", (order_id,))
+    await db.execute("DELETE FROM orders WHERE id=?", (order_id,))
+
+
+# NOTE: there is deliberately NO price-based "twin matcher" here. Orders can
+# share the same price or sit cents apart, so pairing a stored row to a receipt
+# by price is unsafe and could promote the WRONG order. Reconciliation is
+# UUID-driven only — see _reconcile_customer.
 
 
 # ── commands ─────────────────────────────────────────────────────────────────
@@ -268,7 +298,10 @@ def main() -> None:
                     help="run headless (default headed — user watches)")
     args = ap.parse_args()
 
-    ids = [int(x) for x in args.ids.split(",")] if args.ids else None
+    try:
+        ids = [int(x) for x in args.ids.split(",")] if args.ids else None
+    except ValueError:
+        ap.error("--ids must be comma-separated integers, e.g. --ids 17,20,21")
     if not args.bucket and not ids:
         ap.error("need --bucket or --ids")
     headless = args.headless

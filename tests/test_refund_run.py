@@ -1,65 +1,74 @@
-"""Pure tests for the refund_run twin-matcher (no browser, no DB).
+"""Pure tests for refund_run's write-decision (no browser, no DB).
 
-The synthetic-UUID gotcha: a card-based pending_claim is stored as
-`pendingclaim:store:N` with no receipt URL. After claiming, only a FRESH scrape
-reveals the real `/orders/<uuid>`. `_match_twin` pairs the stored row to its
-fresh-scrape twin so we can reopen the real receipt and verify — by exact UUID
-when real, else by store + price within tolerance.
+`resolution_write` is the single safety-critical decision in the run: given what
+detect() read off a receipt, what status + amount gets persisted? The
+zero-tolerance contract:
+  - ONLY a full receipt-proven refund writes `refunded` (and counts as promoted).
+  - a PARTIAL refund writes `partial` — NEVER `refunded` (the shortfall must
+    stay visible so the chat step can pursue it).
+  - everything else passes through, none promoted.
+
+There is deliberately NO price-based order matching in refund_run — orders can
+share a price or sit cents apart, so reconciliation is UUID-driven only.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-
-from backend.refund_run import _match_twin
-
-
-@dataclass
-class FakeOrder:
-    order_uuid: str
-    price: float | None
-    store_name: str
-    receipt_url: str = "https://www.doordash.com/orders/x"
+from backend.browser.refund_detector import RefundResult
+from backend.models import RefundStatus
+from backend.refund_run import resolution_write
 
 
-def test_match_by_real_uuid():
-    fresh = [FakeOrder("abc-123", 50.0, "Dairy Queen")]
-    dbo = {"order_uuid": "abc-123", "price": 50.0, "store_name": "Dairy Queen"}
-    assert _match_twin(dbo, fresh) is fresh[0]
+def test_full_refund_is_refunded_and_promoted():
+    rr = RefundResult(status=RefundStatus.refunded, total_amount=50.0,
+                      refund_amount=50.0)
+    status, total, amount, promoted = resolution_write(rr, 50.0)
+    assert status == "refunded"
+    assert amount == 50.0
+    assert promoted is True
 
 
-def test_synthetic_uuid_matches_by_store_and_price():
-    fresh = [FakeOrder("real-uuid-999", 119.41, "Dairy Queen")]
-    dbo = {"order_uuid": "pendingclaim:Dairy Queen:1", "price": 119.41,
-           "store_name": "Dairy Queen"}
-    assert _match_twin(dbo, fresh) is fresh[0]
+def test_partial_never_written_as_refunded():
+    # THE critical case: a partial refund must NOT be marked refunded — the
+    # unrecovered delta would be silently lost.
+    rr = RefundResult(status=RefundStatus.partial, total_amount=50.0,
+                      refund_amount=8.0)
+    status, total, amount, promoted = resolution_write(rr, 50.0)
+    assert status == "partial"
+    assert amount == 8.0
+    assert total == 50.0
+    assert promoted is False
 
 
-def test_price_within_tolerance():
-    fresh = [FakeOrder("real-1", 119.40, "Dairy Queen")]
-    dbo = {"order_uuid": "pendingclaim:Dairy Queen:1", "price": 119.41,
-           "store_name": "Dairy Queen"}
-    assert _match_twin(dbo, fresh) is fresh[0]
+def test_not_refunded_passthrough_not_promoted():
+    rr = RefundResult(status=RefundStatus.not_refunded, total_amount=50.0,
+                      refund_amount=None)
+    status, _total, _amount, promoted = resolution_write(rr, 50.0)
+    assert status == "not_refunded"
+    assert promoted is False
 
 
-def test_no_match_when_price_too_far():
-    fresh = [FakeOrder("real-1", 200.0, "Dairy Queen")]
-    dbo = {"order_uuid": "pendingclaim:Dairy Queen:1", "price": 119.41,
-           "store_name": "Dairy Queen"}
-    assert _match_twin(dbo, fresh) is None
+def test_pending_claim_passthrough_not_promoted():
+    rr = RefundResult(status=RefundStatus.pending_claim, total_amount=50.0,
+                      refund_amount=None)
+    status, _t, _a, promoted = resolution_write(rr, 50.0)
+    assert status == "pending_claim"
+    assert promoted is False
 
 
-def test_no_match_when_store_differs():
-    fresh = [FakeOrder("real-1", 119.41, "Wendy's")]
-    dbo = {"order_uuid": "pendingclaim:Dairy Queen:1", "price": 119.41,
-           "store_name": "Dairy Queen"}
-    assert _match_twin(dbo, fresh) is None
+def test_unknown_receipt_not_promoted():
+    # An unreadable receipt (unknown) must never count as a refund.
+    rr = RefundResult(status=RefundStatus.unknown, total_amount=None,
+                      refund_amount=None)
+    status, _t, _a, promoted = resolution_write(rr, 50.0)
+    assert status == "unknown"
+    assert promoted is False
 
 
-def test_picks_correct_twin_among_several():
-    fresh = [
-        FakeOrder("u-a", 119.31, "Dairy Queen"),
-        FakeOrder("u-b", 119.41, "Dairy Queen"),
-    ]
-    dbo = {"order_uuid": "pendingclaim:Dairy Queen:2", "price": 119.41,
-           "store_name": "Dairy Queen"}
-    assert _match_twin(dbo, fresh) is fresh[1]
+def test_refund_amount_falls_back_to_price_when_missing():
+    # Full refund detected but the parsed amount is None -> use the order price,
+    # not None (so the DB still records a number for the confirmed refund).
+    rr = RefundResult(status=RefundStatus.refunded, total_amount=None,
+                      refund_amount=None)
+    _status, _total, amount, promoted = resolution_write(rr, 42.5)
+    assert amount == 42.5
+    assert promoted is True
