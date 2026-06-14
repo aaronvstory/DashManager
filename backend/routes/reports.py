@@ -94,11 +94,43 @@ async def report_data(report_date: str) -> dict:
     """
     if not _DATE_RE.match(report_date):
         raise HTTPException(400, "report_date must be YYYY-MM-DD")
+    from collections import defaultdict
     from backend.report import resolution_method
 
-    customers = [c for c in await db.list_customers()
-                 if c.get("bucket_date") == report_date]
-    customers.sort(key=lambda c: c.get("id", 0))
+    # Bucket-scoped batch reads — a handful of JOINed queries, grouped in
+    # memory, instead of a query per customer/order/chat (no N+1).
+    customers = await db.list_customers_for_bucket(report_date)
+    all_orders = await db.list_orders_for_bucket(report_date)
+    all_claims = await db.list_claims_for_bucket(report_date)
+    all_chats = await db.list_chats_for_bucket(report_date)
+    all_msgs = await db.list_chat_messages_for_bucket(report_date)
+    all_shots = await db.list_screenshots_for_bucket(report_date)
+
+    claims_by_order: dict[int, list] = defaultdict(list)
+    for cl in all_claims:
+        claims_by_order[cl["order_id"]].append(dict(cl))
+    msgs_by_chat: dict[int, list] = defaultdict(list)
+    for m in all_msgs:
+        msgs_by_chat[m["chat_id"]].append(dict(m))
+    chats_by_order: dict[int, list] = defaultdict(list)
+    for ch in all_chats:
+        ch = dict(ch)
+        ch["messages"] = msgs_by_chat.get(ch["id"], [])
+        chats_by_order[ch["order_id"]].append(ch)
+    shots_by_order: dict[int, list] = defaultdict(list)
+    shots_by_cust: dict[int, list] = defaultdict(list)  # non-order (orders-page)
+    for s in all_shots:
+        url = _shot_url(s["path"])
+        if not url:
+            continue
+        item = {"url": url, "label": s.get("label", ""), "kind": s.get("kind", "")}
+        if s.get("order_id"):
+            shots_by_order[s["order_id"]].append(item)
+        else:
+            shots_by_cust[s["customer_id"]].append(item)
+    orders_by_cust: dict[int, list] = defaultdict(list)
+    for o in all_orders:
+        orders_by_cust[o["customer_id"]].append(dict(o))
 
     rows = []
     summary = {"customers": len(customers), "orders": 0, "refunded": 0,
@@ -106,29 +138,16 @@ async def report_data(report_date: str) -> dict:
                "total_refunded": 0.0}
     for c in customers:
         c = dict(c)
-        # strip secrets the report view never needs
         for k in ("password", "storage_state_path", "cookies_path",
                   "api_url", "mirror_hosts"):
             c.pop(k, None)
         orders = []
-        cust_shots = await db.list_screenshots_for_customer(c["id"])
-        for o in await db.list_orders(c["id"]):
-            o = dict(o)
-            o["claims"] = await db.list_claims_for_order(o["id"])
-            chats = []
-            for ch in await db.list_chats_for_order(o["id"]):
-                ch = dict(ch)
-                ch["messages"] = await db.list_chat_messages(ch["id"])
-                chats.append(ch)
-            o["chats"] = chats
+        for o in orders_by_cust.get(c["id"], []):
+            o["claims"] = claims_by_order.get(o["id"], [])
+            o["chats"] = chats_by_order.get(o["id"], [])
             label, confirmation = resolution_method(o)
             o["resolution"] = {"label": label, "confirmation": confirmation}
-            o["screenshots"] = [
-                {"url": _shot_url(s["path"]), "label": s.get("label", ""),
-                 "kind": s.get("kind", "")}
-                for s in cust_shots if s.get("order_id") == o["id"]
-                and _shot_url(s["path"])
-            ]
+            o["screenshots"] = shots_by_order.get(o["id"], [])
             st = o.get("refund_status", "unchecked")
             summary["orders"] += 1
             if st == "refunded":
@@ -145,12 +164,7 @@ async def report_data(report_date: str) -> dict:
             orders.append(o)
         if not orders:
             summary["no_orders"] += 1
-        # customer-level (non-order) proof shots, e.g. the orders-page capture
-        c["screenshots"] = [
-            {"url": _shot_url(s["path"]), "label": s.get("label", ""),
-             "kind": s.get("kind", "")}
-            for s in cust_shots if not s.get("order_id") and _shot_url(s["path"])
-        ]
+        c["screenshots"] = shots_by_cust.get(c["id"], [])
         c["orders"] = orders
         rows.append(c)
 
