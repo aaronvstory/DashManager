@@ -12,11 +12,15 @@ import re
 
 from fastapi import APIRouter, HTTPException
 
-from backend import config, report
+from backend import config, db, report
 
 router = APIRouter()
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# Refund states that still need attention (everything except a receipt-proven
+# `refunded`). `unconfirmed` is counted both here (pursuing) and on its own.
+_PURSUING = ("not_refunded", "partial", "pending_claim", "remake", "unconfirmed")
 
 
 @router.get("")
@@ -31,19 +35,43 @@ async def list_reports() -> dict:
         (p.stem for p in out_dir.glob("*.html") if _DATE_RE.match(p.stem)),
         reverse=True,
     )
+    if not dates:
+        return {"reports": []}
+
+    # Two flat aggregate queries for ALL buckets (not N+1 per date): one for the
+    # customer count per bucket, one for order counts per (bucket, refund_status).
+    # Computed once and sliced per date below. `needs_you` == pursuing here
+    # (every non-`refunded` order needs attention), so it's derived, not queried.
+    cust_rows = await db.query(
+        "SELECT bucket_date AS d, COUNT(*) AS n "
+        "FROM customers GROUP BY bucket_date")
+    cust_by_date = {r["d"]: r["n"] for r in cust_rows}
+    order_rows = await db.query(
+        "SELECT c.bucket_date AS d, o.refund_status AS st, COUNT(*) AS n "
+        "FROM orders o JOIN customers c ON o.customer_id = c.id "
+        "GROUP BY c.bucket_date, o.refund_status")
+    # date -> {refund_status -> count}
+    by_date: dict[str, dict[str, int]] = {}
+    for r in order_rows:
+        by_date.setdefault(r["d"], {})[r["st"]] = r["n"]
+
     reports = []
     for d in dates:
-        s = (await report._collect(d)).get("summary", {})
+        counts = by_date.get(d, {})
+        orders = sum(counts.values())
+        refunded = counts.get("refunded", 0)
+        unconfirmed = counts.get("unconfirmed", 0)
+        pursuing = sum(counts.get(st, 0) for st in _PURSUING)
         reports.append(
             {
                 "date": d,
                 "url": f"/report-files/{d}.html",
-                "customers": s.get("customers", 0),
-                "orders": s.get("orders", 0),
-                "refunded": s.get("refunded", 0),
-                "pursuing": s.get("pursuing", 0),
-                "unconfirmed": s.get("unconfirmed", 0),
-                "needs_you": s.get("needs_you", 0),
+                "customers": cust_by_date.get(d, 0),
+                "orders": orders,
+                "refunded": refunded,
+                "pursuing": pursuing,
+                "unconfirmed": unconfirmed,
+                "needs_you": pursuing,
             }
         )
     return {"reports": reports}

@@ -98,3 +98,10 @@ def test_card_confirmation_rejects_wrong_amount():
 def test_card_confirmation_none_price_cannot_confirm():
     text = "Your refund has been issued to your original payment method"
     assert has_card_confirmation(text, None, PHRASES) is False
+
+
+def test_card_confirmation_blank_phrase_does_not_falsely_pass():
+    # A misconfigured blank phrase must NOT make every reply "confirmed"
+    # (`"" in text` is always True). Reply has amount+card but no real phrase.
+    text = "$106.81 to your original payment method"
+    assert has_card_confirmation(text, 106.81, ["", "  "]) is False

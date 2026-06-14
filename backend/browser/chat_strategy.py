@@ -116,7 +116,9 @@ def has_success_phrase(text: str, phrases: list[str],
     lo = (text or "").lower()
     if any(g in lo for g in guard_terms):
         return False
-    return any(str(p).lower() in lo for p in phrases)
+    # Skip empty/blank phrases — `"" in lo` is always True, which would falsely
+    # pass every reply if `success_phrases` is misconfigured with a blank entry.
+    return any(p in lo for p in (str(x).strip().lower() for x in phrases) if p)
 
 
 def _contains_any(text: str, patterns: list[str]) -> bool:
@@ -152,7 +154,8 @@ def has_card_confirmation(text: str, price: float | None,
     lo = (text or "").lower()
     if any(g in lo for g in guard_terms):
         return False
-    if not any(str(p).lower() in lo for p in phrases):
+    # Skip empty phrases (a blank entry would match every reply via `"" in lo`).
+    if not any(p in lo for p in (str(x).strip().lower() for x in phrases) if p):
         return False
     if price is None:
         return False
