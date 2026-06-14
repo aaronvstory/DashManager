@@ -69,12 +69,17 @@ def _scope_dict(bucket: str | None, ids: list[int] | None) -> dict:
 # ── run a RunManager pass to completion (the await-the-task gotcha) ───────────
 
 async def _run_pass(scope: dict, strategy: str, headless: bool) -> int:
-    """Start a RunManager pass and AWAIT its background task to completion."""
-    from backend.runner import RunManager
-    rm = RunManager()
-    run_id = await rm.start(scope, strategy, headless=headless)
-    if rm._task is not None:
-        await rm._task
+    """Start a pass on the SHARED RunManager and AWAIT it to completion.
+
+    Use the module-global `manager` (not a fresh RunManager) so the CLI and the
+    web UI share one run-lifecycle: `start()` raises if a run is already active
+    (mutual exclusion — no two concurrent runs fighting over the same profiles),
+    and the web UI's "run active" / /api/runs/active reflect the CLI's run.
+    """
+    from backend.runner import manager
+    run_id = await manager.start(scope, strategy, headless=headless)
+    if manager._task is not None:
+        await manager._task
     return run_id
 
 
