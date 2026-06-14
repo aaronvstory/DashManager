@@ -72,6 +72,10 @@ const REFUND_STATUS: Record<RefundStatus, { label: string; className: string }> 
     label: "Remake",
     className: "border-orange-500/30 bg-orange-500/10 text-orange-600 dark:text-orange-400",
   },
+  unconfirmed: {
+    label: "⚠ Unconfirmed",
+    className: "border-amber-500/40 bg-amber-500/15 font-semibold text-amber-600 dark:text-amber-400",
+  },
   unknown: {
     label: "Unknown",
     className: "border-zinc-500/25 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400",

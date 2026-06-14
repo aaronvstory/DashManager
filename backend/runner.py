@@ -31,6 +31,54 @@ def _amounts_text(prices: list[float | None]) -> str:
     return ", ".join(parts[:-1]) + " and " + parts[-1]
 
 
+# A detect-only re-check reopens the receipt; its reading is the SOLE code
+# authority that can promote a tentative state to `refunded`. But a transient
+# unreadable receipt (→ `unknown`) must never REGRESS a stronger known state,
+# and an agent-promised `unconfirmed` must only become `refunded` on a positive
+# `refunded` reading — not on an inconclusive one. This pure helper encodes
+# that no-silent-regression rule so it's unit-testable without a browser.
+_STATE_RANK = {
+    RefundStatus.unknown: 0,
+    RefundStatus.unchecked: 0,
+    RefundStatus.not_refunded: 1,
+    RefundStatus.remake: 1,
+    RefundStatus.partial: 1,
+    RefundStatus.pending_claim: 2,
+    RefundStatus.unconfirmed: 3,
+    RefundStatus.refunded: 4,
+}
+
+
+def reconcile_detect_status(current: str | None,
+                            detected: RefundStatus) -> RefundStatus:
+    """Pure: what status should a detect re-check WRITE, given the stored one?
+
+    Rules (fail toward not-losing-proof):
+      - A positive `refunded` reading always wins (the receipt now proves it —
+        this is how `unconfirmed`/`pending_claim` get promoted legitimately).
+      - An inconclusive `unknown`/`unchecked` reading NEVER overwrites a
+        stronger stored state (transient unreadable receipt ≠ regression).
+      - `unconfirmed` is only ever cleared by a `refunded` reading; a later
+        `not_refunded`/`partial` reading keeps it `unconfirmed` (a human still
+        needs to reconcile what the agent promised vs. what posted).
+      - Otherwise the fresh reading wins (e.g. not_refunded → pending_claim).
+    """
+    if detected == RefundStatus.refunded:
+        return detected
+    try:
+        cur = RefundStatus(current) if current else RefundStatus.unchecked
+    except ValueError:
+        cur = RefundStatus.unchecked
+    if detected in (RefundStatus.unknown, RefundStatus.unchecked):
+        return cur  # never downgrade on an inconclusive read
+    if cur == RefundStatus.unconfirmed:
+        return cur  # only a `refunded` read (handled above) clears unconfirmed
+    # Don't let a fresh weak read clobber a strictly stronger stored state.
+    if _STATE_RANK.get(detected, 0) < _STATE_RANK.get(cur, 0):
+        return cur
+    return detected
+
+
 class RunManager:
     def __init__(self) -> None:
         self._task: asyncio.Task | None = None
@@ -210,7 +258,7 @@ class RunManager:
             await db.clear_in_progress_orders(cid)
             # Orders needing a CHAT (not_refunded/partial/remake) and orders to
             # SELF-CLAIM (pending_claim) are routed differently.
-            problems: list[tuple[int, Any]] = []
+            problems: list[tuple[int, Any, bool]] = []
             claimables: list[tuple[int, Any]] = []
             for so in scraped:
                 if self._stop.is_set():
@@ -266,23 +314,43 @@ class RunManager:
                     emit("log", {"level": "error",
                                  "message": f"receipt check failed: {exc}"})
                     continue
-                await db.update_order_refund(oid, rr.status.value,
-                                             rr.total_amount, rr.refund_amount)
+                # No-silent-regression: reconcile the fresh reading with the
+                # stored state so a transient unreadable receipt can't downgrade
+                # a known refund, and `unconfirmed` is only promoted by a
+                # positive `refunded` reading (the receipt proving it).
+                prev = await db.query_one(
+                    "SELECT refund_status FROM orders WHERE id=?", (oid,))
+                write_status = reconcile_detect_status(
+                    prev.get("refund_status") if prev else None, rr.status)
+                # Only record a refund AMOUNT when we positively read `refunded`;
+                # otherwise leave amount null so the UI never shows a dollar
+                # figure we haven't proven landed on the card.
+                amt = (rr.refund_amount
+                       if write_status == RefundStatus.refunded else None)
+                await db.update_order_refund(oid, write_status.value,
+                                             rr.total_amount, amt)
                 await db.add_run_order(run_id, oid, cid,
-                                       refund_status=rr.status.value)
+                                       refund_status=write_status.value)
                 emit("order_checked", {"order_id": oid,
-                                       "refund_status": rr.status.value,
+                                       "refund_status": write_status.value,
                                        "total_amount": rr.total_amount,
-                                       "refund_amount": rr.refund_amount})
+                                       "refund_amount": amt})
                 await self._bump(stats, "checked")
-                if rr.status == RefundStatus.pending_claim:
+                # Branch on the WRITTEN (reconciled) state so a no-regression
+                # decision is honoured downstream too. An `unconfirmed` order
+                # (agent-promised or claim-ambiguous) is NOT re-claimed/re-chatted
+                # automatically — it needs a human, so it falls through to manual.
+                if write_status == RefundStatus.pending_claim:
                     claimables.append((oid, so))
-                elif rr.status in (RefundStatus.not_refunded,
-                                   RefundStatus.partial, RefundStatus.remake):
+                elif write_status in (RefundStatus.not_refunded,
+                                      RefundStatus.partial, RefundStatus.remake):
                     await self._bump(stats, "not_refunded")
                     # Carry the remake flag for the chat to call out.
                     problems.append(
-                        (oid, so, rr.status == RefundStatus.remake))
+                        (oid, so, write_status == RefundStatus.remake))
+                elif write_status == RefundStatus.unconfirmed:
+                    await self._bump(stats, "unconfirmed")
+                    await self._bump(stats, "manual")
 
             if strategy_name == "none" or self._stop.is_set():
                 pass  # detect-only mode: never claim or chat
@@ -329,10 +397,22 @@ class RunManager:
         emit("claim_outcome", {"order_id": oid, "outcome": result.outcome,
                                "amount": result.amount,
                                "to_original_payment": result.to_original_payment})
-        if result.outcome == "success":
+        if result.outcome == "success" and result.confirmed \
+                and result.to_original_payment:
+            # ONLY a positively-confirmed-to-card claim sets `refunded`. The
+            # extra confirmed/to_original guards are belt-and-suspenders: even
+            # if a future change loosens claim_succeeded, the runner will not
+            # write `refunded` without positive card proof.
             await self._bump(stats, "claims_won")
             await db.update_order_refund(
                 oid, RefundStatus.refunded.value, result.amount, result.amount)
+        elif result.outcome in ("unconfirmed", "wrong_method"):
+            # Money may have moved but we could NOT prove it went to the card —
+            # mark UNCONFIRMED (a loud "needs human" state), never refunded.
+            await self._bump(stats, "unconfirmed")
+            await self._bump(stats, "manual")
+            await db.update_order_refund(
+                oid, RefundStatus.unconfirmed.value, result.amount, None)
         else:
             # A failed self-claim is escalated for a human to look at.
             await self._bump(stats, "manual")
@@ -429,9 +509,19 @@ class RunManager:
                                   "agent_reached": agent_reached})
             final_outcome = outcome
             if outcome == "success":
+                # ZERO TOLERANCE: a chat "success" is the AGENT'S say-so — the
+                # most hallucination-prone signal there is. An agent promise is
+                # NOT money on the card yet (chat refunds often post hours/days
+                # later, if at all). So we do NOT write `refunded` here; we mark
+                # `unconfirmed` (agent confirmed, receipt not yet verified) and
+                # let a human — or a later detect-only re-check run that reopens
+                # the receipt — promote it to `refunded` once the Refund -$X
+                # line actually appears. The verbatim agent confirmation is
+                # already captured in the chat transcript as the audit proof.
                 await self._bump(stats, "chats_won")
+                await self._bump(stats, "unconfirmed")
                 await db.update_order_refund(
-                    oid, RefundStatus.refunded.value, so.price, so.price)
+                    oid, RefundStatus.unconfirmed.value, so.price, None)
                 return
             if outcome in ("blocked", "review_blocked"):
                 await self._bump(stats, "blocked")

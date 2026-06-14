@@ -36,6 +36,11 @@ const REFUND_STYLES: Record<RefundStatus, { label: string; className: string }> 
     className:
       "border-orange-500/25 bg-orange-500/10 text-orange-600 dark:text-orange-400",
   },
+  unconfirmed: {
+    label: "⚠ Unconfirmed",
+    className:
+      "border-amber-500/40 bg-amber-500/15 font-semibold text-amber-600 dark:text-amber-400",
+  },
   unknown: {
     label: "Unknown",
     className: "border-border bg-muted text-muted-foreground",

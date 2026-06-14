@@ -49,11 +49,20 @@ class ClaimResult:
 
 
 def claim_succeeded(receipt_text: str, cfg: dict[str, Any]) -> ClaimResult:
-    """Pure: did the post-confirm receipt prove a refund to the original card?
+    """Pure: did the post-confirm receipt PROVE a refund to the original card?
 
-    Success requires BOTH a real ``Refund -$X`` line (the detector says
-    refunded/partial) AND an original-payment banner — a credits refund or a
-    lingering claim screen is NOT success. ``cfg`` is the refund_signal dict.
+    ZERO TOLERANCE for false positives — we are confirming real money. Success
+    (``outcome="success"``, ``confirmed=True``) requires BOTH:
+      1. a real ``Refund -$X`` line (detector says refunded/partial), AND
+      2. a positive original-payment banner (``CLAIM_SUCCESS_TEXTS``).
+
+    Anything short of that positive card proof does NOT pass:
+      - refund line but CREDITS                  → ``wrong_method`` (money to credits)
+      - refund line but NO card banner (ambiguous) → ``unconfirmed`` (human verifies)
+      - no refund line at all                    → ``failed``
+    We deliberately fail toward caution: a real refund mislabelled
+    ``unconfirmed`` only costs a re-check; a non-card refund mislabelled
+    ``success`` costs the money. ``cfg`` is the refund_signal dict.
     """
     lo = (receipt_text or "").lower()
     to_original = any(t in lo for t in CLAIM_SUCCESS_TEXTS)
@@ -65,6 +74,7 @@ def claim_succeeded(receipt_text: str, cfg: dict[str, Any]) -> ClaimResult:
     rr = detect(receipt_text, cfg)
     refunded = rr.status in (RefundStatus.refunded, RefundStatus.partial)
     if refunded and to_original:
+        # The ONLY success path: refund line AND positive card confirmation.
         return ClaimResult(outcome="success", amount=rr.refund_amount,
                            to_original_payment=True, confirmed=True)
     if refunded and credits_only:
@@ -73,10 +83,15 @@ def claim_succeeded(receipt_text: str, cfg: dict[str, Any]) -> ClaimResult:
                            to_original_payment=False, confirmed=False,
                            error="refund posted as credits, not original card")
     if refunded:
-        # Money moved and no credits signal — accept the refund line, but note
-        # the original-payment banner wasn't positively confirmed.
-        return ClaimResult(outcome="success", amount=rr.refund_amount,
-                           to_original_payment=False, confirmed=True)
+        # Money moved but we did NOT positively see "to original payment
+        # method". Could be card, could be credits worded differently, could be
+        # partial. We REFUSE to guess — escalate as unconfirmed so a human
+        # reopens the receipt. (This used to optimistically return success;
+        # that is exactly the hallucination we now forbid.)
+        return ClaimResult(outcome="unconfirmed", amount=rr.refund_amount,
+                           to_original_payment=False, confirmed=False,
+                           error="refund line seen but card destination not "
+                                 "positively confirmed — needs human verify")
     return ClaimResult(outcome="failed", amount=rr.total_amount,
                        to_original_payment=to_original, confirmed=False)
 

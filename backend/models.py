@@ -38,6 +38,14 @@ class RefundStatus(StrEnum):
     # to chat like not_refunded, but flagged so the chat calls out the remake
     # ("an automatic remake I never asked for").
     remake = "remake"
+    # ZERO-TOLERANCE state: a refund action ran (claim confirmed, or an agent
+    # said something), but we could NOT positively verify "Refund -$X to your
+    # original payment method" on the receipt. NEVER treat as done — a human
+    # must confirm. We fail toward caution: a real refund mislabelled
+    # unconfirmed costs a re-check; a credits/partial/none mislabelled
+    # `refunded` costs real money. So anything short of positive card proof
+    # lands here, not in `refunded`.
+    unconfirmed = "unconfirmed"
     unknown = "unknown"          # unparseable — never silently pass
 
 

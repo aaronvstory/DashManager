@@ -113,7 +113,7 @@ async def _index_model(out_dir: Path) -> dict[str, Any]:
 
 def _summarize(rows: list[dict[str, Any]]) -> dict[str, int]:
     s = {"customers": len(rows), "orders": 0, "refunded": 0,
-         "pursuing": 0, "no_orders": 0, "needs_you": 0,
+         "pursuing": 0, "unconfirmed": 0, "no_orders": 0, "needs_you": 0,
          "active": 0}
     for c in rows:
         if c.get("session_status") == "active":
@@ -126,6 +126,10 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, int]:
             st = o.get("refund_status", "unchecked")
             if st == "refunded":
                 s["refunded"] += 1
+            elif st == "unconfirmed":
+                # Tracked separately AND as pursuing — it is NOT done.
+                s["unconfirmed"] += 1
+                s["pursuing"] += 1
             elif st in ("not_refunded", "partial", "pending_claim", "remake"):
                 s["pursuing"] += 1
             if _order_needs_you(o):
@@ -136,11 +140,14 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, int]:
 def _order_needs_you(o: dict[str, Any]) -> bool:
     st = o.get("refund_status", "unchecked")
     if st == "refunded":
-        return False
+        return False  # only a receipt-proven refund is truly done
+    # ZERO-TOLERANCE: `unconfirmed` ALWAYS needs a human — an agent promise or a
+    # claim we couldn't prove to the card is not money in hand. A successful
+    # chat now lands the order in `unconfirmed` (not `refunded`), so it still
+    # surfaces here until a detect re-check proves the Refund -$X line.
+    if st == "unconfirmed":
+        return True
     if st in ("not_refunded", "partial", "pending_claim", "remake", "unknown"):
-        for ch in o.get("chats", []):
-            if ch.get("outcome") == "success":
-                return False
         return True
     return False
 
@@ -617,6 +624,7 @@ def _refund_pill(status: str) -> str:
         "partial": ("warn", "Partial"),
         "pending_claim": ("warn", "Claimable"),
         "remake": ("warn", "Remake"),
+        "unconfirmed": ("alert", "⚠ Unconfirmed"),
         "unknown": ("muted", "Unknown"),
         "unchecked": ("muted", "Unchecked"),
     }

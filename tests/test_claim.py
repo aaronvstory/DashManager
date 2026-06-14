@@ -37,13 +37,17 @@ def test_claim_success_to_original():
     assert r.confirmed is True
 
 
-def test_claim_success_refund_line_without_banner():
-    # Money moved (Refund line) even if the banner text isn't visible.
+def test_claim_refund_line_without_banner_is_unconfirmed():
+    # ZERO TOLERANCE: a Refund line WITHOUT a positive original-payment banner
+    # is NOT success — we can't prove it went to the card (could be partial,
+    # credits worded differently, etc.). It must surface as `unconfirmed` for a
+    # human to verify, never silently pass as a won refund.
     r = claim_succeeded(REFUNDED_NO_BANNER, CFG)
-    assert r.outcome == "success"
+    assert r.outcome == "unconfirmed"
     assert r.amount == 112.24
     assert r.to_original_payment is False
-    assert r.confirmed is True
+    assert r.confirmed is False
+    assert r.error  # carries the "needs human verify" reason
 
 
 def test_claim_failed_still_pending():

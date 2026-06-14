@@ -124,6 +124,46 @@ def _contains_any(text: str, patterns: list[str]) -> bool:
     return any(str(p).lower() in lo for p in patterns if p)
 
 
+# Tokens that positively assert the destination is the ORIGINAL CARD (not
+# credits). Used by the strictest gate; mirrors the receipt-level
+# CLAIM_SUCCESS_TEXTS intent. Kept here so the strategy stays browser-free.
+_CARD_DEST_TERMS = (
+    "original payment", "original card", "original form of payment",
+    "card you used", "back to your card", "to your card",
+    "card you paid with", "same card",
+)
+
+
+def has_card_confirmation(text: str, price: float | None,
+                          phrases: list[str],
+                          guard_terms: tuple[str, ...] = CREDIT_GUARD_TERMS
+                          ) -> bool:
+    """Pure, STRICT: does this agent reply confirm THIS amount to the CARD?
+
+    The zero-tolerance bar for an agent confirmation: ALL of
+      1. a success phrase, AND
+      2. no credit term (the guard), AND
+      3. the specific dollar ``price`` named in the reply (e.g. "$106.81"), AND
+      4. a positive original-card destination term.
+    A reply missing any of these is NOT a card confirmation — the caller should
+    keep it as `unconfirmed`, never `refunded`. ``price`` of None can't be
+    amount-matched, so it returns False (forces human verification).
+    """
+    lo = (text or "").lower()
+    if any(g in lo for g in guard_terms):
+        return False
+    if not any(str(p).lower() in lo for p in phrases):
+        return False
+    if price is None:
+        return False
+    # Match the amount in common renderings: "$106.81", "106.81", "$106.8" is
+    # NOT enough (require the exact two-decimal figure).
+    amt = f"{price:.2f}"
+    if amt not in lo and f"${amt}" not in lo:
+        return False
+    return any(t in lo for t in _CARD_DEST_TERMS)
+
+
 def classify_agent_turn(text: str, cfg: dict[str, Any]) -> str:
     """Pure: what does the latest agent reply call for?
 
