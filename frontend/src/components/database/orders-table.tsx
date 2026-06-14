@@ -1,4 +1,5 @@
-import { ExternalLink, Package } from "lucide-react"
+import { Fragment, useState } from "react"
+import { ChevronRight, ExternalLink, MessageSquareText, Package } from "lucide-react"
 import {
   Table,
   TableBody,
@@ -7,9 +8,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { ChatTranscript } from "@/components/history/chat-transcript"
 import type { Order } from "@/lib/types"
 import { parseDbTimestamp } from "@/components/customers/helpers"
-import { OrderStatusBadge, RefundStatusBadge } from "./order-badges"
+import { cn } from "@/lib/utils"
+import { OrderStatusBadge, RefundStatusBadge, ResolutionBadge } from "./order-badges"
 
 function money(value: number | null | undefined): string {
   return typeof value === "number" ? `$${value.toFixed(2)}` : "—"
@@ -30,7 +33,79 @@ function checkedAgo(raw: string | null): string {
   }
 }
 
+/** An order has an audit trail worth expanding when it has a chat or a claim. */
+function hasTrail(o: Order): boolean {
+  return (o.chats?.length ?? 0) > 0 || (o.claims?.length ?? 0) > 0
+}
+
+const COLSPAN = 7
+
+function OrderTrail({ order }: { order: Order }) {
+  const chats = order.chats ?? []
+  const claims = order.claims ?? []
+  return (
+    <div className="space-y-4 px-4 py-4">
+      {order.resolution?.confirmation ? (
+        <div className="flex items-start gap-2.5 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.06] px-3.5 py-2.5">
+          <ResolutionBadge label={order.resolution.label} />
+          <p className="min-w-0 flex-1 text-sm leading-relaxed text-foreground/80">
+            {order.resolution.confirmation}
+          </p>
+        </div>
+      ) : null}
+
+      {claims.map((c) => (
+        <div
+          key={`claim-${c.id}`}
+          className="rounded-lg border border-border/60 bg-card/40 px-3.5 py-2.5 text-sm"
+        >
+          <div className="flex items-center gap-2 font-medium">
+            <span className="text-muted-foreground">Self-claim</span>
+            <span
+              className={cn(
+                "rounded px-1.5 py-0.5 text-xs",
+                c.confirmed
+                  ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                  : "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+              )}
+            >
+              {c.confirmed ? "confirmed" : c.outcome}
+            </span>
+          </div>
+          <p className="mt-1 text-muted-foreground">
+            {money(c.amount)}{" "}
+            {c.to_original_payment ? "to original card" : "(method unclear)"}
+          </p>
+        </div>
+      ))}
+
+      {chats.map((chat) => (
+        <div
+          key={`chat-${chat.id}`}
+          className="overflow-hidden rounded-xl border border-border/60 bg-card/40"
+        >
+          <div className="flex items-center gap-2 border-b border-border/60 px-3.5 py-2 text-xs text-muted-foreground">
+            <MessageSquareText className="size-3.5" />
+            Support chat
+            {chat.agent_reached ? (
+              <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-emerald-600 dark:text-emerald-400">
+                agent reached
+              </span>
+            ) : null}
+            {chat.outcome ? (
+              <span className="ml-auto font-medium">{chat.outcome}</span>
+            ) : null}
+          </div>
+          <ChatTranscript messages={chat.messages ?? []} />
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export function OrdersTable({ orders }: { orders: Order[] }) {
+  const [openId, setOpenId] = useState<number | null>(null)
+
   if (orders.length === 0) {
     return (
       <div className="flex items-center gap-2 rounded-lg border border-dashed border-border/60 bg-muted/20 px-3 py-4 text-xs text-muted-foreground">
@@ -45,65 +120,89 @@ export function OrdersTable({ orders }: { orders: Order[] }) {
       <Table>
         <TableHeader>
           <TableRow className="bg-muted/40 hover:bg-muted/40">
-            <TableHead className="pl-3">Store</TableHead>
-            <TableHead>Description</TableHead>
-            <TableHead className="text-right">Items</TableHead>
-            <TableHead className="text-right">Price</TableHead>
+            <TableHead className="w-8 pl-3" />
+            <TableHead>Store</TableHead>
             <TableHead>Order status</TableHead>
             <TableHead>Refund</TableHead>
+            <TableHead>How</TableHead>
             <TableHead className="text-right">Total</TableHead>
-            <TableHead className="text-right">Refunded</TableHead>
-            <TableHead className="pr-3 text-right">Checked</TableHead>
+            <TableHead className="pr-3 text-right">Refunded</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {orders.map((o) => (
-            <TableRow key={o.id}>
-              <TableCell className="pl-3 font-medium">
-                {o.receipt_url ? (
-                  <a
-                    href={o.receipt_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 hover:text-primary"
-                  >
-                    {o.store_name || "Order"}
-                    <ExternalLink className="size-3 text-muted-foreground" />
-                  </a>
-                ) : (
-                  o.store_name || "Order"
-                )}
-              </TableCell>
-              <TableCell className="max-w-56 truncate text-muted-foreground">
-                {o.description || "—"}
-              </TableCell>
-              <TableCell className="text-right text-muted-foreground tabular-nums">
-                {o.items_count ?? "—"}
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {money(o.price)}
-              </TableCell>
-              <TableCell>
-                <OrderStatusBadge
-                  status={o.order_status}
-                  statusText={o.status_text}
-                  dasherName={o.dasher_name}
-                />
-              </TableCell>
-              <TableCell>
-                <RefundStatusBadge status={o.refund_status} />
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {money(o.total_amount)}
-              </TableCell>
-              <TableCell className="text-right tabular-nums text-emerald-600 dark:text-emerald-400">
-                {o.refund_amount ? money(o.refund_amount) : "—"}
-              </TableCell>
-              <TableCell className="pr-3 text-right text-xs text-muted-foreground">
-                {checkedAgo(o.last_checked_at)}
-              </TableCell>
-            </TableRow>
-          ))}
+          {orders.map((o) => {
+            const expandable = hasTrail(o)
+            const open = openId === o.id
+            return (
+              <Fragment key={o.id}>
+                <TableRow
+                  className={cn(
+                    expandable && "cursor-pointer",
+                    open && "bg-muted/30",
+                  )}
+                  onClick={
+                    expandable ? () => setOpenId(open ? null : o.id) : undefined
+                  }
+                >
+                  <TableCell className="pl-3">
+                    {expandable ? (
+                      <ChevronRight
+                        className={cn(
+                          "size-4 text-muted-foreground transition-transform",
+                          open && "rotate-90",
+                        )}
+                      />
+                    ) : null}
+                  </TableCell>
+                  <TableCell className="font-medium">
+                    {o.receipt_url ? (
+                      <a
+                        href={o.receipt_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="inline-flex items-center gap-1 hover:text-primary"
+                      >
+                        {o.store_name || "Order"}
+                        <ExternalLink className="size-3 text-muted-foreground" />
+                      </a>
+                    ) : (
+                      o.store_name || "Order"
+                    )}
+                    <span className="block text-xs text-muted-foreground">
+                      {checkedAgo(o.last_checked_at)}
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <OrderStatusBadge
+                      status={o.order_status}
+                      statusText={o.status_text}
+                      dasherName={o.dasher_name}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <RefundStatusBadge status={o.refund_status} />
+                  </TableCell>
+                  <TableCell>
+                    <ResolutionBadge label={o.resolution?.label ?? "—"} />
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {money(o.total_amount ?? o.price)}
+                  </TableCell>
+                  <TableCell className="pr-3 text-right tabular-nums text-emerald-600 dark:text-emerald-400">
+                    {o.refund_amount ? money(o.refund_amount) : "—"}
+                  </TableCell>
+                </TableRow>
+                {open ? (
+                  <TableRow className="hover:bg-transparent">
+                    <TableCell colSpan={COLSPAN} className="bg-muted/20 p-0">
+                      <OrderTrail order={o} />
+                    </TableCell>
+                  </TableRow>
+                ) : null}
+              </Fragment>
+            )
+          })}
         </TableBody>
       </Table>
     </div>

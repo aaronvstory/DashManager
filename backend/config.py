@@ -12,11 +12,12 @@ load_dotenv(BASE / ".env")
 DATA_DIR = BASE / "data"
 SESSIONS_DIR = DATA_DIR / "sessions"
 SCREENSHOTS_DIR = DATA_DIR / "screenshots"
+REPORTS_DIR = DATA_DIR / "reports"
 PROFILES_DIR = DATA_DIR / "profiles"  # one persistent Chromium profile per customer
 DB_PATH = DATA_DIR / "dashmanager.db"
 FRONTEND_DIST = BASE / "frontend" / "dist"
 
-for _d in (DATA_DIR, SESSIONS_DIR, SCREENSHOTS_DIR, PROFILES_DIR):
+for _d in (DATA_DIR, SESSIONS_DIR, SCREENSHOTS_DIR, REPORTS_DIR, PROFILES_DIR):
     _d.mkdir(parents=True, exist_ok=True)
 
 PORT = int(os.getenv("DASH_PORT", "8765"))

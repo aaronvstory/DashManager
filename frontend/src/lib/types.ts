@@ -30,6 +30,7 @@ export type RefundStatus =
   | "pending_claim" // self-service "Choose your refund method" — claim to original card
   | "not_refunded" // no Refund line — pursue, even if "canceled"
   | "remake" // DoorDash remade it without being asked; usually no auto-refund
+  | "unconfirmed" // ZERO-TOLERANCE: action ran but NOT proven to the card — needs human
   | "unknown" // unparseable — never silently pass
 
 export type RunStatus = "running" | "completed" | "stopped" | "error"
@@ -110,6 +111,22 @@ export interface Order {
   /** Assigned dasher's first name, e.g. "Erin". Present on the /customers/full view. */
   dasher_name?: string | null
   last_checked_at: string | null
+  /** Per-order audit trail — present on the enriched /customers/full view. */
+  chats?: Chat[]
+  claims?: Claim[]
+  /** HOW the refund happened + the proof line (derived server-side). */
+  resolution?: OrderResolution
+}
+
+/**
+ * Derived on the backend (report.resolution_method): the category of how an
+ * order's refund was achieved, plus the confirming proof line.
+ */
+export interface OrderResolution {
+  /** "Self-claim" | "Agent chat" | "Credits→card (agent chat)" | "Self-serve chat" | "Already refunded" | "Pending" | "—" */
+  label: string
+  /** Short proof: claim amount/destination, or the agent's confirming line. */
+  confirmation: string
 }
 
 /** A customer enriched with derived pills + their orders, from /customers/full. */
