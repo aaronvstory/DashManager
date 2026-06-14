@@ -403,6 +403,11 @@ async def list_claims_for_bucket(bucket_date: str) -> list[dict[str, Any]]:
 
 
 async def list_chats_for_bucket(bucket_date: str) -> list[dict[str, Any]]:
+    # order_id IS NOT NULL: the report view groups chats UNDER their order, so an
+    # order-less legacy chat (pre-V5 customer-keyed) has nowhere to attach and is
+    # intentionally excluded here. All chats since V5 are order-keyed, so today
+    # this drops zero rows; if old order-less chats ever need surfacing, add a
+    # per-customer "orphan chats" bucket to the report view.
     return await query(
         "SELECT ch.* FROM chats ch JOIN customers c ON ch.customer_id=c.id "
         "WHERE c.bucket_date=? AND ch.order_id IS NOT NULL ORDER BY ch.id",

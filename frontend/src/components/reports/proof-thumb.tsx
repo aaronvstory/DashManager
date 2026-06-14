@@ -6,22 +6,33 @@
 import { useState } from "react"
 import type { ProofShot } from "@/lib/types"
 
-export function ProofThumb({ shot }: { shot: ProofShot }) {
-  const [pos, setPos] = useState<{ x: number; y: number } | null>(null)
+interface HoverState {
+  x: number
+  y: number
+  vw: number
+  vh: number
+}
 
-  // Preview width adapts to the viewport so it never overflows on narrow screens.
-  const vw = typeof window !== "undefined" ? window.innerWidth : 1280
-  const vh = typeof window !== "undefined" ? window.innerHeight : 800
-  const previewW = Math.min(720, Math.max(280, vw - 48))
-  const previewH = Math.min(540, vh - 48)
+export function ProofThumb({ shot }: { shot: ProofShot }) {
+  // Captured ONCE on enter (cursor + viewport dims) so we don't re-render on
+  // every mousemove AND the clamping uses fresh dimensions even after a resize.
+  const [hover, setHover] = useState<HoverState | null>(null)
+
+  const previewW = hover ? Math.min(720, Math.max(280, hover.vw - 48)) : 720
+  const previewH = hover ? Math.min(540, hover.vh - 48) : 540
 
   return (
     <span
       className="relative inline-block"
-      // Position is set ONCE on enter (not on every mousemove) — avoids
-      // high-frequency re-renders; the small thumb doesn't need cursor tracking.
-      onMouseEnter={(e) => setPos({ x: e.clientX, y: e.clientY })}
-      onMouseLeave={() => setPos(null)}
+      onMouseEnter={(e) =>
+        setHover({
+          x: e.clientX,
+          y: e.clientY,
+          vw: window.innerWidth,
+          vh: window.innerHeight,
+        })
+      }
+      onMouseLeave={() => setHover(null)}
     >
       <span className="block w-[120px] cursor-zoom-in border border-border bg-muted/40">
         <img
@@ -35,13 +46,13 @@ export function ProofThumb({ shot }: { shot: ProofShot }) {
         </span>
       </span>
 
-      {pos ? (
+      {hover ? (
         <span
           className="pointer-events-none fixed z-50 border-2 border-primary bg-background shadow-[6px_6px_0_0_rgba(0,0,0,0.5)]"
           style={{
             // Anchor near the cursor, clamped to the viewport on both axes.
-            left: Math.max(12, Math.min(pos.x + 24, vw - previewW - 12)),
-            top: Math.max(12, Math.min(pos.y - 200, vh - previewH - 40)),
+            left: Math.max(12, Math.min(hover.x + 24, hover.vw - previewW - 12)),
+            top: Math.max(12, Math.min(hover.y - 200, hover.vh - previewH - 40)),
             width: previewW,
           }}
         >

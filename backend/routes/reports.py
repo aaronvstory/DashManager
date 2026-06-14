@@ -138,8 +138,10 @@ async def report_data(report_date: str) -> dict:
                "total_refunded": 0.0}
     for c in customers:
         c = dict(c)
+        # Strip every credential/secret the report view never needs
+        # (number_token is the api.cc SIM token — a credential — include it).
         for k in ("password", "storage_state_path", "cookies_path",
-                  "api_url", "mirror_hosts"):
+                  "api_url", "mirror_hosts", "number_token"):
             c.pop(k, None)
         orders = []
         for o in orders_by_cust.get(c["id"], []):
@@ -159,7 +161,10 @@ async def report_data(report_date: str) -> dict:
                 summary["pursuing"] += 1
             elif st in _PURSUING:
                 summary["pursuing"] += 1
-            if st != "refunded":
+            # needs_you mirrors the sidebar's definition exactly (pursuing set),
+            # so the native view and the report list never disagree. `unchecked`
+            # (not yet processed) is NOT "needs you" — it's just unscraped.
+            if st in _PURSUING:
                 summary["needs_you"] += 1
             orders.append(o)
         if not orders:
