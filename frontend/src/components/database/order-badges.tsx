@@ -23,6 +23,11 @@ const TONE = {
     "border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
   amber:
     "border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  // Stronger amber for the zero-tolerance ⚠ Unconfirmed warning — matches the
+  // emphasis in run/badges.tsx + history/badges.tsx so the warning reads with
+  // the same urgency in every view.
+  "alert-amber":
+    "border-amber-500/40 bg-amber-500/15 font-semibold text-amber-600 dark:text-amber-400",
   red: "border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-400",
   zinc: "border-border bg-muted/40 text-muted-foreground",
 } as const
@@ -44,7 +49,7 @@ const REFUND_LABEL: Record<RefundStatus, { tone: Tone; label: string }> = {
   remake: { tone: "amber", label: "Remake" },
   // ZERO-TOLERANCE: an action ran but we could NOT prove it landed on the
   // card. Loud amber warning — must read as "needs a human", never as done.
-  unconfirmed: { tone: "amber", label: "⚠ Unconfirmed" },
+  unconfirmed: { tone: "alert-amber", label: "⚠ Unconfirmed" },
   unchecked: { tone: "zinc", label: "Unchecked" },
   unknown: { tone: "amber", label: "Unknown" },
 }
@@ -130,7 +135,7 @@ export function RefundStatusBadge({ status }: { status: RefundStatus }) {
           "size-1.5 shrink-0 rounded-full",
           tone === "emerald"
             ? "bg-emerald-500"
-            : tone === "amber"
+            : tone === "amber" || tone === "alert-amber"
               ? "bg-amber-500"
               : tone === "red"
                 ? "bg-red-500"
