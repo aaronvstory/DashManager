@@ -15,7 +15,7 @@ function LoadingSkeleton() {
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-3">
         {[0, 1, 2].map((i) => (
-          <Card key={i} className="shadow-sm">
+          <Card key={i}>
             <CardContent className="space-y-2">
               <Skeleton className="h-3 w-20" />
               <Skeleton className="h-7 w-12" />
@@ -24,13 +24,13 @@ function LoadingSkeleton() {
         ))}
       </div>
       {[0, 1].map((i) => (
-        <Card key={i} className="shadow-sm">
+        <Card key={i}>
           <CardHeader className="border-b">
             <Skeleton className="h-5 w-48" />
           </CardHeader>
           <CardContent className="space-y-2.5">
             {[0, 1, 2].map((j) => (
-              <Skeleton key={j} className="h-12 w-full rounded-xl" />
+              <Skeleton key={j} className="h-12 w-full" />
             ))}
           </CardContent>
         </Card>
@@ -49,23 +49,16 @@ function StatCard({
   value: number
 }) {
   return (
-    <Card className="relative overflow-hidden shadow-sm">
-      {/* thin accent rail, the report-card gesture */}
-      <span
-        aria-hidden
-        className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-primary/60 via-primary/20 to-transparent"
-      />
+    <Card className="relative">
+      {/* solid red top rail — flat, no gradient */}
+      <span aria-hidden className="absolute inset-x-0 top-0 h-0.5 bg-primary" />
       <CardContent className="flex items-center gap-3.5">
-        <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 ring-1 ring-primary/15">
+        <div className="flex size-10 shrink-0 items-center justify-center border border-primary/30 bg-primary/10">
           <Icon className="size-4.5 text-primary" />
         </div>
         <div className="space-y-0.5">
-          <p className="text-[0.7rem] font-medium tracking-wide text-muted-foreground uppercase">
-            {label}
-          </p>
-          <p className="font-mono text-2xl font-semibold tracking-tight tabular-nums">
-            {value}
-          </p>
+          <p className="eyebrow">{label}</p>
+          <p className="num text-2xl font-bold">{value}</p>
         </div>
       </CardContent>
     </Card>

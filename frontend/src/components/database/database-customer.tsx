@@ -48,7 +48,7 @@ export function DatabaseCustomer({ customer }: { customer: FullCustomer }) {
   const orderCount = customer.orders.length
 
   return (
-    <div className="overflow-hidden rounded-xl border border-border/60 bg-card/40">
+    <div className="overflow-hidden border border-border bg-card">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}

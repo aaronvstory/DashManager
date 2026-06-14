@@ -22,7 +22,7 @@ export function DatabaseBucket({
   const orderTotal = customers.reduce((n, c) => n + c.orders.length, 0)
 
   return (
-    <Card className="shadow-sm">
+    <Card>
       <CardHeader className="border-b">
         <button
           type="button"

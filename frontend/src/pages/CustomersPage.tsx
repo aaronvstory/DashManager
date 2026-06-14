@@ -49,12 +49,8 @@ function LoadingSkeleton() {
 
 function EmptyHero({ onAdd }: { onAdd: () => void }) {
   return (
-    <Card className="relative flex flex-col items-center gap-2 overflow-hidden px-8 py-24 text-center">
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-x-0 -top-32 h-64 bg-primary/10 blur-3xl"
-      />
-      <div className="mb-4 flex size-14 items-center justify-center rounded-2xl bg-primary/10 ring-1 ring-primary/20">
+    <Card className="relative flex flex-col items-center gap-2 px-8 py-24 text-center">
+      <div className="mb-4 flex size-14 items-center justify-center border border-primary/30 bg-primary/10">
         <UserPlus className="size-6 text-primary" />
       </div>
       <h2 className="font-heading text-xl font-semibold">Add your first customer</h2>

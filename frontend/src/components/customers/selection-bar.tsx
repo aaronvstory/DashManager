@@ -28,7 +28,7 @@ export function SelectionBar({
 }) {
   return (
     <div className="fixed bottom-6 left-[calc(50%+7.5rem)] z-40 -translate-x-1/2 animate-in fade-in-0 slide-in-from-bottom-4">
-      <div className="flex items-center gap-3 rounded-2xl border border-primary/20 bg-card/95 py-2.5 pr-2.5 pl-4 shadow-2xl ring-1 ring-foreground/10 backdrop-blur-md">
+      <div className="flex items-center gap-3 border-2 border-primary bg-card py-2.5 pr-2.5 pl-4 shadow-[6px_6px_0_0_rgba(0,0,0,0.5)]">
         <div className="flex items-center gap-2 text-sm font-medium">
           <span className="flex size-6 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
             {count}

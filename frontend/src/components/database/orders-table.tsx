@@ -82,9 +82,9 @@ function OrderTrail({ order }: { order: Order }) {
       {chats.map((chat) => (
         <div
           key={`chat-${chat.id}`}
-          className="overflow-hidden rounded-xl border border-border/60 bg-card/40"
+          className="overflow-hidden border border-border bg-card"
         >
-          <div className="flex items-center gap-2 border-b border-border/60 px-3.5 py-2 text-xs text-muted-foreground">
+          <div className="flex items-center gap-2 border-b border-border px-3.5 py-2 text-xs text-muted-foreground">
             <MessageSquareText className="size-3.5" />
             Support chat
             {chat.agent_reached ? (
