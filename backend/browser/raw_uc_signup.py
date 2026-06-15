@@ -353,9 +353,49 @@ def _enter_otp(driver: Any, code: str) -> bool:
         else:
             return False
         time.sleep(1.0)
+        # Entering the code alone does NOT advance — the verify modal needs an
+        # explicit Submit click (mirrors cdp_signup._enter_otp). Without this the
+        # polling loop stalls and exhausts its retries (PR #28 review, critical).
+        _click_otp_submit(driver)
+        time.sleep(1.0)
         return True
     except Exception:
         return False
+
+
+# Verify-modal submit. "Submit" in the 2-step dialog, "Sign In" on the
+# passwordless OTP-first screen (mirrors cdp_signup's OTP_SUBMIT_SELECTORS).
+OTP_SUBMIT_XPATHS = (
+    "//div[@role='dialog']//button[contains(., 'Submit')]",
+    "//button[contains(., 'Submit')]",
+    "//button[contains(., 'Verify')]",
+    "//button[contains(., 'Sign In')]",
+    "//button[contains(., 'Continue')]",
+)
+
+
+def _click_otp_submit(driver: Any) -> bool:
+    """Click the verify modal's Submit/Verify button. Best-effort; never raises."""
+    from selenium.webdriver.common.by import By
+    try:
+        driver.implicitly_wait(0)
+    except Exception:
+        pass
+    try:
+        for xp in OTP_SUBMIT_XPATHS:
+            try:
+                for el in driver.find_elements(By.XPATH, xp):
+                    if el.is_displayed() and el.is_enabled():
+                        el.click()
+                        return True
+            except Exception:
+                continue
+    finally:
+        try:
+            driver.implicitly_wait(8)
+        except Exception:
+            pass
+    return False
 
 
 def _export_storage(driver: Any) -> dict[str, Any]:

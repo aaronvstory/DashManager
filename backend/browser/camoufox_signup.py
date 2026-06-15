@@ -267,15 +267,26 @@ async def signup_via_camoufox(
         # ── 4) Human dwell + mouse wander, THEN submit ──
         await _wander_mouse(page)
         await asyncio.sleep(random.uniform(0.8, 1.8))
+        # Try the primary submit, then the fallback selector — but only retry the
+        # fallback if it's a DIFFERENT locator than the one that just failed (no
+        # redundant double-click of the same button).
+        used_primary = False
         try:
             btn = page.locator(SEL_SUBMIT).first
-            if await btn.count() == 0:
+            if await btn.count() > 0:
+                used_primary = True
+            else:
                 btn = page.locator(SEL_SUBMIT_FALLBACK).first
             await btn.click()
         except Exception:
-            try:
-                await page.locator(SEL_SUBMIT_FALLBACK).first.click()
-            except Exception:
+            clicked = False
+            if used_primary:  # primary was the one that failed — try fallback
+                try:
+                    await page.locator(SEL_SUBMIT_FALLBACK).first.click()
+                    clicked = True
+                except Exception:
+                    pass
+            if not clicked:
                 result["outcome"] = "failed"
                 _emit("signup_no_submit", {})
                 return result
@@ -292,9 +303,9 @@ async def signup_via_camoufox(
             return result
 
         # wait for the verify/OTP step or a success redirect
-        deadline = asyncio.get_event_loop().time() + 40
+        deadline = asyncio.get_running_loop().time() + 40
         reached_verify = False
-        while asyncio.get_event_loop().time() < deadline:
+        while asyncio.get_running_loop().time() < deadline:
             url = page.url
             if any(m in url for m in SUCCESS_URL_MARKERS):
                 result["outcome"] = "created"
@@ -316,9 +327,9 @@ async def signup_via_camoufox(
         # ── 6) OTP step ──
         _emit("otp_waiting", {})
         await _shot(page, "verify")
-        started = asyncio.get_event_loop().time()
+        started = asyncio.get_running_loop().time()
         tried: set[str] = set()
-        while asyncio.get_event_loop().time() - started < otp_total_wait_s:
+        while asyncio.get_running_loop().time() - started < otp_total_wait_s:
             code = await _poll()
             if code and code not in tried:
                 tried.add(code)

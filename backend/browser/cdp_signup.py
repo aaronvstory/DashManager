@@ -627,8 +627,9 @@ def signup_via_cdp(identity: dict[str, Any], *,
         kwargs["mobile"] = True
         kwargs["device_metrics"] = IOS_METRICS
     else:
-        # Desktop: a modest, watchable window (don't fill the user's monitor).
-        kwargs["window_size"] = "1200,820"
+        # Desktop: the project-standard 1200x720 — fits the user's screen when
+        # resized (CLAUDE.md), watchable, doesn't fill the monitor.
+        kwargs["window_size"] = "1200,720"
 
     sb = None
     try:

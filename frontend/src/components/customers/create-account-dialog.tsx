@@ -170,8 +170,11 @@ export function CreateAccountDialog({
           of: num(d.of) ?? 1,
           created: num(d.created) ?? 0,
         })
-        // each new account in the batch restarts the per-account step list
-        resetProgress()
+        // each new account in the batch restarts the per-account step list —
+        // but KEEP batchInfo (we just set it above; clearing it would make the
+        // next account_created/account_failed think this is a single-account
+        // run and flip the dialog to a terminal state mid-batch).
+        resetProgress({ keepBatch: true })
         setPhase("running")
         break
       case "batch_done":
@@ -256,7 +259,7 @@ export function CreateAccountDialog({
     }
   }, [lastEvent, phase, queryClient, batchInfo])
 
-  function resetProgress() {
+  function resetProgress(opts?: { keepBatch?: boolean }) {
     setSteps({
       identity: "pending",
       number: "pending",
@@ -270,7 +273,9 @@ export function CreateAccountDialog({
     setOtpResent(false)
     setCreated(null)
     setError(null)
-    setBatchInfo(null)
+    // Per-account resets (mid-batch) preserve batch context; a full reset
+    // (close/idle) clears it.
+    if (!opts?.keepBatch) setBatchInfo(null)
   }
 
   function resetToIdle() {

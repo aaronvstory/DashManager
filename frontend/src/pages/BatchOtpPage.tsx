@@ -111,6 +111,15 @@ export default function BatchOtpPage() {
 
       {batchesQ.isPending ? (
         <Skeleton className="h-64 w-full" />
+      ) : batchesQ.isError ? (
+        <div className="flex flex-col items-center gap-3 border border-border bg-card px-8 py-16 text-center">
+          <p className="text-sm text-muted-foreground">
+            Couldn't load batches. Is the backend running?
+          </p>
+          <Button variant="outline" size="sm" onClick={() => void batchesQ.refetch()}>
+            Try again
+          </Button>
+        </div>
       ) : batches.length === 0 ? (
         <EmptyState
           icon={Layers}
@@ -148,6 +157,7 @@ export default function BatchOtpPage() {
             rows={rows}
             fetchedAt={fetchedAt}
             loading={otpQ.isPending}
+            errored={otpQ.isError}
             paused={paused}
           />
         </div>
@@ -160,14 +170,24 @@ function BatchOtpTable({
   rows,
   fetchedAt,
   loading,
+  errored,
   paused,
 }: {
   rows: BatchOtpRow[]
   fetchedAt: string | null
   loading: boolean
+  errored: boolean
   paused: boolean
 }) {
   if (loading) return <Skeleton className="h-64 w-full" />
+  if (errored) {
+    return (
+      <div className="border border-primary/40 bg-card px-6 py-12 text-center text-sm text-muted-foreground">
+        Couldn't fetch OTP codes for this batch — the backend or api.cc bridge
+        may be unavailable. Retrying on the next poll.
+      </div>
+    )
+  }
   if (rows.length === 0) {
     return (
       <div className="border border-border bg-card px-6 py-12 text-center text-sm text-muted-foreground">

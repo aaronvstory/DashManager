@@ -75,7 +75,9 @@ class HiddenDesktop:
         import pywintypes
         sa = pywintypes.SECURITY_ATTRIBUTES()
         sa.bInheritHandle = 1
-        # GENERIC_ALL so spawned processes can create windows on it.
+        # MAXIMUM_ALLOWED: grant every right the caller is permitted, so spawned
+        # processes can create windows on this desktop. (Broader/safer than a
+        # fixed GENERIC_ALL set — we want whatever access this token can get.)
         self._hdesk = self._svc.CreateDesktop(
             self.name, 0, self._con.MAXIMUM_ALLOWED, sa)
         return self
