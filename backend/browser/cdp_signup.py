@@ -56,6 +56,24 @@ CF_MARKERS = ("just a moment", "verify you are human",
               "performing security verification",
               "checking if the site connection is secure")
 
+# IP-REPUTATION block (NOT the fingerprint gate). If we see THIS, it's actually
+# GOOD news: we got PAST PerimeterX's behavioral/fingerprint check and only hit
+# an IP-rep block — the fix is to rotate the home IP (the user runs Mullvad on
+# their home network), then retry the SAME driver. Distinct outcome "ip_blocked"
+# so the caller tells the user to swap IP rather than re-engineering stealth.
+# The ENEMY is BOT_BLOCK_MARKERS ("something went wrong" = user_assessment_bot
+# fingerprint reject); ip_blocked is a milestone past it.
+IP_BLOCK_MARKERS = ("ip address has been blocked", "ip has been blocked",
+                    "your ip", "access from your ip",
+                    "blocked your ip", "unusual traffic from your")
+
+# iOS Safari UA — recipe B from the old working scripts (most-copied variant).
+IOS_UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) "
+          "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 "
+          "Mobile/15E148 Safari/604.1")
+# iPhone 14-class metrics "CSSWidth,CSSHeight,PixelRatio" for --mobile emulation.
+IOS_METRICS = "390,844,3"
+
 
 def resolve_proxy() -> str | None:
     """Best-effort residential proxy as ``user:pass@host:port`` (or None).
@@ -172,16 +190,67 @@ def clear_captcha_ladder(sb: Any, *, emit: Callable[[str, dict], None] | None,
     return not _page_has(sb, CF_MARKERS)
 
 
-def _press(sb: Any, selector: str, value: str) -> bool:
-    """Type a field at human speed via CDP press_keys (per-key delay)."""
+def _field_value(sb: Any, selector: str) -> str:
+    """Current .value of the first matching input (or '' if none/error)."""
     try:
-        sb.cdp.click(selector)
-        time.sleep(0.4)
-        sb.cdp.press_keys(selector, value)
-        time.sleep(0.4)
-        return True
+        el = sb.cdp.find_element(selector)
+        return (el.get_attribute("value") or "") if el else ""
     except Exception:
-        return False
+        return ""
+
+
+def _press(sb: Any, selector: str, value: str) -> bool:
+    """Type a field at human speed via CDP press_keys (per-key delay).
+
+    Returns True only if the value actually LANDED in the field — the mobile
+    signup form silently no-ops a press if the field isn't ready/visible yet, so
+    a return value that isn't checked = an empty required field (the live bug
+    that left First/Last name blank). Retries once after a short settle.
+    """
+    for attempt in range(2):
+        try:
+            sb.cdp.click(selector)
+            time.sleep(0.4)
+            sb.cdp.press_keys(selector, value)
+            time.sleep(0.4)
+            if _field_value(sb, selector).strip():
+                return True
+        except Exception:
+            pass
+        time.sleep(0.6)  # let a late-rendering field settle, then retry
+    return _field_value(sb, selector).strip() != ""
+
+
+# Multi-selector cascades — the mobile signup form doesn't always carry the same
+# autocomplete attrs as desktop, so try a few stable anchors per field and use
+# the first that exists. Keyed on autocomplete → name → id → placeholder, never
+# hashed styled-component classes.
+NAME_FIRST_SELECTORS = (
+    'input[autocomplete="given-name"]', 'input[name="firstName"]',
+    'input[name="first_name"]', 'input[id*="irst" i]',
+    'input[placeholder*="First" i]', 'input[aria-label*="First" i]')
+NAME_LAST_SELECTORS = (
+    'input[autocomplete="family-name"]', 'input[name="lastName"]',
+    'input[name="last_name"]', 'input[id*="ast" i]',
+    'input[placeholder*="Last" i]', 'input[aria-label*="Last" i]')
+
+
+def _press_any(sb: Any, selectors: tuple[str, ...], value: str) -> bool:
+    """Fill via the first selector that EXISTS *and* accepts the value.
+
+    Tries the next selector when a press doesn't land (a selector existing but
+    no-op'ing on press_keys is exactly how the first-name field failed), so we
+    don't give up after committing to one anchor.
+    """
+    for sel in selectors:
+        try:
+            if not sb.cdp.find_element(sel):
+                continue
+        except Exception:
+            continue
+        if _press(sb, sel, value):
+            return True
+    return False
 
 
 def _enter_otp(sb: Any, code: str) -> bool:
@@ -222,6 +291,7 @@ def signup_via_cdp(identity: dict[str, Any], *,
                    proxy: str | None = None,
                    headless: bool = False,
                    use_chromium: bool = False,
+                   ios_mobile: bool = False,
                    pre_submit_dwell_s: float = 0.0,
                    emit: Callable[[str, dict], None] | None = None,
                    otp_total_wait_s: float = 180.0,
@@ -229,10 +299,17 @@ def signup_via_cdp(identity: dict[str, Any], *,
                    ) -> dict[str, Any]:
     """Create one DoorDash account via CDP Mode. SYNC — run in a thread.
 
-    ``proxy`` is the ``user:pass@host:port`` residential gateway string (or
-    None to run direct — only for diagnostics; signup needs the proxy). Returns
-    the uc_signup-compatible dict. Captures a screenshot at each stage into
-    ``screenshot_dir`` when given (the audit trail the handoff asks for).
+    ``proxy`` is the ``user:pass@host:port`` residential gateway string, or
+    None to run DIRECT on the home IP — which is what EVERY old working script
+    actually did (recipe A/B). The proxy path kept hanging/blocking, so direct
+    home-IP is now first-class, not diagnostics-only.
+
+    ``ios_mobile`` reproduces the old recipe B: iOS Safari UA + iPhone mobile
+    emulation (Chrome device metrics). The most-copied historical variant.
+
+    Returns the uc_signup-compatible dict, with an extra possible outcome
+    ``"ip_blocked"`` — which is GOOD (past the fingerprint gate; just rotate the
+    home IP). Captures a screenshot at each stage into ``screenshot_dir``.
     """
     from seleniumbase import SB
 
@@ -266,6 +343,14 @@ def signup_via_cdp(identity: dict[str, Any], *,
         # Mintz: unbranded Chromium (no "Google Chrome" branding) is stealthier
         # and dodges some bot/reCAPTCHA fingerprints.
         kwargs["use_chromium"] = True
+    if ios_mobile:
+        # Recipe B: iOS Safari UA + Chrome mobile emulation at iPhone metrics.
+        kwargs["agent"] = IOS_UA
+        kwargs["mobile"] = True
+        kwargs["device_metrics"] = IOS_METRICS
+    else:
+        # Desktop: a modest, watchable window (don't fill the user's monitor).
+        kwargs["window_size"] = "1200,820"
 
     sb = None
     try:
@@ -280,13 +365,40 @@ def signup_via_cdp(identity: dict[str, Any], *,
             # clickable Turnstile — the PyAutoGUI rung would only hang the mouse.
             clear_captcha_ladder(sb, emit=emit, gui_captcha=False)
 
-            _press(sb, SEL_FIRST, identity.get("first_name", ""))
-            _press(sb, SEL_LAST, identity.get("last_name", ""))
-            _press(sb, SEL_EMAIL, identity.get("email", ""))
-            _press(sb, SEL_PHONE, phone10)
-            _press(sb, SEL_PASSWORD, identity.get("password", ""))
-            _emit("signup_form_filled", {})
+            # The mobile form no-ops the FIRST press_keys after each focus change
+            # (input handlers bind a beat late), so single-pass fill drops
+            # whichever field is typed first. Fix: define all fields, then make
+            # up to 3 passes, re-pressing only the ones whose .value is still
+            # empty — order-independent and self-healing.
+            FIELDS = [
+                ("first", NAME_FIRST_SELECTORS, identity.get("first_name", "")),
+                ("last", NAME_LAST_SELECTORS, identity.get("last_name", "")),
+                ("email", (SEL_EMAIL,), identity.get("email", "")),
+                ("phone", (SEL_PHONE,), phone10),
+                ("password", (SEL_PASSWORD,), identity.get("password", "")),
+            ]
+            fills = {k: (not val) for k, _sels, val in FIELDS}  # empty val = ok
+            for _pass in range(3):
+                for key, sels, val in FIELDS:
+                    if fills[key]:
+                        continue  # already landed
+                    fills[key] = _press_any(sb, sels, val)
+                if all(fills.values()):
+                    break
+                time.sleep(0.5)  # let late-binding fields settle, re-press
+            _emit("signup_form_filled", fills)
             _shot("02_filled")
+
+            # Don't submit a form with empty REQUIRED fields — that's what hit
+            # "First name is required" and dead-ended at signup_no_verify. Fail
+            # loudly with which field(s) didn't land so it's fixable, not silent.
+            missing = [k for k, v in fills.items() if not v]
+            if missing:
+                result["outcome"] = "failed"
+                result["fill_missing"] = missing
+                _emit("signup_fill_incomplete", {"missing": missing})
+                _shot("02b_fill_incomplete")
+                return result
 
             # Human dwell before submit — a real person pauses after typing the
             # last field. Instant submit is itself a bot tell.
@@ -308,10 +420,27 @@ def signup_via_cdp(identity: dict[str, Any], *,
             # unknown vs Mintz's read-only demos. Try the captcha ladder once
             # (the gate sometimes shows a CF interstitial we can clear), then
             # check for the hard bot-block body.
+            # IP-rep block = GOOD (past the fingerprint gate). Check it FIRST so
+            # we don't misreport it as the bot gate — the action differs: rotate
+            # the home IP and retry, not re-engineer stealth.
+            if _page_has(sb, IP_BLOCK_MARKERS):
+                result["outcome"] = "ip_blocked"
+                _emit("signup_ip_blocked",
+                      {"note": "PAST the fingerprint gate — rotate home IP "
+                               "(Mullvad) and retry"})
+                _shot("04_ip_blocked")
+                return result
             if _page_has(sb, BOT_BLOCK_MARKERS):
                 # Maybe a CF challenge we can clear — try the ladder, re-check.
                 clear_captcha_ladder(sb, emit=emit, gui_captcha=False)
                 time.sleep(2.0)
+            if _page_has(sb, IP_BLOCK_MARKERS):
+                result["outcome"] = "ip_blocked"
+                _emit("signup_ip_blocked",
+                      {"note": "PAST the fingerprint gate — rotate home IP "
+                               "(Mullvad) and retry"})
+                _shot("04_ip_blocked")
+                return result
             if _page_has(sb, BOT_BLOCK_MARKERS):
                 result["outcome"] = "bot_blocked"
                 _emit("signup_bot_blocked", {})
