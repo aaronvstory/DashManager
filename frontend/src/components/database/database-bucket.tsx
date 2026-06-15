@@ -20,6 +20,21 @@ export function DatabaseBucket({
   const [open, setOpen] = useState(defaultOpen)
   const bucketDate = parseBucketDate(date)
   const orderTotal = customers.reduce((n, c) => n + c.orders.length, 0)
+  // Day-level roll-up so a COLLAPSED bucket is still scannable.
+  let refundedTotal = 0
+  let recovered = 0
+  let needs = 0
+  for (const c of customers) {
+    for (const o of c.orders) {
+      if (o.refund_status === "refunded") {
+        refundedTotal += 1
+        recovered += o.refund_amount ?? 0
+      } else if (o.refund_status !== "unchecked") {
+        needs += 1
+      }
+    }
+  }
+  const allDone = orderTotal > 0 && refundedTotal === orderTotal
 
   return (
     <Card>
@@ -44,9 +59,28 @@ export function DatabaseBucket({
               Today
             </Badge>
           ) : null}
-          <span className="ml-auto text-xs text-muted-foreground tabular-nums">
-            {customers.length} customer{customers.length === 1 ? "" : "s"} ·{" "}
-            {orderTotal} order{orderTotal === 1 ? "" : "s"}
+          <span className="ml-auto flex items-center gap-3 text-xs tabular-nums">
+            <span className="text-muted-foreground">
+              {customers.length} cust · {orderTotal} ord
+            </span>
+            {orderTotal > 0 ? (
+              <span
+                className={cn(
+                  "num font-semibold",
+                  allDone ? "text-emerald-500" : "text-foreground",
+                )}
+              >
+                {refundedTotal}/{orderTotal} refunded
+              </span>
+            ) : null}
+            {recovered > 0 ? (
+              <span className="num text-emerald-500">${recovered.toFixed(2)}</span>
+            ) : null}
+            {needs > 0 ? (
+              <span className="border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-semibold text-amber-500">
+                {needs} open
+              </span>
+            ) : null}
           </span>
         </button>
       </CardHeader>

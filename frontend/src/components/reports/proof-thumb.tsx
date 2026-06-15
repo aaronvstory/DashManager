@@ -1,10 +1,15 @@
 /**
  * A proof-screenshot thumbnail that expands on HOVER — no click, no new window.
- * Hovering shows a large floating preview anchored near the cursor; moving off
- * hides it. Brutalist: hard-edged thumb, hard-edged popover, hairline border.
+ * The big preview appears after a deliberate dwell (HOVER_DELAY_MS) so it
+ * doesn't flash while the cursor merely passes over; moving off hides it
+ * immediately and cancels a pending open. Brutalist: hard edges, hairline
+ * border.
  */
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { ProofShot } from "@/lib/types"
+
+// Dwell before the zoom opens — user wants ~1.5s so it's intentional, not jumpy.
+const HOVER_DELAY_MS = 1500
 
 interface HoverState {
   x: number
@@ -17,22 +22,40 @@ export function ProofThumb({ shot }: { shot: ProofShot }) {
   // Captured ONCE on enter (cursor + viewport dims) so we don't re-render on
   // every mousemove AND the clamping uses fresh dimensions even after a resize.
   const [hover, setHover] = useState<HoverState | null>(null)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Clear any pending open if the component unmounts mid-dwell.
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current)
+  }, [])
 
   const previewW = hover ? Math.min(720, Math.max(280, hover.vw - 48)) : 720
   const previewH = hover ? Math.min(540, hover.vh - 48) : 540
 
+  function openAfterDelay(e: React.MouseEvent) {
+    const next: HoverState = {
+      x: e.clientX,
+      y: e.clientY,
+      vw: window.innerWidth,
+      vh: window.innerHeight,
+    }
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = setTimeout(() => setHover(next), HOVER_DELAY_MS)
+  }
+
+  function cancel() {
+    if (timer.current) {
+      clearTimeout(timer.current)
+      timer.current = null
+    }
+    setHover(null)
+  }
+
   return (
     <span
       className="relative inline-block"
-      onMouseEnter={(e) =>
-        setHover({
-          x: e.clientX,
-          y: e.clientY,
-          vw: window.innerWidth,
-          vh: window.innerHeight,
-        })
-      }
-      onMouseLeave={() => setHover(null)}
+      onMouseEnter={openAfterDelay}
+      onMouseLeave={cancel}
     >
       <span className="block w-[120px] cursor-zoom-in border border-border bg-muted/40">
         <img
