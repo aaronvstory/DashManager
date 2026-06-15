@@ -291,7 +291,8 @@ function Field({
   label,
   children,
 }: {
-  icon: typeof Globe
+  // Generic so any Lucide icon (Globe, ShieldCheck, Zap, …) is accepted.
+  icon: React.ComponentType<{ className?: string }>
   label: string
   children: React.ReactNode
 }) {

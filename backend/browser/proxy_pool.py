@@ -177,7 +177,9 @@ def _classify_geo(payload: dict[str, Any]) -> dict[str, str]:
     halves (ipify=ip, lumtest=geo), ``check_proxy`` MERGES both rather than
     treating either as complete. Unknown fields → "".
     """
-    ip = (payload.get("ip") or payload.get("query") or "").strip()
+    # str() guards against an IP-echo returning a non-string (int/null/nested)
+    # — calling .strip() on that would raise AttributeError mid-probe.
+    ip = str(payload.get("ip") or payload.get("query") or "").strip()
     country = (payload.get("country") or payload.get("country_code") or "")
     raw_geo = payload.get("geo")
     geo: dict[str, Any] = raw_geo if isinstance(raw_geo, dict) else {}

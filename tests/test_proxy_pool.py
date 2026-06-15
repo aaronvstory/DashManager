@@ -143,3 +143,11 @@ def test_classify_geo_bare_ipify_shape():
     geo = pp._classify_geo({"ip": "5.6.7.8"})
     assert geo["exit_ip"] == "5.6.7.8"
     assert geo["country"] == "" and geo["city"] == ""
+
+
+def test_classify_geo_non_string_ip_does_not_raise():
+    # An echo returning a non-string ip (int/null) must not blow up .strip().
+    geo = pp._classify_geo({"ip": 12345})
+    assert geo["exit_ip"] == "12345"
+    geo2 = pp._classify_geo({"ip": None, "query": None})
+    assert geo2["exit_ip"] == ""
