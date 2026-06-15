@@ -16,6 +16,7 @@ from backend.browser.driver import SessionExpiredError, handle_cloudflare
 from backend.browser.pacing import human_pause
 from backend.browser.selectors import (
     CANCELLED_BADGE_TEXTS,
+    CANCELLED_STATUS_TEXTS,
     PENDING_CLAIM_BADGE_TEXTS,
     REMAKE_BADGE_TEXTS,
     IN_PROGRESS_SECTION,
@@ -134,7 +135,9 @@ def parse_card_text(text: str) -> dict[str, Any]:
     items_count = int(items.group(1)) if items else None
 
     lowered = (text or "").lower()
-    cancelled = any(b in lowered for b in CANCELLED_BADGE_TEXTS)
+    # Use the broader status set so a short "Cancelled" badge on the list card
+    # still classifies the order as cancelled (not defaulted to completed).
+    cancelled = any(b in lowered for b in CANCELLED_STATUS_TEXTS)
     remake = any(b in lowered for b in REMAKE_BADGE_TEXTS)
     # Pending Refund / Pending Resolution card = a claimable refund (self-claim
     # to original card). These cards often lack a /orders/<uuid> link, so the

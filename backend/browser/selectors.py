@@ -60,6 +60,13 @@ ORDER_CARD_SELECTORS = [
 ]
 ORDER_LINK_SELECTOR = 'a[href*="/orders/"]'
 CANCELLED_BADGE_TEXTS = ["order cancelled", "order canceled"]
+# Broader set for CLASSIFYING a list card as cancelled. The orders-list card can
+# show a shorter badge ("Cancelled") than the receipt heading ("Order
+# Cancelled"), which caused cancelled orders to be mislabelled `completed`.
+# Kept separate from CANCELLED_BADGE_TEXTS (used for description-stripping) so a
+# bare "cancelled" token doesn't accidentally swallow a description line.
+CANCELLED_STATUS_TEXTS = ["order cancelled", "order canceled",
+                          "cancelled", "canceled"]
 # A remade/redelivered order's card may carry a remake badge — a remake
 # usually doesn't auto-refund, so flag it for the chat to call out.
 REMAKE_BADGE_TEXTS = ["remade", "remake", "reordered for you"]
