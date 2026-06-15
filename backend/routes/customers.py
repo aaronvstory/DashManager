@@ -328,6 +328,32 @@ async def otp_live(bucket_date: str | None = None, ids: str | None = None
             "fetched_at": datetime.now(timezone.utc).isoformat()}
 
 
+@router.get("/daisy-batches")
+async def daisy_batches() -> dict[str, Any]:
+    """List CustomerDaisy batches Claude created (named '<label> - claude'),
+    with per-account name/email/phone, for the in-app batch OTP view."""
+    from backend.daisy_batches import list_batches
+
+    daisy_cfg = await db.get_setting("daisy")
+    batches = await list_batches(daisy_root=daisy_cfg.get("root"))
+    return {"batches": batches}
+
+
+@router.get("/daisy-batch-otps")
+async def daisy_batch_otps(batch_id: str | None = None,
+                           batch_label: str | None = None) -> dict[str, Any]:
+    """Latest live OTP for each account in a CustomerDaisy batch (single pass,
+    pollable). Pass batch_id (preferred) or batch_label."""
+    from backend.daisy_batches import batch_otps
+
+    if not batch_id and not batch_label:
+        raise HTTPException(status_code=400,
+                            detail="batch_id or batch_label required")
+    daisy_cfg = await db.get_setting("daisy")
+    return await batch_otps(batch_id, batch_label,
+                            daisy_root=daisy_cfg.get("root"))
+
+
 class ReloginBody(BaseModel):
     headless: bool | None = None  # per-action override of the setting
 
