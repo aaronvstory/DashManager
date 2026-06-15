@@ -53,7 +53,9 @@ export default function DaisyPage() {
   })
 
   const del = useMutation({
-    mutationFn: (id: string) => api.del(`/daisy/${id}`),
+    // encode the id — CustomerDaisy ids are UUIDs, but guard against any that
+    // could contain /, ?, or # and target the wrong route.
+    mutationFn: (id: string) => api.del(`/daisy/${encodeURIComponent(id)}`),
     onSuccess: () => {
       toast.success("Deleted from CustomerDaisy")
       void qc.invalidateQueries({ queryKey: ["daisy"] })

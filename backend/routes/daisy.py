@@ -21,28 +21,37 @@ leave the local machine, and the export strips passwords (Slice 1).
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 from backend import db
 
+if TYPE_CHECKING:
+    from backend.daisy.bridge import DaisyBridge
+
 router = APIRouter()
 
 
-async def _bridge():
+async def _bridge() -> DaisyBridge:
     """Construct a DaisyBridge from the saved daisy settings (root + python)."""
     from backend.daisy.bridge import DaisyBridge
 
     cfg = await db.get_setting("daisy")
+    if not isinstance(cfg, dict):  # defensive — the default is always a dict
+        cfg = {}
     return DaisyBridge(root=cfg.get("root"), python=cfg.get("python") or None)
 
 
 async def _dashmanager_emails() -> set[str]:
-    """Emails already adopted into DashManager (the sync link key)."""
-    return {(c.get("email") or "").lower()
-            for c in await db.list_customers() if c.get("email")}
+    """Emails already adopted into DashManager (the sync link key).
+
+    Queries only the email column (not full customer rows — the table carries
+    large text fields we don't need just to build a lookup set).
+    """
+    rows = await db.query("SELECT email FROM customers WHERE email != ''")
+    return {(r.get("email") or "").lower() for r in rows if r.get("email")}
 
 
 # The worker's _normalize_row is intentionally COMPLETE (internal callers like
@@ -86,6 +95,10 @@ async def get_daisy_customer(customer_id: str) -> dict[str, Any]:
 
 
 class DaisyPatch(BaseModel):
+    # Reject unknown keys so a client can't think an unsupported field was
+    # applied (the worker also whitelists columns, but fail loud at the edge).
+    model_config = {"extra": "forbid"}
+
     first_name: str | None = None
     last_name: str | None = None
     full_name: str | None = None

@@ -140,6 +140,13 @@ async def test_patch_404(client, monkeypatch):
     assert r.status_code == 404
 
 
+async def test_patch_rejects_unknown_field(client, monkeypatch):
+    # extra="forbid": an unsupported key 422s instead of silently no-opping.
+    _patch_bridge(monkeypatch, _FakeBridge([], updated={"customer_id": "cd-1"}))
+    r = await client.patch("/api/daisy/cd-1", json={"customer_id": "HACK"})
+    assert r.status_code == 422
+
+
 async def test_delete(client, monkeypatch):
     _patch_bridge(monkeypatch, _FakeBridge([], deleted=True))
     r = await client.delete("/api/daisy/cd-1")
