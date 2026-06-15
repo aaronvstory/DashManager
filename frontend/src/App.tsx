@@ -3,6 +3,7 @@ import { AppLayout } from "@/components/app-layout"
 import { Toaster } from "@/components/ui/sonner"
 import BatchOtpPage from "@/pages/BatchOtpPage"
 import CustomersPage from "@/pages/CustomersPage"
+import DaisyPage from "@/pages/DaisyPage"
 import DatabasePage from "@/pages/DatabasePage"
 import HistoryPage from "@/pages/HistoryPage"
 import LiveOtpPage from "@/pages/LiveOtpPage"
@@ -17,6 +18,7 @@ export default function App() {
       <Routes>
         <Route element={<AppLayout />}>
           <Route index element={<CustomersPage />} />
+          <Route path="/daisy" element={<DaisyPage />} />
           <Route path="/database" element={<DatabasePage />} />
           <Route path="/run" element={<RunPage />} />
           <Route path="/otp" element={<LiveOtpPage />} />
