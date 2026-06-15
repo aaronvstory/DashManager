@@ -112,9 +112,13 @@ function num(v: unknown): number | null {
 export function CreateAccountDialog({
   open,
   onOpenChange,
+  initialBatch,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** When set, the dialog ADDS account(s) to this existing batch (join, not
+      mint) — pre-fills the label and sends batch_id on submit. */
+  initialBatch?: { batch_id: string; batch_label: string }
 }) {
   const queryClient = useQueryClient()
   const lastEvent = useRunStore((s) => s.lastEvent)
@@ -175,6 +179,12 @@ export function CreateAccountDialog({
       setLocation(locations[0].full_address)
     }
   }, [location, locations])
+
+  // When opened to ADD to an existing batch, pre-fill the label so the user
+  // sees which batch they're adding to (the batch_id is sent on submit).
+  useEffect(() => {
+    if (open && initialBatch) setBatchLabel(initialBatch.batch_label)
+  }, [open, initialBatch])
 
   useEffect(() => {
     if (!lastEvent) return
@@ -310,6 +320,9 @@ export function CreateAccountDialog({
     onOpenChange(next)
     if (!next) {
       resetToIdle()
+      // Clear the batch label so a re-open with no initialBatch starts blank
+      // (an add-to-batch label must not carry into a later plain create).
+      setBatchLabel("")
       setDate(new Date())
       setDateOpen(false)
     }
@@ -334,6 +347,8 @@ export function CreateAccountDialog({
       radius_miles: Number.isFinite(radiusMiles) ? radiusMiles : undefined,
       count: n,
       batch_label: batchLabel.trim() || undefined,
+      // Join the existing batch when the dialog was opened for that.
+      batch_id: initialBatch?.batch_id || undefined,
     }
     if (headless !== null) body.headless = headless
     try {

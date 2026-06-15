@@ -9,8 +9,9 @@
 
 import { useEffect, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { Copy, Layers, RadioTower, RefreshCw } from "lucide-react"
+import { Copy, Layers, RadioTower, RefreshCw, UserPlus } from "lucide-react"
 import { toast } from "sonner"
+import { CreateAccountDialog } from "@/components/customers/create-account-dialog"
 import { EmptyState } from "@/components/empty-state"
 import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
@@ -48,6 +49,7 @@ interface BatchOtpResponse {
 export default function BatchOtpPage() {
   const [batchId, setBatchId] = useState<string | null>(null)
   const [paused, setPaused] = useState(false)
+  const [addOpen, setAddOpen] = useState(false)
 
   const batchesQ = useQuery({
     queryKey: ["daisy-batches"],
@@ -88,6 +90,15 @@ export default function BatchOtpPage() {
         description="Live SMS codes for a Claude-created batch — pick a batch, then grab each account's code to log into a phone. Codes expire ~30s."
         actions={
           <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              onClick={() => setAddOpen(true)}
+              disabled={!selected}
+              title={selected ? `Add an account to ${selected.batch_label}` : "Pick a batch first"}
+            >
+              <UserPlus data-icon="inline-start" />
+              Add to batch
+            </Button>
             <Button
               variant={paused ? "default" : "outline"}
               size="sm"
@@ -162,6 +173,20 @@ export default function BatchOtpPage() {
           />
         </div>
       )}
+
+      {/* Add-one-to-batch: opens the create dialog seeded with this batch, so
+          the new account joins it (same batch_id) instead of starting a new
+          batch. */}
+      {selected ? (
+        <CreateAccountDialog
+          open={addOpen}
+          onOpenChange={setAddOpen}
+          initialBatch={{
+            batch_id: selected.batch_id,
+            batch_label: selected.batch_label,
+          }}
+        />
+      ) : null}
     </>
   )
 }

@@ -35,6 +35,11 @@ class CreateAccountBody(BaseModel):
     headless: bool | None = None        # per-action override of the setting
     count: int = 1                      # batch size (normal: 4-6)
     batch_label: str | None = None      # base label; ' - claude' is appended
+    # Join an EXISTING batch instead of minting a new one (add-one-to-batch):
+    # when batch_id is given, the new account(s) are stamped with it (and
+    # batch_label) so they cluster under that batch in CustomerDaisy + the
+    # in-app Batch OTP view. Omit to start a fresh batch (the default).
+    batch_id: str | None = None
 
 
 _create_task: asyncio.Task | None = None
@@ -192,6 +197,26 @@ async def start_login(body: LoginBody | None = None) -> dict[str, Any]:
     return {"started": True}
 
 
+def _resolve_batch(batch_id: str | None, batch_label: str | None,
+                   stamp: str) -> tuple[str, str]:
+    """Resolve (batch_id, batch_label) for a create run.
+
+    JOIN an existing batch when ``batch_id`` is given (add-one-to-batch);
+    otherwise mint a fresh ``claude_<stamp>`` id. The label always ends in the
+    user's '- claude' convention. Pure (testable) — ``stamp`` is passed in.
+    """
+    # Normalize first: a whitespace-only batch_id is NOT a real batch — treat
+    # it as absent (mint), not as a JOIN of "   ".
+    batch_id = (batch_id or "").strip() or None
+    if batch_id:
+        base = (batch_label or batch_id).strip()
+    else:
+        batch_id = f"claude_{stamp}"
+        base = (batch_label or f"batch {stamp}").strip()
+    label = base if base.endswith("- claude") else f"{base} - claude"
+    return batch_id, label
+
+
 async def _run_create_account(body: CreateAccountBody) -> None:
     from datetime import datetime, timezone
 
@@ -209,11 +234,11 @@ async def _run_create_account(body: CreateAccountBody) -> None:
                   else float(daisy_cfg.get("radius_miles", 5.0)))
         # Stamp a shared batch id/label so the run groups under one
         # '<label> - claude' batch in CustomerDaisy (and the in-app Batch OTP
-        # view). The '- claude' suffix is the user's naming convention.
+        # view). If body.batch_id is given we JOIN that existing batch
+        # (add-one-to-batch) rather than minting a new id.
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        base = (body.batch_label or f"batch {stamp}").strip()
-        batch_label = base if base.endswith("- claude") else f"{base} - claude"
-        batch_id = f"claude_{stamp}"
+        batch_id, batch_label = _resolve_batch(
+            body.batch_id, body.batch_label, stamp)
         # Send `of` (mirrors batch_progress/batch_done) so the dialog reads one
         # consistent key; keep `count` for back-compat.
         bus.publish("batch_started", {"of": count, "count": count,
