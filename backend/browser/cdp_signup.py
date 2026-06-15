@@ -364,7 +364,14 @@ def signup_via_cdp(identity: dict[str, Any], *,
             _shot("06_otp_timeout")
             return result
     except Exception as exc:  # noqa: BLE001 — surfaced to the caller as outcome
-        _emit("signup_error", {"error": f"{type(exc).__name__}: {exc}"[:200]})
+        err = f"{type(exc).__name__}: {exc}"[:200]
+        # A Chrome/SB init error can embed the --proxy-server value (creds).
+        # Redact the proxy password before it reaches any emit handler / UI.
+        if proxy and "@" in proxy:
+            pwd = proxy.split("@", 1)[0].rsplit(":", 1)[-1]
+            if pwd:
+                err = err.replace(pwd, "<redacted>")
+        _emit("signup_error", {"error": err})
         return result
 
 
@@ -406,8 +413,23 @@ def _export_storage(sb: Any) -> dict[str, Any]:
                 ck["expires"] = int(expires)
             except (TypeError, ValueError):
                 pass
-        ss = (_g("sameSite", _g("same_site", "Lax")) or "Lax")
-        ss = str(ss).capitalize()
-        ck["sameSite"] = ss if ss in ("Strict", "Lax", "None") else "Lax"
+        ck["sameSite"] = _norm_same_site(_g("sameSite", _g("same_site", "Lax")))
         cookies.append(ck)
     return {"cookies": cookies, "origins": []}
+
+
+def _norm_same_site(raw: Any) -> str:
+    """Normalize a cookie sameSite to Playwright's {Strict, Lax, None}.
+
+    CDP cookies from ``sb.cdp.get_all_cookies()`` carry ``same_site`` as a
+    ``mycdp.network.CookieSameSite`` ENUM — ``str(enum)`` yields
+    ``"CookieSameSite.LAX"`` (NOT ``"Lax"``), which would silently collapse
+    EVERY cookie to the Lax default and break any ``sameSite=None`` cookie
+    cross-site. Pull ``.value`` from an enum; otherwise capitalize the string.
+    """
+    import enum
+    if isinstance(raw, enum.Enum):
+        raw = raw.value  # 'Strict' | 'Lax' | 'None'
+    ss = str(raw or "Lax").capitalize()
+    # Map the lowercased enum-value spellings too ('none' -> 'None').
+    return ss if ss in ("Strict", "Lax", "None") else "Lax"

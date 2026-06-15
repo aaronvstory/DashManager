@@ -75,6 +75,51 @@ def test_export_storage_handles_attr_style_cookies():
     assert ss["cookies"][0]["sameSite"] == "None"
 
 
+def test_export_storage_handles_enum_same_site():
+    # CDP cookies carry same_site as a CookieSameSite ENUM — str(enum) is
+    # 'CookieSameSite.NONE', NOT 'None'. _norm_same_site must read .value so a
+    # sameSite=None cookie isn't silently collapsed to Lax.
+    import enum
+
+    class CookieSameSite(enum.Enum):
+        STRICT = "Strict"
+        LAX = "Lax"
+        NONE = "None"
+
+    class Cookie:
+        name = "x"
+        value = "1"
+        domain = ".doordash.com"
+        path = "/"
+        same_site = CookieSameSite.NONE
+
+    class FakeSB:
+        @property
+        def cdp(self):
+            class _Cdp:
+                def get_all_cookies(self_inner):
+                    return [Cookie()]
+
+            return _Cdp()
+
+    ss = c._export_storage(FakeSB())
+    assert ss["cookies"][0]["sameSite"] == "None"   # NOT collapsed to Lax
+
+
+def test_norm_same_site_variants():
+    import enum
+
+    class CSS(enum.Enum):
+        LAX = "Lax"
+        NONE = "None"
+
+    assert c._norm_same_site(CSS.NONE) == "None"
+    assert c._norm_same_site(CSS.LAX) == "Lax"
+    assert c._norm_same_site("strict") == "Strict"
+    assert c._norm_same_site("") == "Lax"            # empty -> safe default
+    assert c._norm_same_site("garbage") == "Lax"     # unknown -> safe default
+
+
 def test_resolve_proxy_returns_none_or_user_pass_form():
     # Never raises; returns None or a 'user:pass@host:port' string. (On this
     # machine working-proxies.txt exists, so it returns the gateway string.)
