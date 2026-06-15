@@ -70,7 +70,10 @@ export default function LiveOtpPage() {
     queryKey: ["otp-live", bucket],
     queryFn: () =>
       api.get<OtpLiveResponse>(`/customers/otp-live?bucket_date=${bucket}`),
-    enabled: !!bucket && !paused,
+    // enabled gates on the bucket only (NOT pause) — disabling a query also
+    // suppresses manual refetch(), which would make the Refresh button a no-op
+    // while paused. Pause just stops the auto-poll interval.
+    enabled: !!bucket,
     refetchInterval: paused ? false : POLL_MS,
   })
 

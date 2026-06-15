@@ -294,3 +294,8 @@ async def test_otp_live_parses_ids(client, monkeypatch):
 async def test_otp_live_bad_ids_400(client):
     r = await client.get("/api/customers/otp-live?ids=abc")
     assert r.status_code == 400
+
+
+async def test_otp_live_bad_bucket_date_400(client):
+    r = await client.get("/api/customers/otp-live?bucket_date=not-a-date")
+    assert r.status_code == 400

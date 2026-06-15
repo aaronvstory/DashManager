@@ -307,6 +307,8 @@ async def otp_live(bucket_date: str | None = None, ids: str | None = None
     aborts the batch. `fetched_at` is the server's UTC timestamp so the UI can
     show code freshness (api.cc codes expire ~30s).
     """
+    import re
+
     from backend.otp_fetch import fetch_bucket_otps
 
     id_list = None
@@ -316,6 +318,11 @@ async def otp_live(bucket_date: str | None = None, ids: str | None = None
         except ValueError:
             raise HTTPException(status_code=400,
                                 detail="ids must be comma-separated integers")
+    # Validate the date shape (consistent with the ids check) so a malformed
+    # ?bucket_date=foo 400s instead of silently returning an empty 200.
+    if bucket_date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", bucket_date):
+        raise HTTPException(status_code=400,
+                            detail="bucket_date must be YYYY-MM-DD")
     rows = await fetch_bucket_otps(bucket_date, id_list)
     return {"rows": rows,
             "fetched_at": datetime.now(timezone.utc).isoformat()}

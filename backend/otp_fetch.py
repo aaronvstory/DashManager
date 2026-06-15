@@ -57,12 +57,32 @@ async def fetch_bucket_otps(bucket_date: str | None = None,
     for i, c in enumerate(customers):
         shards[i % pool].append(c)
 
+    # return_exceptions=True so one shard whose BRIDGE fails to start (the
+    # per-customer errors are already caught inside _fetch_shard) doesn't take
+    # down the whole batch — that shard's customers degrade to error rows
+    # instead of bubbling a 500 to the 5s poller. Every customer ALWAYS gets a
+    # row, so the output length matches the input (no silent drops).
     results = await asyncio.gather(
-        *(_fetch_shard(shard) for shard in shards))
+        *(_fetch_shard(shard) for shard in shards),
+        return_exceptions=True)
+
+    by_id: dict[Any, dict[str, Any]] = {}
+    for shard, result in zip(shards, results):
+        if isinstance(result, BaseException):
+            for c in shard:
+                by_id[c["id"]] = _error_row(c, f"bridge failed: {result}")
+        else:
+            for r in result:
+                by_id[r["id"]] = r
 
     # Re-interleave so the output order matches the input order.
-    by_id = {r["id"]: r for shard_rows in results for r in shard_rows}
-    return [by_id[c["id"]] for c in customers if c["id"] in by_id]
+    return [by_id[c["id"]] for c in customers]
+
+
+def _error_row(c: dict[str, Any], error: str) -> dict[str, Any]:
+    name = f"{c.get('first_name', '')} {c.get('last_name', '')}".strip()
+    return {"id": c["id"], "name": name or "(unnamed)",
+            "phone": c.get("phone") or "—", "code": "", "error": error}
 
 
 POOL_SIZE = 4
