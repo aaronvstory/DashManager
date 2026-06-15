@@ -33,6 +33,8 @@ class CreateAccountBody(BaseModel):
     location_origin: str | None = None  # falls back to daisy settings default
     radius_miles: float | None = None
     headless: bool | None = None        # per-action override of the setting
+    count: int = 1                      # batch size (normal: 4-6)
+    batch_label: str | None = None      # base label; ' - claude' is appended
 
 
 _create_task: asyncio.Task | None = None
@@ -191,6 +193,13 @@ async def start_login(body: LoginBody | None = None) -> dict[str, Any]:
 
 
 async def _run_create_account(body: CreateAccountBody) -> None:
+    from datetime import datetime, timezone
+
+    # Outer guard: a failure BEFORE the loop (settings fetch, bad count, import)
+    # would otherwise propagate out of the asyncio task and get swallowed,
+    # leaving the dialog stuck in "running" with no terminal event. Always emit
+    # something terminal.
+    count = max(1, int(body.count or 1))
     try:
         from backend.account_creator import create_account
 
@@ -198,12 +207,38 @@ async def _run_create_account(body: CreateAccountBody) -> None:
         origin = body.location_origin or daisy_cfg.get("location_origin")
         radius = (body.radius_miles if body.radius_miles is not None
                   else float(daisy_cfg.get("radius_miles", 5.0)))
-        await create_account(
-            location_origin=origin, radius_miles=radius,
-            bucket_date=body.bucket_date, daisy_root=daisy_cfg.get("root"),
-            headless=body.headless)
-    except Exception as e:  # surfaced to the UI as an event
-        bus.publish("account_failed", {"error": str(e)})
+        # Stamp a shared batch id/label so the run groups under one
+        # '<label> - claude' batch in CustomerDaisy (and the in-app Batch OTP
+        # view). The '- claude' suffix is the user's naming convention.
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        base = (body.batch_label or f"batch {stamp}").strip()
+        batch_label = base if base.endswith("- claude") else f"{base} - claude"
+        batch_id = f"claude_{stamp}"
+        # Send `of` (mirrors batch_progress/batch_done) so the dialog reads one
+        # consistent key; keep `count` for back-compat.
+        bus.publish("batch_started", {"of": count, "count": count,
+                                      "batch_label": batch_label})
+
+        created = 0
+        for i in range(count):
+            bus.publish("batch_progress", {"index": i + 1, "of": count,
+                                           "created": created})
+            try:
+                await create_account(
+                    location_origin=origin, radius_miles=radius,
+                    bucket_date=body.bucket_date,
+                    daisy_root=daisy_cfg.get("root"),
+                    headless=body.headless,
+                    batch_id=batch_id, batch_label=batch_label)
+                created += 1
+            except Exception as e:  # one account's failure never aborts a batch
+                bus.publish("account_failed", {"error": str(e),
+                                               "index": i + 1, "of": count})
+        bus.publish("batch_done", {"created": created, "of": count,
+                                   "batch_label": batch_label})
+    except Exception as e:  # pre-loop / setup failure — still terminate the UI
+        bus.publish("account_failed", {"error": str(e), "index": 0, "of": count})
+        bus.publish("batch_done", {"created": 0, "of": count})
 
 
 @router.post("/create-account")
@@ -326,6 +361,32 @@ async def otp_live(bucket_date: str | None = None, ids: str | None = None
     rows = await fetch_bucket_otps(bucket_date, id_list)
     return {"rows": rows,
             "fetched_at": datetime.now(timezone.utc).isoformat()}
+
+
+@router.get("/daisy-batches")
+async def daisy_batches() -> dict[str, Any]:
+    """List CustomerDaisy batches Claude created (named '<label> - claude'),
+    with per-account name/email/phone, for the in-app batch OTP view."""
+    from backend.daisy_batches import list_batches
+
+    daisy_cfg = await db.get_setting("daisy")
+    batches = await list_batches(daisy_root=daisy_cfg.get("root"))
+    return {"batches": batches}
+
+
+@router.get("/daisy-batch-otps")
+async def daisy_batch_otps(batch_id: str | None = None,
+                           batch_label: str | None = None) -> dict[str, Any]:
+    """Latest live OTP for each account in a CustomerDaisy batch (single pass,
+    pollable). Pass batch_id (preferred) or batch_label."""
+    from backend.daisy_batches import batch_otps
+
+    if not batch_id and not batch_label:
+        raise HTTPException(status_code=400,
+                            detail="batch_id or batch_label required")
+    daisy_cfg = await db.get_setting("daisy")
+    return await batch_otps(batch_id, batch_label,
+                            daisy_root=daisy_cfg.get("root"))
 
 
 class ReloginBody(BaseModel):

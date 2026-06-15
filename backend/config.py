@@ -143,6 +143,9 @@ DEFAULT_SETTINGS: dict[str, object] = {
     "daisy": {
         # CustomerDaisy install — DashManager shells out to its venv.
         "root": r"C:\claude\CustomerDaisy",
+        # Explicit interpreter; "" = auto-detect the checkout's venv
+        # (.venv/bin/python on macOS/Linux, .venv/Scripts/python.exe on Windows).
+        "python": "",
         # Default account-creation location + radius (Edenton, NC = index 0).
         "location_origin": "706 N Broad St, Edenton, NC 27932",
         "radius_miles": 5.0,

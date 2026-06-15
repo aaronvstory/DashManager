@@ -19,12 +19,17 @@ dev = [
     "pytest-asyncio>=0.24",
     "respx>=0.21",
 ]
-# Account creation uses an undetected browser (SeleniumBase UC mode) because
-# DoorDash's signup endpoint 403s normal automation as user_assessment_bot.
-# Optional — only needed for the create-account flow; login/scrape/refunds and
-# the test suite don't require it (uc_signup imports it lazily).
+# Account creation uses an undetected browser (SeleniumBase UC mode) with
+# OS-LEVEL input (PyAutoGUI) — DoorDash's PerimeterX gate rejects synthetic
+# input, so real hardware mouse/keyboard telemetry is what passes. Optional —
+# only the create-account flow needs these; login/scrape/refunds and the test
+# suite don't (cdp_signup imports them lazily). pywin32 powers the hidden-desktop
+# isolation scaffold; undetected-chromedriver is the raw-UC reference driver.
 signup = [
     "seleniumbase>=4.30",
+    "pyautogui>=0.9.54",
+    "pywin32>=308; sys_platform == 'win32'",
+    "undetected-chromedriver>=3.5.5",
 ]
 
 [tool.pytest.ini_options]

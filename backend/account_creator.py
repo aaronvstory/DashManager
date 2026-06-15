@@ -14,8 +14,8 @@ route layer.
 """
 from __future__ import annotations
 
+import asyncio
 import json
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -27,6 +27,25 @@ from backend.events import bus
 
 def _emit(type: str, data: dict | None = None) -> None:
     bus.publish(type, data or {})
+
+
+async def _retry(coro_factory, *, attempts: int = 4, emit=None, what: str = ""):
+    """Await coro_factory() with retries for transient failures (DNS/network
+    blips in CustomerDaisy's mail.tm/MapQuest/api.cc calls). Re-raises the last
+    error if all attempts fail. coro_factory must return a fresh coroutine each
+    call (e.g. a lambda) since a coroutine can only be awaited once."""
+    last: Exception | None = None
+    for i in range(attempts):
+        try:
+            return await coro_factory()
+        except Exception as exc:  # noqa: BLE001 — transient; retry
+            last = exc
+            if emit:
+                emit("retry", {"what": what, "attempt": i + 1,
+                               "of": attempts,
+                               "error": f"{type(exc).__name__}: {exc}"[:120]})
+            await asyncio.sleep(3.0)
+    raise last if last else RuntimeError(f"{what} failed")
 
 
 async def create_account(*, location_origin: str | None,
@@ -56,11 +75,6 @@ async def create_account(*, location_origin: str | None,
     Raises on fatal failure (caller emits account_failed); partial progress is
     reported via events.
     """
-    from playwright.async_api import async_playwright
-
-    from backend.browser.selectors import CHROMIUM_ARGS, UA
-    from backend.browser.signup import fill_signup_form, submit_and_verify
-
     bucket = bucket_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     browser_cfg = await db.get_setting("browser")
     headless = (headless if headless is not None
@@ -74,7 +88,12 @@ async def create_account(*, location_origin: str | None,
 
         _emit("identity_generating", {"origin": location_origin,
                                       "radius_miles": radius_miles})
-        identity = await daisy.generate_identity(location_origin, radius_miles)
+        # Identity gen calls mail.tm / MapQuest — transient DNS/network blips
+        # happen (a batch run once failed on a mail.tm NameResolutionError).
+        # Auto-heal: retry a few times before giving up the whole creation.
+        identity = await _retry(
+            lambda: daisy.generate_identity(location_origin, radius_miles),
+            attempts=4, emit=_emit, what="identity")
         _emit("identity_generated", {
             "first_name": identity.get("first_name"),
             "last_name": identity.get("last_name"),
@@ -89,7 +108,8 @@ async def create_account(*, location_origin: str | None,
                   {"phone_number": number.get("phone_number")})
         else:
             _emit("number_renting", {})
-            number = await daisy.rent_number()
+            number = await _retry(daisy.rent_number, attempts=4, emit=_emit,
+                                  what="number")
             identity.update(number)  # phone_number, number_token, api_url, ...
             _emit("number_rented", {"phone_number": number.get("phone_number"),
                                     "price": number.get("price")})
@@ -98,46 +118,61 @@ async def create_account(*, location_origin: str | None,
         api_url = number.get("api_url", "")
         mirror_hosts = number.get("mirror_hosts", [])
 
-        async def poll_otp() -> str:
-            res = await daisy.fetch_otp(token, api_url, mirror_hosts)
-            return res.get("code") or ""
+        # ── Drive signup via the WINNING config: SeleniumBase UC + OS-level
+        #    PyAutoGUI input (os_input=True), home IP. This is the ONLY path that
+        #    beats DoorDash's PerimeterX gate — synthetic Playwright/CDP input
+        #    gets the "something went wrong" reject (see memory
+        #    doordash-signup-bot-detection). signup_via_cdp is SYNC and handles
+        #    OTP entry+submit, delivery address, the DashPass skip, and the
+        #    /consumer/edit_profile confirmation internally; it returns the
+        #    Playwright-compatible storage_state (cookies) the session machinery
+        #    uses, so no persistent-profile move is needed.
+        #    ⚠️ os_input drives the REAL shared cursor — runs must be hands-off.
+        from backend.browser.cdp_signup import signup_via_cdp
 
-        # ── Drive the browser in a TEMP profile ──────────────────────────────
-        # The customer row doesn't exist yet, so sign up in a temp persistent
-        # profile; it's moved to data/profiles/{cid}/ once the row is created.
-        import tempfile
+        # get_running_loop (not get_event_loop): we're inside the running async
+        # context, and get_event_loop is deprecated / can return a stale loop.
+        loop = asyncio.get_running_loop()
 
-        temp_profile = Path(tempfile.mkdtemp(prefix="dm_signup_"))
-        async with async_playwright() as p:
-            outcome = "failed"
-            storage_backup = ""
-            ctx = None
+        def _poll_otp_sync() -> str:
+            # signup_via_cdp runs in a worker thread; marshal the async bridge
+            # fetch back onto this event loop. Bounded wait (the bridge's own
+            # fetch_otp timeout is ~45s) so a hung subprocess pipe can't pin a
+            # thread-pool slot forever and starve other to_thread work.
+            fut = asyncio.run_coroutine_threadsafe(
+                daisy.fetch_otp(token, api_url, mirror_hosts), loop)
             try:
-                ctx = await p.chromium.launch_persistent_context(
-                    str(temp_profile),
-                    headless=headless,
-                    args=CHROMIUM_ARGS, user_agent=UA,
-                    viewport={"width": 1400, "height": 900})
-                page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-                await fill_signup_form(page, identity, emit=_emit)
-                _emit("signup_submitting", {})
-                outcome = await submit_and_verify(
-                    page, poll_otp,
-                    address={"full_address": identity.get("full_address")},
-                    emit=_emit)
-                _emit("signup_outcome", {"outcome": outcome})
+                return (fut.result(timeout=60.0).get("code") or "")
+            except Exception:
+                return ""
 
-                if outcome == "created":
-                    config.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-                    storage_backup = str(config.SESSIONS_DIR
-                                         / "pending_signup_storage.json")
-                    await ctx.storage_state(path=storage_backup)
-            finally:
-                if ctx is not None:
-                    await ctx.close()
+        shot_dir = str(config.SCREENSHOTS_DIR / "signup"
+                       / datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")) \
+            if hasattr(config, "SCREENSHOTS_DIR") else None
+        result = await asyncio.to_thread(
+            signup_via_cdp, identity,
+            poll_otp=_poll_otp_sync, proxy=None, headless=headless,
+            ios_mobile=False, os_input=True, pre_submit_dwell_s=1.5,
+            emit=_emit, otp_total_wait_s=240.0, screenshot_dir=shot_dir)
+        outcome = result.get("outcome", "failed")
+        _emit("signup_outcome", {"outcome": outcome,
+                                 "profile_confirmed":
+                                 result.get("profile_confirmed", {})})
+
+        storage_backup = ""
+        if outcome == "created" and result.get("storage_state"):
+            config.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+            # Per-call unique filename — a shared pending_signup_storage.json
+            # would let two concurrent create_account runs overwrite each other's
+            # session before the move, assigning one customer's cookies to
+            # another (the old temp-profile path had this uniqueness via mkdtemp).
+            uid = f"{token[:8]}_{datetime.now(timezone.utc).strftime('%H%M%S%f')}"
+            storage_backup = str(config.SESSIONS_DIR
+                                 / f"pending_signup_{uid}.json")
+            with open(storage_backup, "w", encoding="utf-8") as f:
+                json.dump(result["storage_state"], f)
 
         if outcome != "created":
-            shutil.rmtree(temp_profile, ignore_errors=True)
             try:  # number/identity still useful — record the attempt
                 await daisy.save_customer(_daisy_record(
                     identity, verified=False,
@@ -156,36 +191,38 @@ async def create_account(*, location_origin: str | None,
             _emit("log", {"level": "warn",
                           "message": f"CustomerDaisy save failed: {exc}"})
 
-        cid = await db.create_customer(
-            bucket,
-            first_name=identity.get("first_name", ""),
-            last_name=identity.get("last_name", ""),
-            email=identity.get("email", ""),
-            phone=identity.get("phone_number", ""),
-            password=identity.get("password", ""),
-            number_token=identity.get("number_token", ""),
-            api_url=identity.get("api_url", ""),
-            mirror_hosts=json.dumps(identity.get("mirror_hosts", [])),
-            notes=_notes(identity, daisy_id))
-
-        # Adopt the signup profile as the customer's persistent profile.
-        # Everything below is wrapped so the temp dir is cleaned on ANY failure
-        # (e.g. db.update_customer raising) — a successful move makes the
-        # final rmtree a no-op since temp_profile no longer exists.
-        from backend.browser.driver import profile_dir
-
+        # The account is ALREADY created on DoorDash here, and storage_backup
+        # holds its real session cookies. If DB persistence raises (locked DB,
+        # constraint, etc.) the pending JSON would otherwise be orphaned in
+        # SESSIONS_DIR forever — an irrecoverable session for an account with no
+        # row. Clean it up on any persistence failure before re-raising.
         try:
-            dest = profile_dir(cid)
-            shutil.rmtree(dest, ignore_errors=True)
-            shutil.move(str(temp_profile), str(dest))
+            cid = await db.create_customer(
+                bucket,
+                first_name=identity.get("first_name", ""),
+                last_name=identity.get("last_name", ""),
+                email=identity.get("email", ""),
+                phone=identity.get("phone_number", ""),
+                password=identity.get("password", ""),
+                number_token=identity.get("number_token", ""),
+                api_url=identity.get("api_url", ""),
+                mirror_hosts=json.dumps(identity.get("mirror_hosts", [])),
+                notes=_notes(identity, daisy_id, batch_label))
+
+            # Persist the captured session. signup_via_cdp returns cookies only
+            # (no persistent profile to adopt), so we just move the pending
+            # storage JSON into the customer's session path — the login/scrape
+            # machinery rehydrates a Playwright context from storage_state.
             final_storage = config.SESSIONS_DIR / f"{cid}_storage.json"
             if storage_backup and Path(storage_backup).exists():
                 Path(storage_backup).replace(final_storage)
             await db.update_customer(cid,
                                      storage_state_path=str(final_storage),
                                      session_status="active")
-        finally:
-            shutil.rmtree(temp_profile, ignore_errors=True)
+        except Exception:
+            if storage_backup:
+                Path(storage_backup).unlink(missing_ok=True)
+            raise
 
         summary = {"customer_id": cid, "daisy_id": daisy_id,
                    "name": f"{identity.get('first_name','')} "
@@ -362,8 +399,11 @@ async def adopt_from_daisy(name: str, bucket_date: str | None = None, *,
     return row or {"id": cid}
 
 
-def _notes(identity: dict[str, Any], daisy_id: str) -> str:
+def _notes(identity: dict[str, Any], daisy_id: str,
+           batch_label: str | None = None) -> str:
     bits = ["created via signup"]
+    if batch_label:
+        bits.append(f"batch:{batch_label}")  # identify the batch in the DM list
     if identity.get("full_address"):
         bits.append(identity["full_address"])
     if daisy_id:
