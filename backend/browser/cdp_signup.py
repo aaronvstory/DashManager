@@ -441,7 +441,7 @@ def _confirm_edit_profile(sb: Any, identity: dict[str, Any]) -> dict[str, Any]:
         try:
             sb.cdp.open(EDIT_PROFILE_URL)
         except Exception:
-            sb.cdp.get(EDIT_PROFILE_URL)
+            sb.open(EDIT_PROFILE_URL)   # sb.cdp has no .get(); sb.open does
         time.sleep(4.0)
         out["url"] = _cdp_url(sb)
         # the profile fields are inputs whose .value holds our data; also scan
@@ -642,7 +642,7 @@ def signup_via_cdp(identity: dict[str, Any], *,
             try:
                 sb.cdp.open(SIGNUP_URL)
             except Exception:
-                sb.cdp.get(SIGNUP_URL)
+                sb.open(SIGNUP_URL)   # sb.cdp has no .get(); sb.open does
             time.sleep(3.0)
             # Guard: never proceed on the dasher signup form.
             try:

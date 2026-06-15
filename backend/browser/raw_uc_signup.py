@@ -51,14 +51,28 @@ OTP_DIGIT_BOXES = ('input[inputmode="numeric"], input[maxlength="1"], '
 
 def _find(driver: Any, selectors: tuple[str, ...]) -> Any | None:
     from selenium.webdriver.common.by import By
-    for sel in selectors:
+    # implicitly_wait(8) is set globally; without disabling it here, each
+    # find_elements for a NON-matching selector blocks the full 8s, so a
+    # multi-selector cascade across a multi-pass fill stalls for minutes.
+    # Drop it to 0 for these existence probes, restore after.
+    try:
+        driver.implicitly_wait(0)
+    except Exception:
+        pass
+    try:
+        for sel in selectors:
+            try:
+                els = driver.find_elements(By.CSS_SELECTOR, sel)
+                for el in els:
+                    if el.is_displayed():
+                        return el
+            except Exception:
+                continue
+    finally:
         try:
-            els = driver.find_elements(By.CSS_SELECTOR, sel)
-            for el in els:
-                if el.is_displayed():
-                    return el
+            driver.implicitly_wait(8)
         except Exception:
-            continue
+            pass
     return None
 
 

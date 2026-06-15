@@ -101,8 +101,18 @@ class HiddenDesktop:
         flags = self._con.CREATE_NEW_CONSOLE
         proc_info = self._proc.CreateProcess(
             None, command_line, None, None, True, flags, None, None, si)
-        # proc_info = (hProcess, hThread, dwProcessId, dwThreadId)
-        return int(proc_info[2])
+        # proc_info = (hProcess, hThread, dwProcessId, dwThreadId). The process
+        # and thread HANDLES must be closed or they leak per spawn() — we only
+        # need the PID, so close both before returning.
+        h_process, h_thread = proc_info[0], proc_info[1]
+        try:
+            return int(proc_info[2])
+        finally:
+            for h in (h_process, h_thread):
+                try:
+                    h.Close()
+                except Exception:
+                    pass
 
 
 def is_available() -> bool:

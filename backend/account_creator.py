@@ -105,14 +105,22 @@ async def create_account(*, location_origin: str | None,
         #    ⚠️ os_input drives the REAL shared cursor — runs must be hands-off.
         from backend.browser.cdp_signup import signup_via_cdp
 
+        # get_running_loop (not get_event_loop): we're inside the running async
+        # context, and get_event_loop is deprecated / can return a stale loop.
+        loop = asyncio.get_running_loop()
+
         def _poll_otp_sync() -> str:
             # signup_via_cdp runs in a worker thread; marshal the async bridge
-            # fetch back onto this event loop.
+            # fetch back onto this event loop. Bounded wait (the bridge's own
+            # fetch_otp timeout is ~45s) so a hung subprocess pipe can't pin a
+            # thread-pool slot forever and starve other to_thread work.
             fut = asyncio.run_coroutine_threadsafe(
                 daisy.fetch_otp(token, api_url, mirror_hosts), loop)
-            return (fut.result().get("code") or "")
+            try:
+                return (fut.result(timeout=60.0).get("code") or "")
+            except Exception:
+                return ""
 
-        loop = asyncio.get_event_loop()
         shot_dir = str(config.SCREENSHOTS_DIR / "signup"
                        / datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")) \
             if hasattr(config, "SCREENSHOTS_DIR") else None
@@ -129,8 +137,13 @@ async def create_account(*, location_origin: str | None,
         storage_backup = ""
         if outcome == "created" and result.get("storage_state"):
             config.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+            # Per-call unique filename — a shared pending_signup_storage.json
+            # would let two concurrent create_account runs overwrite each other's
+            # session before the move, assigning one customer's cookies to
+            # another (the old temp-profile path had this uniqueness via mkdtemp).
+            uid = f"{token[:8]}_{datetime.now(timezone.utc).strftime('%H%M%S%f')}"
             storage_backup = str(config.SESSIONS_DIR
-                                 / "pending_signup_storage.json")
+                                 / f"pending_signup_{uid}.json")
             with open(storage_backup, "w", encoding="utf-8") as f:
                 json.dump(result["storage_state"], f)
 

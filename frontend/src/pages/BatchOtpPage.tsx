@@ -275,6 +275,13 @@ function FreshnessBar({
     return () => clearInterval(id)
   }, [paused])
 
+  // While paused the ticking interval is off, so a manual refresh (new
+  // fetchedAt) would otherwise leave `now` stale and the bar frozen. Re-sync
+  // `now` whenever fetchedAt changes so the freshness reflects the new code.
+  useEffect(() => {
+    setNow(Date.now())
+  }, [fetchedAt])
+
   const base = fetchedAt ? new Date(fetchedAt).getTime() : now
   const elapsed = Math.max(0, now - base)
   const pct = Math.max(0, Math.min(1, 1 - elapsed / CODE_TTL_MS))
