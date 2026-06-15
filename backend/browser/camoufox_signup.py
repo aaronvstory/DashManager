@@ -41,6 +41,18 @@ from backend.browser.uc_signup import (BOT_BLOCK_MARKERS, SIGNUP_URL,
 
 HOMEPAGE = "https://www.doordash.com/"
 
+# A modest, watchable window so the headed run doesn't fill the user's monitor
+# (the supervised refund/signup sessions standardize on ~1200x720).
+WINDOW_SIZE = (1200, 720)
+# Per-navigation Playwright timeout, plus an OUTER asyncio timeout on warmup so a
+# dead/slow residential proxy can never hang the whole run (it stalled before).
+GOTO_TIMEOUT_MS = 45000
+WARMUP_TIMEOUT_S = 25.0
+# Per-proxy launch+warmup retries — the first bring-up through a residential
+# proxy can throw a transient TargetClosedError; retry the SAME proxy (sticky IP)
+# before falling through to the next candidate.
+WARMUP_ATTEMPTS = 2
+
 # Playwright CSS selectors (same stable autocomplete attrs as the other drivers).
 SEL_FIRST = 'input[autocomplete="given-name"]'
 SEL_LAST = 'input[autocomplete="family-name"]'
@@ -56,21 +68,24 @@ OTP_DIGIT_BOXES = ('input[inputmode="numeric"], input[maxlength="1"], '
 Emit = Callable[[str, dict], None]
 
 
-def resolve_sticky_proxy() -> dict[str, str] | None:
-    """One STICKY residential proxy as a Playwright proxy dict (or None).
+def iter_proxies() -> list[dict[str, str]]:
+    """All working-proxies.txt lines as Playwright proxy dicts, in file order.
 
-    PerimeterX wants a single dedicated IP per account (rotation hurts trust —
-    gotcha #E1), so we take the FIRST working-proxies.txt line and keep it for
-    the whole signup. Returns {"server","username","password"} (Camoufox/
-    Playwright shape) — NOT the inline user:pass@host form. Creds live in the
-    gitignored working-proxies.txt; never logged.
+    PerimeterX wants ONE sticky residential IP per account (rotation hurts
+    trust — gotcha #E1), so the signup keeps a SINGLE proxy for the whole run.
+    But a dead/slow proxy must not hang the run, so we return the ordered list
+    and the driver warms up against each until one actually loads the homepage,
+    then stays sticky on THAT one. Each dict is {"server","username","password"}
+    (Camoufox/Playwright shape). Creds live in the gitignored working-proxies.txt;
+    never logged.
     """
+    out: list[dict[str, str]] = []
     try:
         from pathlib import Path
         root = Path(__file__).resolve().parents[2]
         f = root / "working-proxies.txt"
         if not f.exists():
-            return None
+            return out
         for ln in f.read_text(encoding="utf-8").splitlines():
             ln = ln.strip()
             if not ln or ln.startswith("#"):
@@ -81,11 +96,17 @@ def resolve_sticky_proxy() -> dict[str, str] | None:
             parts = body.split(":", 3)
             if len(parts) == 4:
                 host, port, user, pwd = parts
-                return {"server": f"{scheme}://{host}:{port}",
-                        "username": user, "password": pwd}
+                out.append({"server": f"{scheme}://{host}:{port}",
+                            "username": user, "password": pwd})
     except Exception:
         pass
-    return None
+    return out
+
+
+def resolve_sticky_proxy() -> dict[str, str] | None:
+    """First working proxy (back-compat shim for tests). Prefer iter_proxies."""
+    proxies = iter_proxies()
+    return proxies[0] if proxies else None
 
 
 async def _human_type(page: Any, selector: str, value: str) -> bool:
@@ -171,8 +192,6 @@ async def signup_via_camoufox(
     phone10 = normalize_phone(identity.get("phone_number", ""))
     result: dict[str, Any] = {"outcome": "failed", "storage_state": None,
                               "phone10": phone10}
-    proxy = resolve_sticky_proxy()
-    _emit("signup_proxy", {"using_proxy": bool(proxy)})
 
     shot_n = [0]
 
@@ -189,139 +208,183 @@ async def signup_via_camoufox(
         except Exception:
             pass
 
-    # geoip=True only works when a proxy is set (it derives geo from the exit IP).
-    cam_kwargs: dict[str, Any] = {"headless": headless, "humanize": True,
-                                  "os": "windows"}
-    if proxy:
-        cam_kwargs["proxy"] = proxy
-        cam_kwargs["geoip"] = True
+    # ── The post-warmup flow (form → submit → outcome → OTP), run on the page
+    #    of whichever proxy successfully warmed up. Mutates `result`. ──────────
+    async def _run_flow(page: Any) -> dict[str, Any]:
+        # ── 2) Go to signup ──
+        await page.goto(SIGNUP_URL, wait_until="domcontentloaded",
+                        timeout=GOTO_TIMEOUT_MS)
+        await asyncio.sleep(random.uniform(2.0, 3.5))
+        await _wander_mouse(page)
+        _emit("signup_form_open", {})
+        await _shot(page, "form_open")
 
-    try:
-        async with AsyncCamoufox(**cam_kwargs) as browser:
-            page = await browser.new_page()
-
-            # ── 1) WARMUP: earn a _px3 trust cookie before touching /signup ──
-            _emit("signup_warmup", {})
-            try:
-                await page.goto(HOMEPAGE, wait_until="domcontentloaded",
-                                timeout=45000)
-            except Exception:
-                pass
-            await asyncio.sleep(warmup_s)
-            await _wander_mouse(page)
-            # a little scroll, like a real visitor sizing up the page
-            try:
-                await page.mouse.wheel(0, random.randint(300, 900))
-                await asyncio.sleep(random.uniform(1.0, 2.0))
-                await page.mouse.wheel(0, random.randint(200, 600))
-            except Exception:
-                pass
-            await _shot(page, "warmup")
-
-            # ── 2) Go to signup ──
-            await page.goto(SIGNUP_URL, wait_until="domcontentloaded",
-                            timeout=45000)
-            await asyncio.sleep(random.uniform(2.0, 3.5))
-            await _wander_mouse(page)
-            _emit("signup_form_open", {})
-            await _shot(page, "form_open")
-
-            # bot block can fire on load
-            load_body = await _body_text(page)
-            if any(m in load_body for m in BOT_BLOCK_MARKERS):
-                result["outcome"] = "bot_blocked"
-                _emit("signup_bot_blocked", {"at": "load"})
-                await _shot(page, "bot_blocked_load")
-                return result
-
-            # ── 3) Fill the form, human-paced ──
-            await _human_type(page, SEL_FIRST, identity.get("first_name", ""))
-            await _human_type(page, SEL_LAST, identity.get("last_name", ""))
-            await _human_type(page, SEL_EMAIL, identity.get("email", ""))
-            await _human_type(page, SEL_PHONE, phone10)
-            await _human_type(page, SEL_PASSWORD, identity.get("password", ""))
-            _emit("signup_form_filled", {})
-            await _shot(page, "filled")
-
-            # ── 4) Human dwell + mouse wander, THEN submit ──
-            await _wander_mouse(page)
-            await asyncio.sleep(random.uniform(0.8, 1.8))
-            try:
-                btn = page.locator(SEL_SUBMIT).first
-                if await btn.count() == 0:
-                    btn = page.locator(SEL_SUBMIT_FALLBACK).first
-                await btn.click()
-            except Exception:
-                try:
-                    await page.locator(SEL_SUBMIT_FALLBACK).first.click()
-                except Exception:
-                    result["outcome"] = "failed"
-                    _emit("signup_no_submit", {})
-                    return result
-            _emit("signup_submitting", {})
-            await asyncio.sleep(5.0)
-            await _shot(page, "after_submit")
-
-            # ── 5) Outcome: bot-block? verify step? already in? ──
-            body = await _body_text(page)
-            if any(m in body for m in BOT_BLOCK_MARKERS):
-                result["outcome"] = "bot_blocked"
-                _emit("signup_bot_blocked", {"at": "submit"})
-                await _shot(page, "bot_blocked_submit")
-                return result
-
-            # wait for the verify/OTP step or a success redirect
-            deadline = asyncio.get_event_loop().time() + 40
-            reached_verify = False
-            while asyncio.get_event_loop().time() < deadline:
-                url = page.url
-                if any(m in url for m in SUCCESS_URL_MARKERS):
-                    result["outcome"] = "created"
-                    result["storage_state"] = await _export_storage(page)
-                    _emit("signup_created", {"at": "post_submit"})
-                    await _shot(page, "created")
-                    return result
-                verify_body = await _body_text(page)
-                if any(m in verify_body for m in VERIFY_MARKERS):
-                    reached_verify = True
-                    break
-                await asyncio.sleep(1.5)
-            if not reached_verify:
-                result["outcome"] = "failed"
-                _emit("signup_no_verify", {})
-                await _shot(page, "no_verify")
-                return result
-
-            # ── 6) OTP step ──
-            _emit("otp_waiting", {})
-            await _shot(page, "verify")
-            started = asyncio.get_event_loop().time()
-            tried: set[str] = set()
-            while asyncio.get_event_loop().time() - started < otp_total_wait_s:
-                code = await _poll()
-                if code and code not in tried:
-                    tried.add(code)
-                    _emit("otp_received", {"code": code})
-                    if await _enter_otp(page, code):
-                        for _ in range(6):
-                            await asyncio.sleep(2.0)
-                            if any(m in page.url for m in SUCCESS_URL_MARKERS):
-                                result["outcome"] = "created"
-                                result["storage_state"] = \
-                                    await _export_storage(page)
-                                _emit("signup_created", {"at": "otp"})
-                                await _shot(page, "created")
-                                return result
-                await asyncio.sleep(3.0)
-            result["outcome"] = "otp_timeout"
-            await _shot(page, "otp_timeout")
+        # bot block can fire on load
+        load_body = await _body_text(page)
+        if any(m in load_body for m in BOT_BLOCK_MARKERS):
+            result["outcome"] = "bot_blocked"
+            _emit("signup_bot_blocked", {"at": "load"})
+            await _shot(page, "bot_blocked_load")
             return result
-    except Exception as exc:  # never raise — surface as outcome
-        msg = f"{type(exc).__name__}: {exc}"[:200]
-        if proxy and proxy.get("password"):
-            msg = msg.replace(proxy["password"], "<redacted>")
-        _emit("signup_error", {"error": msg})
+
+        # ── 3) Fill the form, human-paced ──
+        await _human_type(page, SEL_FIRST, identity.get("first_name", ""))
+        await _human_type(page, SEL_LAST, identity.get("last_name", ""))
+        await _human_type(page, SEL_EMAIL, identity.get("email", ""))
+        await _human_type(page, SEL_PHONE, phone10)
+        await _human_type(page, SEL_PASSWORD, identity.get("password", ""))
+        _emit("signup_form_filled", {})
+        await _shot(page, "filled")
+
+        # ── 4) Human dwell + mouse wander, THEN submit ──
+        await _wander_mouse(page)
+        await asyncio.sleep(random.uniform(0.8, 1.8))
+        try:
+            btn = page.locator(SEL_SUBMIT).first
+            if await btn.count() == 0:
+                btn = page.locator(SEL_SUBMIT_FALLBACK).first
+            await btn.click()
+        except Exception:
+            try:
+                await page.locator(SEL_SUBMIT_FALLBACK).first.click()
+            except Exception:
+                result["outcome"] = "failed"
+                _emit("signup_no_submit", {})
+                return result
+        _emit("signup_submitting", {})
+        await asyncio.sleep(5.0)
+        await _shot(page, "after_submit")
+
+        # ── 5) Outcome: bot-block? verify step? already in? ──
+        body = await _body_text(page)
+        if any(m in body for m in BOT_BLOCK_MARKERS):
+            result["outcome"] = "bot_blocked"
+            _emit("signup_bot_blocked", {"at": "submit"})
+            await _shot(page, "bot_blocked_submit")
+            return result
+
+        # wait for the verify/OTP step or a success redirect
+        deadline = asyncio.get_event_loop().time() + 40
+        reached_verify = False
+        while asyncio.get_event_loop().time() < deadline:
+            url = page.url
+            if any(m in url for m in SUCCESS_URL_MARKERS):
+                result["outcome"] = "created"
+                result["storage_state"] = await _export_storage(page)
+                _emit("signup_created", {"at": "post_submit"})
+                await _shot(page, "created")
+                return result
+            verify_body = await _body_text(page)
+            if any(m in verify_body for m in VERIFY_MARKERS):
+                reached_verify = True
+                break
+            await asyncio.sleep(1.5)
+        if not reached_verify:
+            result["outcome"] = "failed"
+            _emit("signup_no_verify", {})
+            await _shot(page, "no_verify")
+            return result
+
+        # ── 6) OTP step ──
+        _emit("otp_waiting", {})
+        await _shot(page, "verify")
+        started = asyncio.get_event_loop().time()
+        tried: set[str] = set()
+        while asyncio.get_event_loop().time() - started < otp_total_wait_s:
+            code = await _poll()
+            if code and code not in tried:
+                tried.add(code)
+                _emit("otp_received", {"code": code})
+                if await _enter_otp(page, code):
+                    for _ in range(6):
+                        await asyncio.sleep(2.0)
+                        if any(m in page.url for m in SUCCESS_URL_MARKERS):
+                            result["outcome"] = "created"
+                            result["storage_state"] = \
+                                await _export_storage(page)
+                            _emit("signup_created", {"at": "otp"})
+                            await _shot(page, "created")
+                            return result
+            await asyncio.sleep(3.0)
+        result["outcome"] = "otp_timeout"
+        await _shot(page, "otp_timeout")
         return result
+
+    # ── WARMUP with a HARD timeout: load the homepage to earn a _px3 trust
+    #    cookie before /signup. Returns True only if the homepage actually
+    #    loaded (so a dead/slow proxy can never hang the run — we move on). ──
+    async def _warmup(page: Any) -> bool:
+        _emit("signup_warmup", {})
+        try:
+            await asyncio.wait_for(
+                page.goto(HOMEPAGE, wait_until="domcontentloaded",
+                          timeout=GOTO_TIMEOUT_MS),
+                timeout=WARMUP_TIMEOUT_S)
+        except Exception:
+            return False
+        await asyncio.sleep(warmup_s)
+        await _wander_mouse(page)
+        try:  # a little scroll, like a real visitor sizing up the page
+            await page.mouse.wheel(0, random.randint(300, 900))
+            await asyncio.sleep(random.uniform(1.0, 2.0))
+            await page.mouse.wheel(0, random.randint(200, 600))
+        except Exception:
+            pass
+        await _shot(page, "warmup")
+        return True
+
+    # Sticky-IP with liveness fallback: try each proxy in file order until one
+    # actually loads the homepage, then stay on it for the WHOLE signup (never
+    # rotate mid-account — PerimeterX gotcha #E1). Direct (None) is the last
+    # resort, logged loudly. geoip=True only when a proxy is set.
+    candidates: list[dict[str, str] | None] = list(iter_proxies())
+    candidates.append(None)  # direct as final fallback
+
+    for proxy in candidates:
+        cam_kwargs: dict[str, Any] = {
+            "headless": headless, "humanize": True, "os": "windows",
+            # Fixed modest window so it doesn't fill the user's monitor. (Camoufox
+            # warns fixed sizes are slightly more fingerprintable, but an
+            # un-watchable giant window is worse for a headed, supervised run.)
+            "window": WINDOW_SIZE,
+        }
+        if proxy:
+            cam_kwargs["proxy"] = proxy
+            cam_kwargs["geoip"] = True
+        server = proxy["server"] if proxy else "direct"
+        _emit("signup_proxy", {"using_proxy": bool(proxy), "server": server})
+
+        # The bring-up (launch + new_page + first goto through a residential
+        # proxy) can throw a TRANSIENT TargetClosedError — the diagnostic proved
+        # the exact config works, so a single close is flaky bring-up, not a dead
+        # proxy. Retry the SAME proxy once (keeps the IP sticky) before moving on.
+        warmed = False
+        for attempt in range(WARMUP_ATTEMPTS):
+            try:
+                async with AsyncCamoufox(**cam_kwargs) as browser:
+                    page = await browser.new_page()
+                    if not await _warmup(page):
+                        # clean "didn't load" — likely genuinely slow; don't
+                        # waste a second launch on the same proxy.
+                        break
+                    warmed = True
+                    return await _run_flow(page)
+            except Exception as exc:  # transient bring-up close, or real error
+                msg = f"{type(exc).__name__}: {exc}"[:200]
+                if proxy and proxy.get("password"):
+                    msg = msg.replace(proxy["password"], "<redacted>")
+                _emit("signup_warmup_retry",
+                      {"server": server, "attempt": attempt + 1, "error": msg})
+                await asyncio.sleep(1.5)
+                continue
+        if not warmed:
+            _emit("signup_proxy_dead", {"server": server})
+            continue  # exhausted retries on this proxy — next candidate
+
+    # Every candidate (all proxies + direct) failed to even warm up.
+    result["outcome"] = "failed"
+    _emit("signup_all_proxies_dead", {})
+    return result
 
 
 async def _enter_otp(page: Any, code: str) -> bool:

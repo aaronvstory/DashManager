@@ -124,3 +124,59 @@ def test_resolve_sticky_proxy_never_raises():
     assert out is None or (
         out.get("server", "").startswith(("http://", "https://", "socks5://"))
         and "username" in out and "password" in out)
+
+
+def test_iter_proxies_returns_all_in_order(tmp_path, monkeypatch):
+    # Sticky-with-fallback: the driver needs the FULL ordered list so it can
+    # try each until one warms up, then stay on it. iter_proxies must preserve
+    # file order and skip comments/blanks.
+    import backend.browser.camoufox_signup as mod
+    from pathlib import Path
+
+    (tmp_path / "working-proxies.txt").write_text(
+        "# header\n\n"
+        "http://p1.net:1:a:b\n"
+        "http://p2.net:2:c:d\n"
+        "  \n"
+        "http://p3.net:3:e:f\n",
+        encoding="utf-8")
+
+    real_resolve = Path.resolve
+
+    def fake_resolve(self):
+        if str(self).endswith("camoufox_signup.py"):
+            class _P:
+                parents = {2: tmp_path}
+            return _P()
+        return real_resolve(self)
+
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+    out = mod.iter_proxies()
+    assert [p["server"] for p in out] == [
+        "http://p1.net:1", "http://p2.net:2", "http://p3.net:3"]
+    # resolve_sticky_proxy is now the first of iter_proxies (back-compat shim)
+    assert mod.resolve_sticky_proxy() == out[0]
+
+
+def test_iter_proxies_empty_when_missing(tmp_path, monkeypatch):
+    import backend.browser.camoufox_signup as mod
+    from pathlib import Path
+
+    real_resolve = Path.resolve
+
+    def fake_resolve(self):
+        if str(self).endswith("camoufox_signup.py"):
+            class _P:
+                parents = {2: tmp_path}   # no working-proxies.txt
+            return _P()
+        return real_resolve(self)
+
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+    assert mod.iter_proxies() == []
+    assert mod.resolve_sticky_proxy() is None
+
+
+def test_window_size_is_modest():
+    # Must NOT fill the user's monitor on a headed supervised run.
+    w, h = c.WINDOW_SIZE
+    assert 0 < w <= 1366 and 0 < h <= 900
