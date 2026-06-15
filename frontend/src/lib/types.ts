@@ -192,6 +192,8 @@ export interface CreateAccountRequest extends HeadlessOverride {
   radius_miles?: number
   count?: number
   batch_label?: string
+  /** Join an existing batch (add-one-to-batch) instead of minting a new id. */
+  batch_id?: string
 }
 
 export type ReloginRequest = HeadlessOverride
