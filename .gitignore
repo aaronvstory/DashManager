@@ -41,16 +41,23 @@ logs/
 # ── Session state ────────────────────────────────────────────────────
 .claude/
 
-# Throwaway live-test scripts
+# Throwaway live-test / scratch scripts + artifacts (anything _-prefixed in
+# repo root: _cdp_*.py, _live_*.py, _sig*.txt, _*.png, ...). Real modules live
+# under backend/ and tests/, never as a leading-underscore root file.
+_*.py
+_*.txt
+_*.png
+_*.json
 _live_test_*.py
 _dump_*.py
 _*_out.txt
 _codex_*.txt
-_check5.py
-_login4.py
-_walk.py
-_walk_shot.png
-_recheck.py
+
+# SeleniumBase downloads/artifacts dir
+downloaded_files/
+latest_logs/
+assets/
+.unittest-marker
 
 # Serena project cache
 .serena/
