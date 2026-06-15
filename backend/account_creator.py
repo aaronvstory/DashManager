@@ -14,8 +14,8 @@ route layer.
 """
 from __future__ import annotations
 
+import asyncio
 import json
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -56,11 +56,6 @@ async def create_account(*, location_origin: str | None,
     Raises on fatal failure (caller emits account_failed); partial progress is
     reported via events.
     """
-    from playwright.async_api import async_playwright
-
-    from backend.browser.selectors import CHROMIUM_ARGS, UA
-    from backend.browser.signup import fill_signup_form, submit_and_verify
-
     bucket = bucket_date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     browser_cfg = await db.get_setting("browser")
     headless = (headless if headless is not None
@@ -98,46 +93,48 @@ async def create_account(*, location_origin: str | None,
         api_url = number.get("api_url", "")
         mirror_hosts = number.get("mirror_hosts", [])
 
-        async def poll_otp() -> str:
-            res = await daisy.fetch_otp(token, api_url, mirror_hosts)
-            return res.get("code") or ""
+        # ── Drive signup via the WINNING config: SeleniumBase UC + OS-level
+        #    PyAutoGUI input (os_input=True), home IP. This is the ONLY path that
+        #    beats DoorDash's PerimeterX gate — synthetic Playwright/CDP input
+        #    gets the "something went wrong" reject (see memory
+        #    doordash-signup-bot-detection). signup_via_cdp is SYNC and handles
+        #    OTP entry+submit, delivery address, the DashPass skip, and the
+        #    /consumer/edit_profile confirmation internally; it returns the
+        #    Playwright-compatible storage_state (cookies) the session machinery
+        #    uses, so no persistent-profile move is needed.
+        #    ⚠️ os_input drives the REAL shared cursor — runs must be hands-off.
+        from backend.browser.cdp_signup import signup_via_cdp
 
-        # ── Drive the browser in a TEMP profile ──────────────────────────────
-        # The customer row doesn't exist yet, so sign up in a temp persistent
-        # profile; it's moved to data/profiles/{cid}/ once the row is created.
-        import tempfile
+        def _poll_otp_sync() -> str:
+            # signup_via_cdp runs in a worker thread; marshal the async bridge
+            # fetch back onto this event loop.
+            fut = asyncio.run_coroutine_threadsafe(
+                daisy.fetch_otp(token, api_url, mirror_hosts), loop)
+            return (fut.result().get("code") or "")
 
-        temp_profile = Path(tempfile.mkdtemp(prefix="dm_signup_"))
-        async with async_playwright() as p:
-            outcome = "failed"
-            storage_backup = ""
-            ctx = None
-            try:
-                ctx = await p.chromium.launch_persistent_context(
-                    str(temp_profile),
-                    headless=headless,
-                    args=CHROMIUM_ARGS, user_agent=UA,
-                    viewport={"width": 1400, "height": 900})
-                page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-                await fill_signup_form(page, identity, emit=_emit)
-                _emit("signup_submitting", {})
-                outcome = await submit_and_verify(
-                    page, poll_otp,
-                    address={"full_address": identity.get("full_address")},
-                    emit=_emit)
-                _emit("signup_outcome", {"outcome": outcome})
+        loop = asyncio.get_event_loop()
+        shot_dir = str(config.SCREENSHOTS_DIR / "signup"
+                       / datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")) \
+            if hasattr(config, "SCREENSHOTS_DIR") else None
+        result = await asyncio.to_thread(
+            signup_via_cdp, identity,
+            poll_otp=_poll_otp_sync, proxy=None, headless=headless,
+            ios_mobile=False, os_input=True, pre_submit_dwell_s=1.5,
+            emit=_emit, otp_total_wait_s=240.0, screenshot_dir=shot_dir)
+        outcome = result.get("outcome", "failed")
+        _emit("signup_outcome", {"outcome": outcome,
+                                 "profile_confirmed":
+                                 result.get("profile_confirmed", {})})
 
-                if outcome == "created":
-                    config.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-                    storage_backup = str(config.SESSIONS_DIR
-                                         / "pending_signup_storage.json")
-                    await ctx.storage_state(path=storage_backup)
-            finally:
-                if ctx is not None:
-                    await ctx.close()
+        storage_backup = ""
+        if outcome == "created" and result.get("storage_state"):
+            config.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+            storage_backup = str(config.SESSIONS_DIR
+                                 / "pending_signup_storage.json")
+            with open(storage_backup, "w", encoding="utf-8") as f:
+                json.dump(result["storage_state"], f)
 
         if outcome != "created":
-            shutil.rmtree(temp_profile, ignore_errors=True)
             try:  # number/identity still useful — record the attempt
                 await daisy.save_customer(_daisy_record(
                     identity, verified=False,
@@ -168,24 +165,16 @@ async def create_account(*, location_origin: str | None,
             mirror_hosts=json.dumps(identity.get("mirror_hosts", [])),
             notes=_notes(identity, daisy_id))
 
-        # Adopt the signup profile as the customer's persistent profile.
-        # Everything below is wrapped so the temp dir is cleaned on ANY failure
-        # (e.g. db.update_customer raising) — a successful move makes the
-        # final rmtree a no-op since temp_profile no longer exists.
-        from backend.browser.driver import profile_dir
-
-        try:
-            dest = profile_dir(cid)
-            shutil.rmtree(dest, ignore_errors=True)
-            shutil.move(str(temp_profile), str(dest))
-            final_storage = config.SESSIONS_DIR / f"{cid}_storage.json"
-            if storage_backup and Path(storage_backup).exists():
-                Path(storage_backup).replace(final_storage)
-            await db.update_customer(cid,
-                                     storage_state_path=str(final_storage),
-                                     session_status="active")
-        finally:
-            shutil.rmtree(temp_profile, ignore_errors=True)
+        # Persist the captured session. signup_via_cdp returns cookies only (no
+        # persistent profile to adopt), so we just move the pending storage JSON
+        # into the customer's session path — the login/scrape machinery rehydrates
+        # a Playwright context from storage_state on next use.
+        final_storage = config.SESSIONS_DIR / f"{cid}_storage.json"
+        if storage_backup and Path(storage_backup).exists():
+            Path(storage_backup).replace(final_storage)
+        await db.update_customer(cid,
+                                 storage_state_path=str(final_storage),
+                                 session_status="active")
 
         summary = {"customer_id": cid, "daisy_id": daisy_id,
                    "name": f"{identity.get('first_name','')} "
