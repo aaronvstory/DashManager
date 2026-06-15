@@ -327,3 +327,11 @@ def test_resolve_batch_join_defaults_label_to_id():
     from backend.routes.customers import _resolve_batch
     _, label = _resolve_batch("claude_xyz", None, "20260616_073000")
     assert label == "claude_xyz - claude"
+
+
+def test_resolve_batch_whitespace_id_mints():
+    from backend.routes.customers import _resolve_batch
+    # a whitespace-only batch_id is NOT a real batch -> mint, don't join "   ".
+    bid, label = _resolve_batch("   ", None, "20260616_073000")
+    assert bid == "claude_20260616_073000"
+    assert label == "batch 20260616_073000 - claude"

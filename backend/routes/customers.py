@@ -205,6 +205,9 @@ def _resolve_batch(batch_id: str | None, batch_label: str | None,
     otherwise mint a fresh ``claude_<stamp>`` id. The label always ends in the
     user's '- claude' convention. Pure (testable) — ``stamp`` is passed in.
     """
+    # Normalize first: a whitespace-only batch_id is NOT a real batch — treat
+    # it as absent (mint), not as a JOIN of "   ".
+    batch_id = (batch_id or "").strip() or None
     if batch_id:
         base = (batch_label or batch_id).strip()
     else:

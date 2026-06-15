@@ -320,6 +320,9 @@ export function CreateAccountDialog({
     onOpenChange(next)
     if (!next) {
       resetToIdle()
+      // Clear the batch label so a re-open with no initialBatch starts blank
+      // (an add-to-batch label must not carry into a later plain create).
+      setBatchLabel("")
       setDate(new Date())
       setDateOpen(false)
     }
