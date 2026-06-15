@@ -257,10 +257,56 @@ def _press_any(sb: Any, selectors: tuple[str, ...], value: str) -> bool:
     return False
 
 
-def _enter_otp(sb: Any, code: str) -> bool:
-    """Enter the OTP into the verify step (single field or 6 split boxes).
+def _gui_press(sb: Any, selector: str, value: str) -> bool:
+    """Fill a field with REAL OS-level input (PyAutoGUI via SeleniumBase).
 
-    Mirrors uc_signup._enter_otp but uses CDP element handles.
+    PerimeterX weights genuine hardware mouse/keyboard telemetry; CDP
+    press_keys is synthetic and gets the "something went wrong" reject. This
+    moves the real cursor to the field's screen center, clicks (real button
+    event), then types with real keystrokes (gui_write). Verifies the value
+    landed in the DOM.
+    """
+    try:
+        # screen-center click via real OS mouse, then real keystrokes
+        sb.cdp.gui_click_element(selector)
+        time.sleep(0.35)
+    except Exception:
+        # fall back to coords if the element-center helper isn't available
+        try:
+            x, y = sb.get_gui_element_center(selector)
+            sb.cdp.gui_click_x_y(x, y)
+            time.sleep(0.35)
+        except Exception:
+            return False
+    try:
+        sb.cdp.gui_write(value)
+        time.sleep(0.35)
+    except Exception:
+        return False
+    return _field_value(sb, selector).strip() != ""
+
+
+def _gui_press_any(sb: Any, selectors: tuple[str, ...], value: str) -> bool:
+    """_press_any but using real OS-level input (_gui_press)."""
+    for sel in selectors:
+        try:
+            if not sb.cdp.find_element(sel):
+                continue
+        except Exception:
+            continue
+        if _gui_press(sb, sel, value):
+            return True
+    return False
+
+
+def _enter_otp(sb: Any, code: str, os_input: bool = False) -> bool:
+    """Enter the OTP into the verify modal AND click its Submit button.
+
+    The verify modal is a SEPARATE step that can take ~20s to render — the
+    caller must wait for it before calling this. After entering the digits we
+    must click the modal's "Submit" (entering the code alone does NOT advance —
+    the live run stalled here). Uses OS-level input when os_input so the OTP +
+    submit carry the same human telemetry that passed the gate.
     """
     digits = re.sub(r"\D", "", code)
     if not digits:
@@ -270,13 +316,22 @@ def _enter_otp(sb: Any, code: str) -> bool:
     except Exception:
         boxes = []
     try:
-        if boxes and len(boxes) >= 4:
+        if os_input:
+            # real OS keystrokes into the focused box
+            try:
+                if boxes:
+                    boxes[0].click()
+                    time.sleep(0.2)
+                sb.cdp.gui_write(digits)
+            except Exception:
+                if boxes:
+                    boxes[0].send_keys(digits)
+        elif boxes and len(boxes) >= 4:
             boxes[0].click()
             time.sleep(0.2)
             boxes[0].send_keys(digits)
             time.sleep(0.5)
         else:
-            # Single combined field.
             try:
                 sb.cdp.press_keys(OTP_DIGIT_BOXES, digits)
             except Exception:
@@ -285,9 +340,129 @@ def _enter_otp(sb: Any, code: str) -> bool:
                 else:
                     return False
         time.sleep(1.0)
+        # Click the modal's Submit — entering the code alone doesn't advance.
+        _click_submit_button(sb, os_input)
+        time.sleep(1.5)
         return True
     except Exception:
         return False
+
+
+# OTP-modal / address-step controls.
+OTP_SUBMIT_SELECTORS = ('button:contains("Submit")', 'button[type="submit"]')
+ADDR_SELECTORS = ('input[placeholder*="delivery address" i]',
+                  'input[aria-label*="address" i]',
+                  'input[id*="ddress" i]', 'input[autocomplete="off"]')
+SKIP_SELECTORS = ('button:contains("Skip")', 'button:contains("Not now")',
+                  'button:contains("Maybe later")', 'a:contains("Skip")')
+
+
+def _finish_account(sb: Any, identity: dict[str, Any], os_input: bool,
+                    emit: Any, shot: Any) -> None:
+    """Post-verification: the account exists but lands on the home page with an
+    'Enter delivery address' prompt + a possible DashPass upsell. Fill the
+    address (press Enter to pick the first suggestion) then skip the upsell, so
+    the account is fully set up. Best-effort — the account is already created;
+    these steps just finish onboarding. The page can load slowly (~20s), so we
+    wait for the address field before filling."""
+    try:
+        full_address = (identity.get("full_address")
+                        or identity.get("address") or "")
+        # wait for the address field to render (slow ~20s post-redirect)
+        deadline = time.time() + 30
+        have_addr = False
+        while time.time() < deadline:
+            for sel in ADDR_SELECTORS:
+                try:
+                    if sb.cdp.find_element(sel):
+                        have_addr = True
+                        break
+                except Exception:
+                    continue
+            if have_addr:
+                break
+            time.sleep(1.5)
+        if have_addr and full_address:
+            if _fill_address(sb, full_address, os_input):
+                emit("signup_address_filled", {"address": full_address[:60]})
+                shot("07_address")
+        # a DashPass upsell may appear before or after the address step
+        time.sleep(1.5)
+        _skip_upsell(sb, os_input)
+        shot("08_finished")
+        emit("signup_onboarding_done", {})
+    except Exception as exc:
+        emit("signup_onboarding_warn",
+             {"error": f"{type(exc).__name__}: {exc}"[:120]})
+
+
+def _click_submit_button(sb: Any, os_input: bool = False) -> bool:
+    """Click a "Submit"/submit button (OS-click when os_input)."""
+    for sel in OTP_SUBMIT_SELECTORS:
+        try:
+            if not sb.cdp.find_element(sel):
+                continue
+        except Exception:
+            continue
+        try:
+            if os_input:
+                sb.cdp.gui_click_element(sel)
+            else:
+                sb.cdp.click(sel)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _fill_address(sb: Any, full_address: str, os_input: bool = False) -> bool:
+    """Fill the post-verify delivery-address field + press Enter to pick the
+    first suggestion. Returns True if a field was found and filled."""
+    if not full_address:
+        return False
+    for sel in ADDR_SELECTORS:
+        try:
+            if not sb.cdp.find_element(sel):
+                continue
+        except Exception:
+            continue
+        try:
+            if os_input:
+                sb.cdp.gui_click_element(sel)
+                time.sleep(0.3)
+                sb.cdp.gui_write(full_address)
+            else:
+                sb.cdp.click(sel)
+                sb.cdp.press_keys(sel, full_address)
+            time.sleep(2.5)  # let autocomplete suggestions populate
+            try:
+                sb.cdp.press_keys(sel, "\n")
+            except Exception:
+                pass
+            time.sleep(2.0)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _skip_upsell(sb: Any, os_input: bool = False) -> None:
+    """Click a "Skip"/"Not now" on a DashPass upsell if one is present."""
+    for sel in SKIP_SELECTORS:
+        try:
+            if not sb.cdp.find_element(sel):
+                continue
+        except Exception:
+            continue
+        try:
+            if os_input:
+                sb.cdp.gui_click_element(sel)
+            else:
+                sb.cdp.click(sel)
+            time.sleep(1.5)
+            return
+        except Exception:
+            continue
 
 
 def signup_via_cdp(identity: dict[str, Any], *,
@@ -296,6 +471,7 @@ def signup_via_cdp(identity: dict[str, Any], *,
                    headless: bool = False,
                    use_chromium: bool = False,
                    ios_mobile: bool = False,
+                   os_input: bool = False,
                    pre_submit_dwell_s: float = 0.0,
                    emit: Callable[[str, dict], None] | None = None,
                    otp_total_wait_s: float = 180.0,
@@ -397,16 +573,21 @@ def signup_via_cdp(identity: dict[str, Any], *,
                 ("phone", (SEL_PHONE,), phone10),
                 ("password", (SEL_PASSWORD,), identity.get("password", "")),
             ]
+            # os_input=True uses REAL OS-level mouse+keyboard (PyAutoGUI) — the
+            # synthetic CDP press_keys is what PerimeterX rejects; real hardware
+            # telemetry is the behavioral fix being tested.
+            filler = _gui_press_any if os_input else _press_any
             fills = {k: (not val) for k, _sels, val in FIELDS}  # empty val = ok
             for _pass in range(3):
                 for key, sels, val in FIELDS:
                     if fills[key]:
                         continue  # already landed
-                    fills[key] = _press_any(sb, sels, val)
+                    fills[key] = filler(sb, sels, val)
                 if all(fills.values()):
                     break
                 time.sleep(0.5)  # let late-binding fields settle, re-press
-            _emit("signup_form_filled", fills)
+            _emit("signup_form_filled", dict(fills, mode="os" if os_input
+                                             else "cdp"))
             _shot("02_filled")
 
             # Don't submit a form with empty REQUIRED fields — that's what hit
@@ -425,13 +606,25 @@ def signup_via_cdp(identity: dict[str, Any], *,
             if pre_submit_dwell_s > 0:
                 time.sleep(pre_submit_dwell_s)
 
-            try:
-                sb.cdp.click(SEL_SUBMIT)
-            except Exception:
+            # Submit via real OS click too when os_input (consistent telemetry).
+            submitted = False
+            if os_input:
+                for sel in (SEL_SUBMIT, SEL_SUBMIT_FALLBACK):
+                    try:
+                        if sb.cdp.find_element(sel):
+                            sb.cdp.gui_click_element(sel)
+                            submitted = True
+                            break
+                    except Exception:
+                        continue
+            if not submitted:
                 try:
-                    sb.cdp.click(SEL_SUBMIT_FALLBACK)
+                    sb.cdp.click(SEL_SUBMIT)
                 except Exception:
-                    pass
+                    try:
+                        sb.cdp.click(SEL_SUBMIT_FALLBACK)
+                    except Exception:
+                        pass
             _emit("signup_submitting", {})
             time.sleep(5.0)
             _shot("03_submitted")
@@ -467,14 +660,17 @@ def signup_via_cdp(identity: dict[str, Any], *,
                 _shot("04_bot_blocked")
                 return result
 
-            # Wait for the verify/OTP step (or an immediate logged-in redirect).
-            deadline = time.time() + 45
+            # Wait for the verify/OTP MODAL — it renders as a separate step and
+            # can take ~20s+ to appear, so wait generously (was 45s, the modal
+            # sometimes hadn't shown yet).
+            deadline = time.time() + 75
             while time.time() < deadline:
                 if _page_has(sb, VERIFY_MARKERS):
                     break
                 if any(m in _cdp_url(sb) for m in SUCCESS_URL_MARKERS):
                     result["outcome"] = "created"
                     result["storage_state"] = _export_storage(sb)
+                    _finish_account(sb, identity, os_input, _emit, _shot)
                     _shot("05_created_nootp")
                     return result
                 if _page_has(sb, BOT_BLOCK_MARKERS):
@@ -498,15 +694,22 @@ def signup_via_cdp(identity: dict[str, Any], *,
                 if code and code not in tried:
                     tried.add(code)
                     _emit("otp_received", {"code": code})
-                    if _enter_otp(sb, code):
-                        for _ in range(6):
-                            time.sleep(2.0)
+                    # _enter_otp now also CLICKS the modal's Submit button (the
+                    # live run stalled because entering the code alone didn't
+                    # advance) and uses OS input when os_input.
+                    if _enter_otp(sb, code, os_input):
+                        for _ in range(8):  # success redirect can be slow
+                            time.sleep(2.5)
                             if any(m in _cdp_url(sb)
                                    for m in SUCCESS_URL_MARKERS):
                                 result["outcome"] = "created"
                                 result["storage_state"] = _export_storage(sb)
                                 _emit("signup_created", {})
                                 _shot("06_created")
+                                # post-verify: fill delivery address + skip the
+                                # DashPass upsell so the account is fully usable.
+                                _finish_account(sb, identity, os_input,
+                                                _emit, _shot)
                                 return result
                 time.sleep(3.0)
             result["outcome"] = "otp_timeout"
