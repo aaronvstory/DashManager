@@ -293,6 +293,41 @@ async def fetch_otp(cid: int) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/otp-live")
+async def otp_live(bucket_date: str | None = None, ids: str | None = None
+                   ) -> dict[str, Any]:
+    """Latest OTP for every customer in a bucket — for the live-table view.
+
+    NON-BLOCKING single pass (unlike POST /{cid}/fetch-otp which waits up to
+    ~2 min): returns whatever code api.cc has RIGHT NOW for each customer, so
+    the UI can poll this every few seconds and render a live grid like
+    CustomerDaisy's "Live SMS Codes". `ids` is a comma-separated customer-id
+    list (overrides `bucket_date`); otherwise `bucket_date` (default today).
+    Each row is {id, name, phone, code, error}; one customer's failure never
+    aborts the batch. `fetched_at` is the server's UTC timestamp so the UI can
+    show code freshness (api.cc codes expire ~30s).
+    """
+    import re
+
+    from backend.otp_fetch import fetch_bucket_otps
+
+    id_list = None
+    if ids:
+        try:
+            id_list = [int(x) for x in ids.split(",") if x.strip()]
+        except ValueError:
+            raise HTTPException(status_code=400,
+                                detail="ids must be comma-separated integers")
+    # Validate the date shape (consistent with the ids check) so a malformed
+    # ?bucket_date=foo 400s instead of silently returning an empty 200.
+    if bucket_date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", bucket_date):
+        raise HTTPException(status_code=400,
+                            detail="bucket_date must be YYYY-MM-DD")
+    rows = await fetch_bucket_otps(bucket_date, id_list)
+    return {"rows": rows,
+            "fetched_at": datetime.now(timezone.utc).isoformat()}
+
+
 class ReloginBody(BaseModel):
     headless: bool | None = None  # per-action override of the setting
 

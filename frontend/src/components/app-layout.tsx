@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useLocation } from "react-router-dom"
-import { Database, FileText, History, Network, Play, Settings, Users } from "lucide-react"
+import { Database, FileText, History, Network, Play, Settings, Smartphone, Users } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Logo } from "@/components/logo"
@@ -19,6 +19,7 @@ const NAV: NavItem[] = [
   { to: "/", label: "Customers", icon: Users, end: true },
   { to: "/database", label: "Database", icon: Database },
   { to: "/run", label: "Run", icon: Play },
+  { to: "/otp", label: "Live OTP", icon: Smartphone },
   { to: "/history", label: "History", icon: History },
   { to: "/reports", label: "Reports", icon: FileText },
   { to: "/proxies", label: "Proxies", icon: Network },

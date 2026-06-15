@@ -256,3 +256,46 @@ async def test_proxies_test_all_failure_is_500_without_creds(client, monkeypatch
     r = await client.post("/api/proxies/test")
     assert r.status_code == 500
     assert "detail" in r.json()
+
+
+# ── Live OTP batch route ─────────────────────────────────────────────────────
+async def test_otp_live_returns_rows_and_timestamp(client, monkeypatch):
+    from backend import otp_fetch
+
+    async def fake_fetch(bucket_date=None, customer_ids=None):
+        # Echo the selector back so we can assert the route forwards it.
+        return [{"id": 1, "name": "Ada L", "phone": "555", "code": "123456",
+                 "error": "", "_bucket": bucket_date, "_ids": customer_ids}]
+
+    monkeypatch.setattr(otp_fetch, "fetch_bucket_otps", fake_fetch)
+    r = await client.get("/api/customers/otp-live?bucket_date=2026-06-12")
+    assert r.status_code == 200
+    body = r.json()
+    assert "fetched_at" in body
+    assert body["rows"][0]["code"] == "123456"
+    assert body["rows"][0]["_bucket"] == "2026-06-12"
+
+
+async def test_otp_live_parses_ids(client, monkeypatch):
+    from backend import otp_fetch
+
+    seen = {}
+
+    async def fake_fetch(bucket_date=None, customer_ids=None):
+        seen["ids"] = customer_ids
+        return []
+
+    monkeypatch.setattr(otp_fetch, "fetch_bucket_otps", fake_fetch)
+    r = await client.get("/api/customers/otp-live?ids=3,5,7")
+    assert r.status_code == 200
+    assert seen["ids"] == [3, 5, 7]
+
+
+async def test_otp_live_bad_ids_400(client):
+    r = await client.get("/api/customers/otp-live?ids=abc")
+    assert r.status_code == 400
+
+
+async def test_otp_live_bad_bucket_date_400(client):
+    r = await client.get("/api/customers/otp-live?bucket_date=not-a-date")
+    assert r.status_code == 400
