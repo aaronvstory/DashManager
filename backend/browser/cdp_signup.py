@@ -314,41 +314,65 @@ def _enter_otp(sb: Any, code: str, os_input: bool = False) -> bool:
     digits = re.sub(r"\D", "", code)
     if not digits:
         return False
-    try:
-        boxes = sb.cdp.find_elements(OTP_DIGIT_BOXES)
-    except Exception:
-        boxes = []
-    try:
-        if os_input:
-            # real OS keystrokes into the focused box
-            try:
-                if boxes:
-                    boxes[0].click()
+
+    def _otp_landed() -> bool:
+        # the combined value across boxes should contain all the digits
+        try:
+            boxes = sb.cdp.find_elements(OTP_DIGIT_BOXES) or []
+            joined = "".join((b.get_attribute("value") or "") for b in boxes)
+            return re.sub(r"\D", "", joined) == digits
+        except Exception:
+            return False
+
+    # Up to 3 entry passes — focus can be stolen (the live OTP once typed into
+    # another window). Re-click the box each pass and VERIFY the digits landed
+    # before clicking Submit. Prefer DOM send_keys (focus-immune) over gui_write.
+    for attempt in range(3):
+        try:
+            boxes = sb.cdp.find_elements(OTP_DIGIT_BOXES) or []
+        except Exception:
+            boxes = []
+        try:
+            if boxes:
+                boxes[0].click()
+                time.sleep(0.25)
+                # clear any partial/wrong text first
+                try:
+                    boxes[0].clear()
+                except Exception:
+                    pass
+            if os_input and boxes:
+                # focus the box via real click, then real keystrokes
+                try:
+                    sb.cdp.gui_click_element(OTP_DIGIT_BOXES)
                     time.sleep(0.2)
-                sb.cdp.gui_write(digits)
-            except Exception:
-                if boxes:
+                except Exception:
+                    pass
+                try:
+                    sb.cdp.gui_write(digits)
+                except Exception:
                     boxes[0].send_keys(digits)
-        elif boxes and len(boxes) >= 4:
-            boxes[0].click()
-            time.sleep(0.2)
-            boxes[0].send_keys(digits)
-            time.sleep(0.5)
-        else:
-            try:
-                sb.cdp.press_keys(OTP_DIGIT_BOXES, digits)
-            except Exception:
-                if boxes:
-                    boxes[0].send_keys(digits)
-                else:
+            elif boxes:
+                boxes[0].send_keys(digits)
+            else:
+                try:
+                    sb.cdp.press_keys(OTP_DIGIT_BOXES, digits)
+                except Exception:
                     return False
-        time.sleep(1.0)
-        # Click the modal's Submit — entering the code alone doesn't advance.
-        _click_submit_button(sb, os_input)
-        time.sleep(1.5)
-        return True
-    except Exception:
-        return False
+            time.sleep(1.0)
+            if _otp_landed():
+                _click_submit_button(sb, os_input)
+                time.sleep(1.5)
+                return True
+            # didn't land (focus steal / no-op) — retry
+            time.sleep(0.6)
+        except Exception:
+            time.sleep(0.6)
+            continue
+    # last-ditch: try submit anyway in case the value is there but unverifiable
+    _click_submit_button(sb, os_input)
+    time.sleep(1.5)
+    return _otp_landed()
 
 
 # OTP-modal / address-step controls.
@@ -483,7 +507,9 @@ def _click_submit_button(sb: Any, os_input: bool = False) -> bool:
 
 def _fill_address(sb: Any, full_address: str, os_input: bool = False) -> bool:
     """Fill the post-verify delivery-address field + press Enter to pick the
-    first suggestion. Returns True if a field was found and filled."""
+    first suggestion. VERIFIES the value landed and retries (one acct missed the
+    address because the single attempt silently no-op'd). Returns True only if
+    the field actually shows the address."""
     if not full_address:
         return False
     for sel in ADDR_SELECTORS:
@@ -492,23 +518,29 @@ def _fill_address(sb: Any, full_address: str, os_input: bool = False) -> bool:
                 continue
         except Exception:
             continue
-        try:
-            if os_input:
-                sb.cdp.gui_click_element(sel)
-                time.sleep(0.3)
-                sb.cdp.gui_write(full_address)
-            else:
-                sb.cdp.click(sel)
-                sb.cdp.press_keys(sel, full_address)
-            time.sleep(2.5)  # let autocomplete suggestions populate
+        for attempt in range(3):
             try:
-                sb.cdp.press_keys(sel, "\n")
+                if os_input:
+                    sb.cdp.gui_click_element(sel)
+                    time.sleep(0.4)
+                    sb.cdp.gui_write(full_address)
+                else:
+                    sb.cdp.click(sel)
+                    sb.cdp.press_keys(sel, full_address)
+                time.sleep(2.5)  # let autocomplete suggestions populate
+                # verify the value landed before committing with Enter
+                if not _field_value(sb, sel).strip():
+                    time.sleep(0.6)
+                    continue  # no-op'd — retry this selector
+                try:
+                    sb.cdp.press_keys(sel, "\n")
+                except Exception:
+                    pass
+                time.sleep(2.0)
+                return True
             except Exception:
-                pass
-            time.sleep(2.0)
-            return True
-        except Exception:
-            continue
+                time.sleep(0.5)
+                continue
     return False
 
 
