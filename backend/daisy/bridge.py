@@ -13,15 +13,49 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
-DEFAULT_DAISY_ROOT = r"C:\claude\CustomerDaisy"
+
+def _default_daisy_root() -> str:
+    """Best-effort default CustomerDaisy checkout, cross-platform.
+
+    Windows dev box uses C:\\claude\\CustomerDaisy; on macOS/Linux fall back to a
+    sibling 'CustomerDaisy' next to this repo, then ~/CustomerDaisy. The user can
+    always override via DashManager settings ('daisy' -> root), so this is just a
+    sensible default, never a hard requirement.
+    """
+    candidates = []
+    if sys.platform == "win32":
+        candidates.append(Path(r"C:\claude\CustomerDaisy"))
+    # sibling of the DashManager repo root (…/<parent>/CustomerDaisy)
+    repo_root = Path(__file__).resolve().parents[2]
+    candidates.append(repo_root.parent / "CustomerDaisy")
+    candidates.append(Path.home() / "CustomerDaisy")
+    for c in candidates:
+        if c.exists():
+            return str(c)
+    return str(candidates[0])  # first as the documented default
+
+
+DEFAULT_DAISY_ROOT = _default_daisy_root()
 
 
 def _default_python(root: str) -> str:
-    p = Path(root) / ".venv" / "Scripts" / "python.exe"
-    return str(p) if p.exists() else "python"
+    """The CustomerDaisy venv interpreter, cross-platform.
+
+    Windows venvs put the interpreter in Scripts/python.exe; POSIX venvs use
+    bin/python. Try both, then fall back to the current interpreter, then PATH.
+    """
+    win = Path(root) / ".venv" / "Scripts" / "python.exe"
+    posix = Path(root) / ".venv" / "bin" / "python"
+    if win.exists():
+        return str(win)
+    if posix.exists():
+        return str(posix)
+    # fall back to the interpreter running DashManager, else bare 'python'
+    return sys.executable or "python"
 
 
 class DaisyError(RuntimeError):

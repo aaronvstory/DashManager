@@ -29,6 +29,25 @@ def _emit(type: str, data: dict | None = None) -> None:
     bus.publish(type, data or {})
 
 
+async def _retry(coro_factory, *, attempts: int = 4, emit=None, what: str = ""):
+    """Await coro_factory() with retries for transient failures (DNS/network
+    blips in CustomerDaisy's mail.tm/MapQuest/api.cc calls). Re-raises the last
+    error if all attempts fail. coro_factory must return a fresh coroutine each
+    call (e.g. a lambda) since a coroutine can only be awaited once."""
+    last: Exception | None = None
+    for i in range(attempts):
+        try:
+            return await coro_factory()
+        except Exception as exc:  # noqa: BLE001 — transient; retry
+            last = exc
+            if emit:
+                emit("retry", {"what": what, "attempt": i + 1,
+                               "of": attempts,
+                               "error": f"{type(exc).__name__}: {exc}"[:120]})
+            await asyncio.sleep(3.0)
+    raise last if last else RuntimeError(f"{what} failed")
+
+
 async def create_account(*, location_origin: str | None,
                          radius_miles: float, bucket_date: str | None,
                          daisy_root: str | None = None,
@@ -69,7 +88,12 @@ async def create_account(*, location_origin: str | None,
 
         _emit("identity_generating", {"origin": location_origin,
                                       "radius_miles": radius_miles})
-        identity = await daisy.generate_identity(location_origin, radius_miles)
+        # Identity gen calls mail.tm / MapQuest — transient DNS/network blips
+        # happen (a batch run once failed on a mail.tm NameResolutionError).
+        # Auto-heal: retry a few times before giving up the whole creation.
+        identity = await _retry(
+            lambda: daisy.generate_identity(location_origin, radius_miles),
+            attempts=4, emit=_emit, what="identity")
         _emit("identity_generated", {
             "first_name": identity.get("first_name"),
             "last_name": identity.get("last_name"),
@@ -84,7 +108,8 @@ async def create_account(*, location_origin: str | None,
                   {"phone_number": number.get("phone_number")})
         else:
             _emit("number_renting", {})
-            number = await daisy.rent_number()
+            number = await _retry(daisy.rent_number, attempts=4, emit=_emit,
+                                  what="number")
             identity.update(number)  # phone_number, number_token, api_url, ...
             _emit("number_rented", {"phone_number": number.get("phone_number"),
                                     "price": number.get("price")})
