@@ -322,9 +322,15 @@ export function CreateAccountDialog({
     setBatchInfo(null)
     const radiusMiles = Number(radius)
     const n = Math.max(1, Math.floor(Number(count) || 1))
+    // Anchor-pool selections carry an "anchor:" prefix (so they can't be
+    // deduped against a predefined location of the same address) — strip it to
+    // send the bare origin address.
+    const origin = location.startsWith("anchor:")
+      ? location.slice("anchor:".length)
+      : location
     const body: CreateAccountRequest = {
       bucket_date: format(date, "yyyy-MM-dd"),
-      location_origin: location || undefined,
+      location_origin: origin || undefined,
       radius_miles: Number.isFinite(radiusMiles) ? radiusMiles : undefined,
       count: n,
       batch_label: batchLabel.trim() || undefined,
@@ -412,7 +418,11 @@ export function CreateAccountDialog({
                         label: a.name
                           ? `★ ${a.name} — ${a.full_address}`
                           : `★ ${a.full_address}`,
-                        value: a.full_address,
+                        // Namespace so an anchor whose address equals a
+                        // predefined location's isn't deduped (and made
+                        // unselectable) by the Select's value map. Stripped on
+                        // submit.
+                        value: `anchor:${a.full_address}`,
                       })),
                     ]}
                     value={location}
@@ -437,7 +447,7 @@ export function CreateAccountDialog({
                       {anchors.map((a) => (
                         <SelectItem
                           key={`anchor:${a.full_address}`}
-                          value={a.full_address}
+                          value={`anchor:${a.full_address}`}
                         >
                           ★ {a.name ? `${a.name} — ` : ""}
                           {a.full_address}
