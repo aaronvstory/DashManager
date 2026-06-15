@@ -207,7 +207,7 @@ async def create_account(*, location_origin: str | None,
                 number_token=identity.get("number_token", ""),
                 api_url=identity.get("api_url", ""),
                 mirror_hosts=json.dumps(identity.get("mirror_hosts", [])),
-                notes=_notes(identity, daisy_id))
+                notes=_notes(identity, daisy_id, batch_label))
 
             # Persist the captured session. signup_via_cdp returns cookies only
             # (no persistent profile to adopt), so we just move the pending
@@ -399,8 +399,11 @@ async def adopt_from_daisy(name: str, bucket_date: str | None = None, *,
     return row or {"id": cid}
 
 
-def _notes(identity: dict[str, Any], daisy_id: str) -> str:
+def _notes(identity: dict[str, Any], daisy_id: str,
+           batch_label: str | None = None) -> str:
     bits = ["created via signup"]
+    if batch_label:
+        bits.append(f"batch:{batch_label}")  # identify the batch in the DM list
     if identity.get("full_address"):
         bits.append(identity["full_address"])
     if daisy_id:
