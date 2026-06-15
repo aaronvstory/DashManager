@@ -4,6 +4,7 @@ import { Toaster } from "@/components/ui/sonner"
 import CustomersPage from "@/pages/CustomersPage"
 import DatabasePage from "@/pages/DatabasePage"
 import HistoryPage from "@/pages/HistoryPage"
+import ProxiesPage from "@/pages/ProxiesPage"
 import ReportsPage from "@/pages/ReportsPage"
 import RunPage from "@/pages/RunPage"
 import SettingsPage from "@/pages/SettingsPage"
@@ -18,6 +19,7 @@ export default function App() {
           <Route path="/run" element={<RunPage />} />
           <Route path="/history" element={<HistoryPage />} />
           <Route path="/reports" element={<ReportsPage />} />
+          <Route path="/proxies" element={<ProxiesPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Routes>
