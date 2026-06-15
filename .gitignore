@@ -58,3 +58,8 @@ _recheck.py
 # Codex review logs
 codex_*.log
 .codex_*
+
+# Proxy credentials — NEVER commit (residential proxy creds)
+working-proxies.txt
+*proxies*.txt
+proxies.json
