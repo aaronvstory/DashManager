@@ -82,6 +82,22 @@ async def list_daisy_customers(limit: int = 200) -> dict[str, Any]:
     return {"customers": [_safe(c) for c in customers], "count": count}
 
 
+# NOTE: this static-segment route is declared BEFORE `/{customer_id}` so it is
+# matched as a literal, not captured as a customer id.
+@router.get("/addresses")
+async def list_anchor_addresses() -> dict[str, Any]:
+    """The user's anchor-address pool (CustomerDaisy's my_addresses.json).
+
+    For the create-account dialog: lets a batch be anchored to one of the
+    user's own saved addresses instead of only the predefined locations.
+    Empty list when no my_addresses.json is configured.
+    """
+    bridge = await _bridge()
+    async with bridge as d:
+        addresses = await d.list_addresses()
+    return {"addresses": addresses}
+
+
 @router.get("/{customer_id}")
 async def get_daisy_customer(customer_id: str) -> dict[str, Any]:
     bridge = await _bridge()

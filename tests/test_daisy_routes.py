@@ -53,6 +53,10 @@ class _FakeBridge:
         self.calls.append(("export", fmt, limit))
         return {"format": fmt, "text": self._export_text}
 
+    async def list_addresses(self):
+        self.calls.append(("list_addresses",))
+        return [{"name": "Home", "full_address": "1 Main St, Reno, NV"}]
+
 
 @pytest.fixture
 async def client():
@@ -172,3 +176,14 @@ async def test_export_bad_format_400(client, monkeypatch):
     _patch_bridge(monkeypatch, _FakeBridge([]))
     r = await client.get("/api/daisy/export/xml")
     assert r.status_code == 400
+
+
+async def test_addresses_route(client, monkeypatch):
+    # /addresses must be matched as a literal, NOT captured as /{customer_id}.
+    b = _patch_bridge(monkeypatch, _FakeBridge([]))
+    r = await client.get("/api/daisy/addresses")
+    assert r.status_code == 200
+    assert r.json()["addresses"][0]["full_address"] == "1 Main St, Reno, NV"
+    # it hit list_addresses, not get_customer("addresses")
+    assert any(c[0] == "list_addresses" for c in b.calls)
+    assert not any(c[0] == "get_customer" for c in b.calls)

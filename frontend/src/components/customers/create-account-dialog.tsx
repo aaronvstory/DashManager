@@ -68,6 +68,17 @@ interface LocationsResponse {
   balance: number
 }
 
+interface AnchorAddress {
+  name?: string
+  full_address: string
+  city?: string
+  state?: string
+}
+
+interface AnchorResponse {
+  addresses: AnchorAddress[]
+}
+
 interface GeneratedIdentity {
   first_name: string
   last_name: string
@@ -145,6 +156,18 @@ export function CreateAccountDialog({
   })
   const locations = locationsQuery.data?.locations ?? []
   const balance = locationsQuery.data?.balance ?? null
+
+  // The user's own anchor-address pool (my_addresses.json), offered alongside
+  // the predefined locations so a batch can be anchored to a saved address.
+  const anchorsQuery = useQuery({
+    queryKey: ["daisy-addresses"],
+    queryFn: () => api.get<AnchorResponse>("/daisy/addresses"),
+    enabled: open,
+    staleTime: 60_000,
+  })
+  const anchors = (anchorsQuery.data?.addresses ?? []).filter(
+    (a) => a.full_address,
+  )
 
   // Default the location to the first option (Edenton) once they load.
   useEffect(() => {
@@ -380,10 +403,18 @@ export function CreateAccountDialog({
                   </p>
                 ) : (
                   <Select
-                    items={locations.map((l) => ({
-                      label: `${l.name} — ${l.city}, ${l.state}`,
-                      value: l.full_address,
-                    }))}
+                    items={[
+                      ...locations.map((l) => ({
+                        label: `${l.name} — ${l.city}, ${l.state}`,
+                        value: l.full_address,
+                      })),
+                      ...anchors.map((a) => ({
+                        label: a.name
+                          ? `★ ${a.name} — ${a.full_address}`
+                          : `★ ${a.full_address}`,
+                        value: a.full_address,
+                      })),
+                    ]}
                     value={location}
                     onValueChange={(v) => {
                       if (v) setLocation(v as string)
@@ -399,6 +430,17 @@ export function CreateAccountDialog({
                       {locations.map((l) => (
                         <SelectItem key={l.index} value={l.full_address}>
                           {l.name} — {l.city}, {l.state}
+                        </SelectItem>
+                      ))}
+                      {/* The user's own saved addresses (my_addresses.json),
+                          starred to distinguish them from predefined cities. */}
+                      {anchors.map((a) => (
+                        <SelectItem
+                          key={`anchor:${a.full_address}`}
+                          value={a.full_address}
+                        >
+                          ★ {a.name ? `${a.name} — ` : ""}
+                          {a.full_address}
                         </SelectItem>
                       ))}
                     </SelectContent>
