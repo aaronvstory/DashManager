@@ -20,6 +20,15 @@ Commands:
   rent_number                           -> {phone_number, number_token, api_url, mirror_hosts, ...}
   fetch_otp {token, api_url, mirror_hosts} -> {code, sms_text, error}
   save_customer {customer}              -> {customer_id}
+  list_recent_customers {limit}         -> {customers: [...]}
+  list_customers {limit}                -> {customers: [...]}   (full list)
+  customer_count                        -> {count: int}
+  get_customer {customer_id}            -> {customer: {...}|null}
+  update_customer {customer_id, fields} -> {customer, updated}
+  delete_customer {customer_id}         -> {deleted: bool}
+  export {format, limit}                -> {format, text}       (csv|json|txt)
+  list_addresses                        -> {addresses: [...]}   (anchor pool)
+  generate_address {origin, radius}     -> {address: {...}|null}
 
 stdout is JSON-only; CustomerDaisy's Rich console noise is redirected to stderr
 so it can never corrupt the protocol.
@@ -30,14 +39,25 @@ import sys
 from pathlib import Path
 
 # CustomerDaisy assumes it runs from its own root. The launcher sets cwd, but
-# enforce it here too so relative paths (config.ini, .env.local, data/) resolve.
+# enforce it too so relative paths (config.ini, .env.local, data/) resolve.
+# Resolved at import (cheap); the cwd/path/stdout SIDE-EFFECTS happen in
+# _bootstrap() (called from main), so importing this module for unit tests is
+# side-effect-free.
 DAISY_ROOT = Path(os.environ.get("DAISY_ROOT", Path.cwd()))
-os.chdir(DAISY_ROOT)
-sys.path.insert(0, str(DAISY_ROOT))
 
-# Keep Rich/console chatter off stdout — stdout is the JSON channel only.
+# stdout is the JSON channel only; _bootstrap swaps real stdout aside so
+# CustomerDaisy's Rich console noise (which writes to sys.stdout) can't corrupt
+# the protocol. Until then, _real_stdout is the actual stdout.
 _real_stdout = sys.stdout
-sys.stdout = sys.stderr
+
+
+def _bootstrap() -> None:
+    """Apply the worker's process side-effects. Call once from main()."""
+    global _real_stdout
+    os.chdir(DAISY_ROOT)
+    sys.path.insert(0, str(DAISY_ROOT))
+    _real_stdout = sys.stdout
+    sys.stdout = sys.stderr
 
 
 def _emit(obj: dict) -> None:
@@ -107,49 +127,188 @@ def _load_locations() -> list[dict]:
     return out
 
 
-def _list_recent_customers(limit: int) -> list[dict]:
-    """Read CustomerDaisy's customers.db (identity + api.cc token per row)."""
+def _daisy_db_path() -> Path:
+    return DAISY_ROOT / "data" / "customers.db"
+
+
+def _connect():
+    """Open CustomerDaisy's customers.db (row factory = dict-able). Raises if
+    the DB doesn't exist so callers report a clear error, not an empty result."""
     import sqlite3
 
-    db_path = DAISY_ROOT / "data" / "customers.db"
-    if not db_path.exists():
-        return []
-    con = sqlite3.connect(str(db_path))
+    p = _daisy_db_path()
+    if not p.exists():
+        raise FileNotFoundError(f"CustomerDaisy DB not found: {p}")
+    con = sqlite3.connect(str(p))
     con.row_factory = sqlite3.Row
+    return con
+
+
+def _normalize_row(r: dict) -> dict:
+    """Shape one customers.db row into the bridge's customer dict.
+
+    Pulls the api.cc handle out of `metadata` (number_token/api_url/
+    mirror_hosts) so the row is usable for a later OTP fetch. mirror_hosts may
+    be a JSON list OR a comma string depending on which CustomerDaisy code path
+    wrote it — both are normalized to a list.
+    """
+    try:
+        meta = json.loads(r.get("metadata") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        meta = {}
+    raw_hosts = meta.get("apicc_mirror_hosts") or ""
+    if isinstance(raw_hosts, list):
+        hosts_list = [h for h in raw_hosts if h]
+    else:
+        hosts_list = [h for h in str(raw_hosts).split(",") if h]
+    return {
+        "customer_id": r.get("customer_id", ""),
+        "first_name": r.get("first_name", ""),
+        "last_name": r.get("last_name", ""),
+        "full_name": r.get("full_name", ""),
+        "email": r.get("email", ""),
+        "password": r.get("password", ""),
+        "phone": r.get("primary_phone", ""),
+        "full_address": r.get("full_address", ""),
+        "city": r.get("city", ""),
+        "state": r.get("state", ""),
+        "zip_code": r.get("zip_code", ""),
+        "verification_completed": bool(r.get("verification_completed")),
+        "number_token": (meta.get("apicc_number_token")
+                         or r.get("primary_verification_id") or ""),
+        "api_url": meta.get("apicc_api_url", ""),
+        "mirror_hosts": hosts_list,
+        "created_at": r.get("created_at", ""),
+        "updated_at": r.get("updated_at", ""),
+    }
+
+
+def _list_recent_customers(limit: int) -> list[dict]:
+    """Read CustomerDaisy's customers.db (identity + api.cc token per row)."""
+    if not _daisy_db_path().exists():
+        return []
+    con = _connect()
     try:
         rows = con.execute(
             "SELECT * FROM customers ORDER BY created_at DESC LIMIT ?",
             (limit,)).fetchall()
     finally:
         con.close()
+    return [_normalize_row(dict(r)) for r in rows]
+
+
+def _get_customer(customer_id: str) -> dict | None:
+    if not _daisy_db_path().exists():
+        return None
+    con = _connect()
+    try:
+        r = con.execute(
+            "SELECT * FROM customers WHERE customer_id = ?",
+            (customer_id,)).fetchone()
+    finally:
+        con.close()
+    return _normalize_row(dict(r)) if r else None
+
+
+# Columns a bridge caller may update directly (identity/address fields only —
+# never customer_id/created_at/metadata, which the app owns).
+_UPDATABLE = {
+    "first_name", "last_name", "full_name", "email", "password",
+    "full_address", "address_line1", "city", "state", "zip_code",
+    "primary_phone",
+}
+
+
+def _update_customer(customer_id: str, fields: dict) -> dict | None:
+    """Update whitelisted columns on a CustomerDaisy row; return the new row."""
+    updates = {k: v for k, v in (fields or {}).items() if k in _UPDATABLE}
+    if not updates:
+        return _get_customer(customer_id)
+    con = _connect()
+    try:
+        sets = ", ".join(f"{k} = ?" for k in updates)
+        params = list(updates.values()) + [customer_id]
+        cur = con.execute(
+            f"UPDATE customers SET {sets}, updated_at = CURRENT_TIMESTAMP "
+            f"WHERE customer_id = ?", params)
+        con.commit()
+        if cur.rowcount == 0:
+            return None
+    finally:
+        con.close()
+    return _get_customer(customer_id)
+
+
+def _delete_customer(customer_id: str) -> bool:
+    con = _connect()
+    try:
+        cur = con.execute(
+            "DELETE FROM customers WHERE customer_id = ?", (customer_id,))
+        con.commit()
+        return cur.rowcount > 0
+    finally:
+        con.close()
+
+
+def _customer_count() -> int:
+    if not _daisy_db_path().exists():
+        return 0
+    con = _connect()
+    try:
+        return int(con.execute("SELECT COUNT(*) FROM customers").fetchone()[0])
+    finally:
+        con.close()
+
+
+def _export(fmt: str, limit: int) -> dict:
+    """Export customers as csv | json | txt text (NOT a file — the caller saves
+    it). Keeps the worker side-effect-free; DashManager owns where it lands."""
+    rows = _list_recent_customers(limit)
+    fmt = (fmt or "json").lower()
+    if fmt == "json":
+        return {"format": "json", "text": json.dumps(rows, indent=2)}
+    cols = ["customer_id", "first_name", "last_name", "email", "phone",
+            "full_address", "created_at"]
+    if fmt == "csv":
+        import csv
+        import io
+        buf = io.StringIO()
+        w = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+        return {"format": "csv", "text": buf.getvalue()}
+    if fmt == "txt":
+        lines = []
+        for r in rows:
+            lines.append(f"{r['first_name']} {r['last_name']}  "
+                         f"{r['phone']}  {r['email']}  {r['full_address']}")
+        return {"format": "txt", "text": "\n".join(lines)}
+    raise ValueError(f"unknown export format: {fmt!r} (csv|json|txt)")
+
+
+def _list_addresses() -> list[dict]:
+    """The user's anchor-address pool (my_addresses.json), if present."""
+    p = DAISY_ROOT / "my_addresses.json"
+    if not p.exists():
+        return []
+    try:
+        raw = json.loads(p.read_text("utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    items = raw.get("addresses", raw) if isinstance(raw, dict) else raw
     out = []
-    for r in rows:
-        r = dict(r)
-        try:
-            meta = json.loads(r.get("metadata") or "{}")
-        except (json.JSONDecodeError, TypeError):
-            meta = {}
-        # apicc_mirror_hosts may be a JSON list OR a comma string, depending on
-        # which CustomerDaisy code path wrote the row — normalize both.
-        raw_hosts = meta.get("apicc_mirror_hosts") or ""
-        if isinstance(raw_hosts, list):
-            hosts_list = [h for h in raw_hosts if h]
-        else:
-            hosts_list = [h for h in str(raw_hosts).split(",") if h]
-        out.append({
-            "customer_id": r.get("customer_id", ""),
-            "first_name": r.get("first_name", ""),
-            "last_name": r.get("last_name", ""),
-            "email": r.get("email", ""),
-            "password": r.get("password", ""),
-            "phone": r.get("primary_phone", ""),
-            "full_address": r.get("full_address", ""),
-            "number_token": (meta.get("apicc_number_token")
-                             or r.get("primary_verification_id") or ""),
-            "api_url": meta.get("apicc_api_url", ""),
-            "mirror_hosts": hosts_list,
-            "created_at": r.get("created_at", ""),
-        })
+    for x in items if isinstance(items, list) else []:
+        if isinstance(x, str):
+            out.append({"full_address": x})
+        elif isinstance(x, dict):
+            out.append({
+                "name": x.get("name", ""),
+                "full_address": x.get("full_address")
+                                or x.get("address", ""),
+                "city": x.get("city", ""),
+                "state": x.get("state", ""),
+            })
     return out
 
 
@@ -214,10 +373,46 @@ def handle(mgr: Managers, cmd: str, args: dict) -> dict:
         limit = int(args.get("limit", 20))
         return {"customers": _list_recent_customers(limit)}
 
+    # ── Slice 1: full CustomerDaisy surface (DB read/write, export, addresses).
+    # These read/write customers.db directly (schema verified) so they work
+    # without driving CustomerDaisy's interactive UI.
+    if cmd == "list_customers":
+        return {"customers": _list_recent_customers(int(args.get("limit", 200)))}
+
+    if cmd == "customer_count":
+        return {"count": _customer_count()}
+
+    if cmd == "get_customer":
+        return {"customer": _get_customer(str(args["customer_id"]))}
+
+    if cmd == "update_customer":
+        row = _update_customer(str(args["customer_id"]),
+                               dict(args.get("fields", {})))
+        return {"customer": row, "updated": row is not None}
+
+    if cmd == "delete_customer":
+        return {"deleted": _delete_customer(str(args["customer_id"]))}
+
+    if cmd == "export":
+        return _export(args.get("format", "json"), int(args.get("limit", 1000)))
+
+    if cmd == "list_addresses":
+        return {"addresses": _list_addresses()}
+
+    if cmd == "generate_address":
+        # A radius-scoped real address near an origin (no customer created).
+        origin = args.get("origin_address") or args.get("origin")
+        if not origin:
+            raise ValueError("generate_address needs origin_address")
+        radius = float(args.get("radius_miles", 5.0))
+        addr = mgr.mapquest.get_random_address_near_location(origin, radius)
+        return {"address": addr or None}
+
     raise ValueError(f"unknown command: {cmd}")
 
 
 def main() -> None:
+    _bootstrap()
     try:
         mgr = Managers()
     except Exception as exc:  # init failure — report on first line and exit
