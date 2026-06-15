@@ -14,6 +14,7 @@ from backend import config, db
 from backend.events import bus
 from backend.routes import (
     customers,
+    proxies as proxies_routes,
     reports as reports_routes,
     runs,
     settings as settings_routes,
@@ -41,6 +42,8 @@ def create_app() -> FastAPI:
                        tags=["settings"])
     app.include_router(reports_routes.router, prefix="/api/reports",
                        tags=["reports"])
+    app.include_router(proxies_routes.router, prefix="/api/proxies",
+                       tags=["proxies"])
 
     @app.get("/api/health")
     async def health() -> dict:

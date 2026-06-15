@@ -170,3 +170,54 @@ async def test_llm_key_probe_missing_key_is_friendly(client, monkeypatch):
     body = r.json()
     assert body["ok"] is False
     assert "key" in body["message"].lower()
+
+
+# ── Proxy Manager routes ─────────────────────────────────────────────────────
+# load_proxies / check_* are monkeypatched so these stay network- and file-free
+# while still exercising the route's credential-hygiene + shaping.
+_FAKE_PROXY = {
+    "scheme": "http", "host": "resident.lightningproxies.net", "port": "8080",
+    "username": "user-country-us-filter-medium-speed-fast",
+    "password": "TOPSECRET",
+}
+
+
+async def test_proxies_list_omits_credentials(client, monkeypatch):
+    from backend.browser import proxy_pool
+    monkeypatch.setattr(proxy_pool, "load_proxies",
+                        lambda *a, **k: [dict(_FAKE_PROXY), dict(_FAKE_PROXY)])
+    r = await client.get("/api/proxies")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["configured"] is True
+    assert body["count"] == 1          # two identical lines dedup to one
+    assert "TOPSECRET" not in r.text   # password NEVER leaves the backend
+    assert body["proxies"][0]["host"] == "resident.lightningproxies.net"
+
+
+async def test_proxies_list_unconfigured(client, monkeypatch):
+    from backend.browser import proxy_pool
+    monkeypatch.setattr(proxy_pool, "load_proxies", lambda *a, **k: [])
+    r = await client.get("/api/proxies")
+    assert r.json() == {"configured": False, "count": 0, "proxies": []}
+
+
+async def test_proxies_test_all(client, monkeypatch):
+    from backend.browser import proxy_pool
+    fake = {"local_ip": "9.9.9.9", "count": 1, "alive_count": 1,
+            "proxies": [{"id": "x", "alive": True, "exit_ip": "1.2.3.4",
+                         "country": "US", "city": "Dallas", "latency_ms": 410.0,
+                         "error": "", "differs_from_local": True}]}
+    monkeypatch.setattr(proxy_pool, "check_all", lambda *a, **k: fake)
+    r = await client.post("/api/proxies/test")
+    assert r.status_code == 200
+    assert r.json()["alive_count"] == 1
+    assert r.json()["proxies"][0]["exit_ip"] == "1.2.3.4"
+
+
+async def test_proxies_test_one_404_for_unknown(client, monkeypatch):
+    from backend.browser import proxy_pool
+    monkeypatch.setattr(proxy_pool, "load_proxies",
+                        lambda *a, **k: [dict(_FAKE_PROXY)])
+    r = await client.post("/api/proxies/test/not-a-real-id")
+    assert r.status_code == 404
