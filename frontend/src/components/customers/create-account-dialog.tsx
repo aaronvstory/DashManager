@@ -113,6 +113,9 @@ export function CreateAccountDialog({
   const [dateOpen, setDateOpen] = useState(false)
   const [location, setLocation] = useState<string>("")
   const [radius, setRadius] = useState<string>("5")
+  const [count, setCount] = useState<string>("1")
+  const [batchLabel, setBatchLabel] = useState<string>("")
+  const [batchInfo, setBatchInfo] = useState<{ index: number; of: number; created: number } | null>(null)
   const { headless, setHeadless } = useHeadlessOverride()
 
   // Live progress, built up from SSE events.
@@ -158,6 +161,26 @@ export function CreateAccountDialog({
     const d = lastEvent.data
 
     switch (lastEvent.type) {
+      case "batch_started":
+        setBatchInfo({ index: 0, of: num(d.of) ?? num(d.count) ?? 1, created: 0 })
+        break
+      case "batch_progress":
+        setBatchInfo({
+          index: num(d.index) ?? 0,
+          of: num(d.of) ?? 1,
+          created: num(d.created) ?? 0,
+        })
+        // each new account in the batch restarts the per-account step list
+        resetProgress()
+        setPhase("running")
+        break
+      case "batch_done":
+        void queryClient.invalidateQueries({ queryKey: ["customers"] })
+        toast.success(
+          `Batch done: ${num(d.created) ?? 0}/${num(d.of) ?? 0} created`,
+        )
+        setPhase("created")
+        break
       case "identity_generating":
         setPhase("running")
         setSteps((s) => ({ ...s, identity: "active" }))
@@ -212,18 +235,26 @@ export function CreateAccountDialog({
           otp: "done",
           account: "done",
         })
-        setPhase("created")
         void queryClient.invalidateQueries({ queryKey: ["customers"] })
         toast.success(`Account created for ${str(d.name) || "new customer"}`)
+        // In a batch, batch_done flips to "created"; for a single account flip
+        // now. (batchInfo is set only during a multi-account batch.)
+        if (!batchInfo || batchInfo.of <= 1) {
+          setPhase("created")
+        }
         break
       case "account_failed":
-        setError(str(d.error) || "Account creation failed.")
-        setPhase("failed")
+        // a single failure in a batch is non-fatal — keep running; only fail the
+        // whole dialog for a single (non-batch) creation.
+        if (!batchInfo || batchInfo.of <= 1) {
+          setError(str(d.error) || "Account creation failed.")
+          setPhase("failed")
+        }
         break
       default:
         break
     }
-  }, [lastEvent, phase, queryClient])
+  }, [lastEvent, phase, queryClient, batchInfo])
 
   function resetProgress() {
     setSteps({
@@ -239,6 +270,7 @@ export function CreateAccountDialog({
     setOtpResent(false)
     setCreated(null)
     setError(null)
+    setBatchInfo(null)
   }
 
   function resetToIdle() {
@@ -259,11 +291,15 @@ export function CreateAccountDialog({
     resetProgress()
     setPhase("starting")
     baselineEventId.current = useRunStore.getState().lastEvent?.id ?? -1
+    setBatchInfo(null)
     const radiusMiles = Number(radius)
+    const n = Math.max(1, Math.floor(Number(count) || 1))
     const body: CreateAccountRequest = {
       bucket_date: format(date, "yyyy-MM-dd"),
       location_origin: location || undefined,
       radius_miles: Number.isFinite(radiusMiles) ? radiusMiles : undefined,
+      count: n,
+      batch_label: batchLabel.trim() || undefined,
     }
     if (headless !== null) body.headless = headless
     try {
@@ -365,16 +401,46 @@ export function CreateAccountDialog({
                 )}
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="create-account-radius">Radius (miles)</Label>
-                <Input
-                  id="create-account-radius"
-                  type="number"
-                  min={1}
-                  value={radius}
-                  onChange={(e) => setRadius(e.target.value)}
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="create-account-radius">Radius (miles)</Label>
+                  <Input
+                    id="create-account-radius"
+                    type="number"
+                    min={1}
+                    value={radius}
+                    onChange={(e) => setRadius(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="create-account-count">How many</Label>
+                  <Input
+                    id="create-account-count"
+                    type="number"
+                    min={1}
+                    max={20}
+                    value={count}
+                    onChange={(e) => setCount(e.target.value)}
+                  />
+                </div>
               </div>
+
+              {Number(count) > 1 ? (
+                <div className="space-y-2">
+                  <Label htmlFor="create-account-batch">Batch label</Label>
+                  <Input
+                    id="create-account-batch"
+                    placeholder="e.g. June group"
+                    value={batchLabel}
+                    onChange={(e) => setBatchLabel(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Saved in CustomerDaisy as
+                    <span className="num"> “{(batchLabel.trim() || "batch …")} - claude”</span>
+                    {" "}— grab the OTPs from the Batch OTP page.
+                  </p>
+                </div>
+              ) : null}
 
               {balance !== null ? (
                 <p
@@ -391,10 +457,13 @@ export function CreateAccountDialog({
                 <Sparkles />
                 <AlertTitle>Automatic account creation</AlertTitle>
                 <AlertDescription>
-                  A Chromium window opens and signs up a fresh DoorDash account
-                  using a generated identity, email, phone number, and address
-                  near the chosen location. The SMS code is entered
-                  automatically.
+                  A Chrome window opens and signs up fresh DoorDash account(s)
+                  with a generated identity, email, phone, and address near the
+                  chosen location; the SMS code is entered automatically.
+                  <strong className="mt-1 block text-amber-500">
+                    Uses real mouse/keyboard to pass bot detection — don’t touch
+                    the PC while it runs.
+                  </strong>
                 </AlertDescription>
               </Alert>
 
@@ -418,6 +487,17 @@ export function CreateAccountDialog({
 
         {busy ? (
           <>
+            {batchInfo && batchInfo.of > 1 ? (
+              <div className="flex items-center justify-between border border-border bg-card px-3 py-2 text-sm">
+                <span className="font-medium">
+                  Account <span className="num">{batchInfo.index}</span> of{" "}
+                  <span className="num">{batchInfo.of}</span>
+                </span>
+                <span className="num text-xs text-emerald-500">
+                  {batchInfo.created} created
+                </span>
+              </div>
+            ) : null}
             <div className="py-2">
               <StepList
                 steps={steps}

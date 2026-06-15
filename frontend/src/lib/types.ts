@@ -190,6 +190,8 @@ export interface CreateAccountRequest extends HeadlessOverride {
   bucket_date: string
   location_origin?: string
   radius_miles?: number
+  count?: number
+  batch_label?: string
 }
 
 export type ReloginRequest = HeadlessOverride
@@ -275,6 +277,9 @@ export type EventType =
   | "otp_resent"
   | "account_created"
   | "account_failed"
+  | "batch_started"
+  | "batch_progress"
+  | "batch_done"
   | "relogin_started"
   | "relogin_outcome"
   | "relogin_done"
@@ -319,6 +324,9 @@ export const EVENT_TYPES: readonly EventType[] = [
   "otp_resent",
   "account_created",
   "account_failed",
+  "batch_started",
+  "batch_progress",
+  "batch_done",
   "relogin_started",
   "relogin_outcome",
   "relogin_done",
