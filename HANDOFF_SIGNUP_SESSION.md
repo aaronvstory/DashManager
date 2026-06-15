@@ -1,107 +1,108 @@
-# 🚀 HANDOFF — Automated Customer Creation (long-running autonomous task)
+# 🚀 AUTONOMOUS HANDOFF — Automated Customer Creation
 
-**Read this first, then `SIGNUP_CDP_SPIKE_PLAN.md` for the deep technical plan.**
-This is the entry point for a FRESH session. The user kicks it off, then steps
-out for ~2 hours expecting autonomous progress under the **auto-heal mantra**.
+**You run this ENTIRELY ALONE. The user is gone and will not respond. Do NOT
+wait for, ask, or depend on the user for anything.** Read this, then
+`SIGNUP_CDP_SPIKE_PLAN.md` for deep technical detail. Work for as long as it
+takes; report results at the end.
 
-## The mantra (NON-NEGOTIABLE — applies to this whole task)
-On ANY failure/discrepancy: **auto-heal → investigate manually → fix root cause
-NOW (code+tests+docs) → report what you improved.** Never say "look into this."
-A fixable condition (expired session, dead proxy, bad selector, OTP lag) is
-never a dead end — heal it and continue. Leave a test/guard behind each time.
-(Global principle in `~/.claude/CLAUDE.md`; project memory `feedback-auto-heal-mantra`.)
+## OPERATING RULES (do not violate)
+1. **No user dependency.** Never "ask", "confirm", "be ready", "decide together",
+   or pause for approval. Every fork in the road: **pick the best option, write
+   down why, proceed.** AskUserQuestion is BANNED this session.
+2. **Auto-heal mantra.** Any failure (403, dead proxy, OTP lag, bad selector,
+   timeout) → heal in-flight (retry, rotate proxy, re-login, re-fetch) →
+   investigate the real cause yourself → fix at root (code+tests+docs) → keep
+   going. A fixable condition is never a stopping point.
+3. **Self-merge your own work.** Each piece = own branch off main → commit →
+   push → open PR → wait for bots (poll ~4 min) → fix actionable findings →
+   when green + your own code-reviewer subagent is satisfied, **squash-merge it
+   yourself**, sync main, move on. The user pre-authorized merging for THIS
+   autonomous session. (Do NOT merge anything that's red or has unaddressed
+   high-confidence findings.)
+4. **Money/stealth safety still applies.** Zero-tolerance refund gates untouched.
+   Burning ~8¢ api.cc numbers to test signup is expected and fine.
+5. **No secrets in git.** Proxy creds live in `working-proxies.txt` (gitignored)
+   / `.env`. Never put them in code, API responses, or commits.
 
-## The goal
-Make DoorDash customer accounts AUTOMATICALLY (we gave up before; now retrying
-with two fixes: modern SeleniumBase **CDP Mode** + **residential proxies**).
-**Success = the session can create 1, then 5, accounts end-to-end, and the user
-can grab each account's OTP live in the app to log in on mobile.**
-
----
-
-## What to build (in priority order)
-
-### 1. PROVE signup works at all (the gate — do this FIRST)
-Everything else is wasted if signup still 403s. Follow `SIGNUP_CDP_SPIKE_PLAN.md`:
-- Verify `sb.cdp.solve_captcha` exists at runtime (we have seleniumbase 4.49.10;
-  method added 4.44.2 — likely present; `uv pip install -U seleniumbase` if not).
-- Smoke-test CDP stealth on a known CF-turnstile page (gitlab sign_in) FIRST.
-- Then rewrite the signup driver around `SB(uc=True)` + `activate_cdp_mode()` +
-  `sb.cdp.solve_captcha()`, reusing our known selectors from `uc_signup.py`.
-- **Use the residential proxy from the start** (see proxy section in the plan;
-  HTTP gateway, creds in `working-proxies.txt` — gitignored). The non-residential
-  IP was likely a co-cause of past failure.
-- Live test HEADED, user watching, mouse-free captcha first, 2-3 cheap (~8¢)
-  numbers. **Decision gate: does it pass `user_assessment_bot` CONSISTENTLY?**
-- ⚠️ The bot gate fires on FORM SUBMIT (not page load) — that interactive case
-  is THE unknown vs Mintz's read-only scrape demos. This is what the test answers.
-
-### 2. NEW app section: Proxy Manager (user explicitly requested)
-A new page/tab in the DashManager web app (alongside Customers/Database/Run/
-History/Reports/Settings) to **test proxies + see their IP & location**:
-- List the proxies from `working-proxies.txt` (or a managed pool).
-- A "Test" action per proxy: route a request THROUGH it to an IP-echo
-  (api.ipify.org / lumtest.com/myip.json) and show: live?, exit IP, country/city,
-  latency. Proves it's alive + US-residential + ≠ the PC's real IP.
-- Brutalist styling to match the rest (square, hard borders, mono numerals — see
-  the merged overhaul; reuse `.bx/.eyebrow/.num` primitives + ProofThumb pattern).
-- Backend: a `/api/proxies` route (list + test). A `proxy_pool.py` does the
-  liveness check. Creds stay in `.env`/gitignored files, NEVER in API responses.
-
-### 3. LIVE OTP in the app (a MUST for account creation)
-When the session creates a customer (or 5), the USER needs to grab each one's
-OTP to log in on THEIR phone — like CustomerDaisy does now. Build:
-- Per-customer (and batch) "fetch OTP" in the app that calls the existing api.cc
-  poller (`backend.otp_fetch` / `DaisyBridge.fetch_otp`) and shows the live code
-  (codes expire ~30s — fetch on demand, show freshness). There's already an
-  `otp_fetch` CLI + a `FetchOtpDialog` component — surface it prominently for
-  freshly-created accounts (select N at a time → see their OTPs).
-- **Open question for the user (ask, don't assume):** how many accounts at once,
-  and do they want a live-refreshing OTP table (like CustomerDaisy's "Live SMS
-  Codes" view) vs on-demand per customer?
-
-### 4. (BIGGER, MAYBE) Port CustomerDaisy into DashManager
-User floated fully porting CustomerDaisy (identity gen + number rental + the live
-OTP dashboard) into DashManager so it's all one app. **This is a large job —
-do NOT start it without explicit go-ahead.** Confirm signup works (#1) first;
-the live-OTP piece (#3) covers the immediate need. Raise the port as an option
-once #1-3 land.
+## GOAL
+Get automated DoorDash account creation WORKING (we failed before; retrying with
+modern SeleniumBase **CDP Mode** + **residential proxies** — two fixes for two
+root causes). Build the supporting app features regardless of whether the bot
+gate ultimately falls, so the user returns to maximum progress either way.
 
 ---
 
-## Hard-won facts (don't relearn — verified this session)
-- seleniumbase **4.49.10** installed; `activate_cdp_mode` ✅, `sb_cdp` ✅.
-- Modern pattern: `SB(uc=True, test=True, locale="en")` → `sb.activate_cdp_mode(url)`
-  → `sb.cdp.solve_captcha()` → `sb.cdp.press_keys/click/type`. Old
-  `Driver(uc=True)+uc_open_with_reconnect` in `uc_signup.py` is the DEPRECATED
-  path that failed before — replace it.
-- Proxy: **HTTP gateway** `resident.lightningproxies.net:8080`, creds in
-  `working-proxies.txt` (gitignored). Rotation = username flags, not an API.
-  Use `SB(proxy="user:pass@host:port")` — browser-scoped only, NOT system-wide.
-  Build a liveness checker (also serves the Proxy Manager page #2).
-- Numbers from a FAILED signup are REUSABLE (block is the browser/IP, not the
-  number). ~8¢ each — burning a few testing is fine.
-- Auto-heal is now real in the runner (expired session → re-login + retry); apply
-  the same spirit to signup (OTP lag → keep polling, dead proxy → next proxy).
+## BUILD ORDER (each is an independent PR you merge yourself)
+
+### PR A — Proxy liveness + Proxy Manager app section
+Independent of signup success, so build it first (guaranteed value, no bot gate):
+- `backend/browser/proxy_pool.py`: read `working-proxies.txt`, normalize to
+  `user:pass@host:port`, and a `check_proxy()` that routes a request THROUGH the
+  proxy to an IP-echo (api.ipify.org / lumtest.com/myip.json) returning
+  {alive, exit_ip, country, city, latency_ms}. Reuse it everywhere.
+- `/api/proxies` route (list + per-proxy test). Creds never in the response.
+- New **Proxy** page/tab in the web app (brutalist — reuse `.bx/.eyebrow/.num`,
+  square, hard borders, mono). Shows each proxy: alive?, exit IP, location,
+  latency; a "Test all" action. Verify visually via Playwright screenshots.
+- Tests for the pure parts (parse line → proxy dict; format → SB proxy string).
+
+### PR B — Signup via CDP Mode (THE experiment)
+Follow `SIGNUP_CDP_SPIKE_PLAN.md` exactly:
+- Verify `sb.cdp.solve_captcha` at runtime; `uv pip install -U seleniumbase` if absent.
+- Smoke-test CDP stealth on gitlab sign_in FIRST (cheap sanity).
+- Rewrite the signup driver: `SB(uc=True, test=True, locale="en", proxy=<residential>)`
+  → `activate_cdp_mode(SIGNUP_URL)` → `sb.cdp.solve_captcha()` → fill 5 fields
+  (`sb.cdp.press_keys`) → submit → (bot gate fires HERE) → heal/solve → OTP →
+  export Playwright storage_state. Reuse selectors + OTP logic from `uc_signup.py`.
+- Run it HEADED yourself (you don't need the user watching — capture screenshots
+  at each stage as the audit trail). Try 2-3 numbers. Rotate proxy on failure.
+  **Decide the verdict from evidence: does it pass `user_assessment_bot`
+  repeatably?** Write the verdict + screenshots into a results file
+  (`SIGNUP_RESULTS.md`) regardless of outcome.
+- If it works: wire `signup_via_cdp` into `account_creator.create_account`.
+- If it doesn't: exhaust the Mintz levers yourself (unbranded `use_chromium=True`,
+  `uc_gui_click_captcha` PyAutoGUI fallback, different proxy region, CF-clearance
+  cookie reuse) before concluding. Document exactly how far the gate let you get.
+
+### PR C — Live OTP in the app
+The user needs to grab a created account's OTP to log in on their phone later.
+- Surface the existing api.cc poller (`backend.otp_fetch` / `DaisyBridge.fetch_otp`)
+  in the web app: a live-refreshing OTP view (like CustomerDaisy's "Live SMS
+  Codes") AND per-customer on-demand fetch. **Decision (made for you): build BOTH
+  a batch live-table for the bucket AND a per-row fetch button** — that covers
+  "X at a time" without asking. Codes expire ~30s → poll/refresh + show freshness.
+- There's already an `otp_fetch` CLI + `FetchOtpDialog` — extend, don't reinvent.
+
+### (Do NOT do without it being trivially safe) Port CustomerDaisy
+Large. Skip unless A-C are done AND it's clearly low-risk. Note it in
+SIGNUP_RESULTS.md as a future option; don't start it.
 
 ---
 
-## Current repo state (as of this handoff)
-- main is clean; these merged today: #17 refund_run CLI, #18 brutalist overhaul +
-  native Reports, #19 scraper cancelled-status fix, #20 signup plan doc.
-- **OPEN PR #21** — session auto-heal (expired-session → re-login + retry,
-  open_receipt raises on login-redirect). Green/mergeable, awaiting user merge.
-- Traci Hensley's data was corrected (was: expired session + corrupt UUID; now
-  receipt-verified cancelled+refunded $112.14 + $112.24).
-- Backend runs via `.venv\Scripts\python.exe -m backend` (Proactor loop).
-- 249 tests pass.
+## VERIFIED FACTS (don't relearn)
+- seleniumbase **4.49.10**: `activate_cdp_mode` ✅, `sb_cdp` ✅. `sb.cdp.solve_captcha`
+  added 4.44.2 (likely present; upgrade if not).
+- Pattern: `SB(uc=True, test=True, locale="en")` → `sb.activate_cdp_mode(url)` →
+  `sb.cdp.solve_captcha()`. OLD `Driver(uc=True)+uc_open_with_reconnect` in
+  `uc_signup.py` = the deprecated path that failed — replace it.
+- Proxy: HTTP gateway `resident.lightningproxies.net:8080`, creds in
+  `working-proxies.txt` (gitignored). `SB(proxy="user:pass@host:port")` =
+  browser-scoped only. Rotation via username flags, not an API.
+- Failed-signup numbers are REUSABLE. ~8¢ each.
+- Bot gate fires on SUBMIT, not page load — the interactive unknown the test answers.
+- Runner already auto-heals expired sessions (open_receipt raises on login-redirect
+  → re-login + retry). Mirror that spirit in signup.
 
-## How to start the fresh session
-1. New terminal → `cd F:\claude\DashManager` → `claude` (Opus for the build —
-   it's judgment-heavy + money/stealth-sensitive).
-2. Say: **"Build automated customer creation — read HANDOFF_SIGNUP_SESSION.md
-   and SIGNUP_CDP_SPIKE_PLAN.md, follow the auto-heal mantra, work autonomously."**
-3. Have ready: the LightningProxies creds (in `working-proxies.txt` already) and
-   willingness to watch the first headed signup attempt + read OTPs.
-4. Each piece its own branch/PR off main; bots review; park at merge gate; the
-   user merges. Don't merge without explicit OK.
+## REPO STATE (start of this session)
+- main clean; merged: #17 refund_run CLI, #18 brutalist overhaul, #19 scraper
+  fix, #20 plan doc, #21 session auto-heal, #22 this handoff. No open PRs.
+- 249 tests pass. Backend: `.venv\Scripts\python.exe -m backend` (Proactor loop).
+- Auto-heal mantra is in global `~/.claude/CLAUDE.md` + memory `feedback-auto-heal-mantra`.
+
+## START
+Just begin with PR A (proxy manager) — guaranteed-value and no external
+dependency. Then PR B (the experiment), then PR C. Self-merge each. At the end,
+write `SIGNUP_RESULTS.md` with: what works, the signup verdict + screenshots,
+what you healed/learned, and what (if anything) genuinely needs the user (e.g.
+"signup blocked even with X/Y/Z — here's the evidence"). That results file is the
+only thing the user reads when back — make it complete.
