@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { BrowserSection } from "@/components/settings/browser-section"
 import { ChatFlowSection } from "@/components/settings/chat-section"
+import { DaisySection } from "@/components/settings/daisy-section"
 import { IdentityCaptureSection } from "@/components/settings/identity-section"
 import { LlmChatSection } from "@/components/settings/llm-section"
 import { OpenRouterSection } from "@/components/settings/openrouter-section"
@@ -67,6 +68,7 @@ export default function SettingsPage() {
           <ChatFlowSection chat={data.chat} />
           <RefundSignalSection refundSignal={data.refund_signal} />
           <IdentityCaptureSection identity={data.identity_capture} />
+          <DaisySection daisy={data.daisy} />
           <BrowserSection browser={data.browser} />
         </div>
       ) : isError ? (

@@ -69,12 +69,22 @@ export interface BrowserSettings {
   max_concurrent: number
 }
 
+export interface DaisySettings {
+  root: string
+  /** Optional explicit interpreter; blank = auto-detect the venv. */
+  python?: string
+  location_origin: string
+  radius_miles: number
+  default_password: string
+}
+
 export interface AppSettings {
   identity_capture: IdentityCaptureSettings
   refund_signal: RefundSignalSettings
   chat: ChatSettings
   llm: LlmSettings
   browser: BrowserSettings
+  daisy: DaisySettings
   openrouter_api_key: string
 }
 
