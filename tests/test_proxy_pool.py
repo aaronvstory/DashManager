@@ -82,6 +82,29 @@ def test_proxy_id_excludes_password():
     assert px["host"] in pid and px["port"] in pid
 
 
+def test_proxy_id_uses_full_username_no_collision():
+    # Two proxies sharing host:port but differing in their (long) flag username
+    # must get DISTINCT ids — else /api/proxies/test/{id} probes the wrong line.
+    a = {"scheme": "http", "host": "h", "port": "8080",
+         "username": "tok_lightning_proxy-country-us-filter-medium-speed-fast",
+         "password": "p1"}
+    b = dict(a, username=a["username"].replace("-us-", "-gb-"))
+    assert pp.proxy_id(a) != pp.proxy_id(b)
+    assert pp.proxy_id(a).endswith(a["username"])  # full username, not truncated
+
+
+def test_scrub_creds_redacts_url_and_password():
+    px = pp.parse_proxy_line(LINE)
+    assert px is not None
+    # A realistic requests ProxyError string embedding the full proxy URL.
+    leaky = (f"ProxyError: HTTPSConnectionPool ... url: "
+             f"{pp.format_requests_proxy(px)}/myip.json (407)")
+    scrubbed = pp._scrub_creds(leaky, px)
+    assert "secretpass123" not in scrubbed      # password gone
+    assert px["password"] not in scrubbed
+    assert "<proxy>" in scrubbed or "<redacted>" in scrubbed
+
+
 def test_dedup_collapses_identical_lines():
     px = pp.parse_proxy_line(LINE)
     assert px is not None

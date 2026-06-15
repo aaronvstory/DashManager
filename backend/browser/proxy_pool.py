@@ -119,12 +119,16 @@ def format_requests_proxy(proxy: dict[str, str]) -> str:
 
 
 def proxy_id(proxy: dict[str, str]) -> str:
-    """Stable, NON-SECRET handle for a proxy (host:port + username only).
+    """Stable, NON-SECRET handle for a proxy (host:port + FULL username).
 
-    Used as the per-proxy identifier in API responses / UI. The password is
-    deliberately excluded so it never reaches the client.
+    Used as the per-proxy identifier in API responses / UI and as the lookup
+    key in ``/api/proxies/test/{id}``. The password is deliberately excluded so
+    it never reaches the client. The username (which carries the geo/rotation
+    flags) is NOT a secret — and it's included IN FULL so two proxies that share
+    a host:port but differ in their flags get distinct ids (a truncated id would
+    collide and make per-proxy testing probe the wrong line).
     """
-    return f"{proxy['host']}:{proxy['port']}#{proxy.get('username','')[:24]}"
+    return f"{proxy['host']}:{proxy['port']}#{proxy.get('username','')}"
 
 
 def load_proxies(path: str | Path | None = None) -> list[dict[str, str]]:
@@ -183,6 +187,24 @@ def _classify_geo(payload: dict[str, Any]) -> dict[str, str]:
             "region": str(region)}
 
 
+def _scrub_creds(text: str, proxy: dict[str, str]) -> str:
+    """Redact a proxy's credentials from a string before it leaves the backend.
+
+    ``requests`` exceptions can embed the full proxy URL (incl. ``user:pass``)
+    in their ``str()`` — that string would otherwise reach the UI via
+    ``result["error"]``. Replace every form the URL/creds can appear in:
+    the full requests URL, the SB inline-auth form, and the bare password.
+    """
+    out = text
+    for needle in (format_requests_proxy(proxy), format_sb_proxy(proxy)):
+        if needle:
+            out = out.replace(needle, "<proxy>")
+    pwd = proxy.get("password") or ""
+    if pwd:
+        out = out.replace(pwd, "<redacted>")
+    return out
+
+
 def check_proxy(proxy: dict[str, str], *, timeout: float = CHECK_TIMEOUT_S,
                 local_ip: str | None = None) -> dict[str, Any]:
     """Route a request THROUGH ``proxy`` to an IP-echo; report liveness + geo.
@@ -221,7 +243,8 @@ def check_proxy(proxy: dict[str, str], *, timeout: float = CHECK_TIMEOUT_S,
             resp.raise_for_status()
             payload = resp.json()
         except Exception as exc:  # noqa: BLE001 — surfaced as error string
-            errors.append(f"{type(exc).__name__}: {exc}".strip())
+            errors.append(_scrub_creds(
+                f"{type(exc).__name__}: {exc}".strip(), proxy))
             continue
         if best_latency is None:
             best_latency = latency
@@ -268,7 +291,16 @@ def check_all(path: str | Path | None = None, *, dedup: bool = True,
     if dedup:
         proxies = dedup_proxies(proxies)
     mine = local_ip() if with_local else None
-    rows = [check_proxy(px, local_ip=mine) for px in proxies]
+    # Check proxies CONCURRENTLY — each probe blocks up to `timeout` seconds, so
+    # a serial loop would be N×timeout wall-time and the HTTP client would give
+    # up long before. One thread per proxy (capped) keeps "Test all" snappy.
+    if proxies:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(len(proxies), 8)) as pool:
+            rows = list(pool.map(lambda px: check_proxy(px, local_ip=mine),
+                                 proxies))
+    else:
+        rows = []
     return {
         "local_ip": mine or "",
         "count": len(rows),
