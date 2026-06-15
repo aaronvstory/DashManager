@@ -94,15 +94,21 @@ def test_delete_customer(daisy_db):
 def test_export_json_csv_txt(daisy_db):
     j = w._export("json", 10)
     assert j["format"] == "json"
-    assert json.loads(j["text"])[0]["customer_id"] == "cd-1"
+    parsed = json.loads(j["text"])
+    assert parsed[0]["customer_id"] == "cd-1"
+    # plaintext password must NOT be in the export (exports get saved to disk)
+    assert "password" not in parsed[0]
+    assert "pw1" not in j["text"]
 
     c = w._export("csv", 10)
     assert c["format"] == "csv"
     assert "customer_id" in c["text"].splitlines()[0]   # header
     assert "ada@x.net" in c["text"]
+    assert "pw1" not in c["text"]                        # no password in CSV
 
     t = w._export("txt", 10)
     assert "Ada Vance" in t["text"] and "5551110000" in t["text"]
+    assert "pw1" not in t["text"]                        # no password in TXT
 
     with pytest.raises(ValueError):
         w._export("xml", 10)
@@ -126,3 +132,5 @@ def test_db_functions_missing_db_are_safe(tmp_path, monkeypatch):
     assert w._list_recent_customers(10) == []
     assert w._get_customer("x") is None
     assert w._customer_count() == 0
+    # delete on a missing DB returns False cleanly (not a FileNotFoundError)
+    assert w._delete_customer("x") is False

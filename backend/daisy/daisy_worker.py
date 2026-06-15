@@ -52,11 +52,14 @@ _real_stdout = sys.stdout
 
 
 def _bootstrap() -> None:
-    """Apply the worker's process side-effects. Call once from main()."""
-    global _real_stdout
+    """Apply the worker's process side-effects. Call once from main().
+
+    Does NOT re-capture _real_stdout — it's already the real stdout from module
+    import. Re-capturing here would, on an accidental second call, grab the
+    already-swapped sys.stderr and silently route the JSON protocol to stderr.
+    """
     os.chdir(DAISY_ROOT)
     sys.path.insert(0, str(DAISY_ROOT))
-    _real_stdout = sys.stdout
     sys.stdout = sys.stderr
 
 
@@ -240,6 +243,8 @@ def _update_customer(customer_id: str, fields: dict) -> dict | None:
 
 
 def _delete_customer(customer_id: str) -> bool:
+    if not _daisy_db_path().exists():
+        return False
     con = _connect()
     try:
         cur = con.execute(
@@ -266,7 +271,10 @@ def _export(fmt: str, limit: int) -> dict:
     rows = _list_recent_customers(limit)
     fmt = (fmt or "json").lower()
     if fmt == "json":
-        return {"format": "json", "text": json.dumps(rows, indent=2)}
+        # Strip the plaintext password from the export (csv/txt already exclude
+        # it via their explicit column allowlist) — exports get saved to disk.
+        safe = [{k: v for k, v in r.items() if k != "password"} for r in rows]
+        return {"format": "json", "text": json.dumps(safe, indent=2)}
     cols = ["customer_id", "first_name", "last_name", "email", "phone",
             "full_address", "created_at"]
     if fmt == "csv":
