@@ -321,12 +321,22 @@ async def scrape_orders(page: Page,
 
 
 async def open_receipt(page: Page, receipt_url: str) -> str:
-    """Open one order's receipt page and return its full body innerText."""
+    """Open one order's receipt page and return its full body innerText.
+
+    Raises SessionExpiredError if the receipt URL redirects to login — an
+    expired session bounces /orders/<uuid> to identity.doordash.com, which
+    previously returned the login page's text and looked like an unreadable
+    receipt. Surfacing it as SessionExpiredError lets the caller auto-heal
+    (re-login + retry) instead of silently mislabelling the order.
+    """
     await page.goto(receipt_url, wait_until="domcontentloaded")
     await handle_cloudflare(page)
     # Jittered settle after the load — human-paced, and gives the breakdown a
     # beat to render so the detector reads a complete receipt (not a partial).
     await human_pause(1.5, 3.0)
+    if any(marker in page.url for marker in LOGIN_URL_MARKERS):
+        raise SessionExpiredError(
+            f"receipt {receipt_url} redirected to login ({page.url})")
     return await page.evaluate(
         "() => document.body ? document.body.innerText : ''")
 

@@ -238,8 +238,29 @@ class RunManager:
                     seed_storage_state=cust.get("storage_state_path") or None,
                     viewport=tuple(browser_cfg.get("viewport", [1400, 900])))
                 page = ctx.pages[0] if ctx.pages else await ctx.new_page()
-                scraped = await scrape_orders(page, emit=emit)
+                try:
+                    scraped = await scrape_orders(page, emit=emit)
+                except SessionExpiredError:
+                    # AUTO-HEAL: an expired session is a fixable condition, not a
+                    # dead end. Mark it, re-login (no bot gate), and retry the
+                    # scrape ONCE before giving up. This is the partner mantra —
+                    # heal it, don't bail and ask a human to "look into it".
+                    await self._bump(stats, "sessions_expired")
+                    await db.update_customer(cid, session_status="expired")
+                    emit("session_invalid", {"customer_id": cid})
+                    emit("log", {"level": "info",
+                                 "message": f"{name}: session expired — "
+                                            "auto-relogin + retry"})
+                    healed = await self._heal_session(cid, ctx, name, emit)
+                    if not healed:
+                        emit("log", {"level": "error",
+                                     "message": f"{name}: auto-relogin failed — "
+                                                "needs manual login"})
+                        return
+                    page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+                    scraped = await scrape_orders(page, emit=emit)
             except SessionExpiredError:
+                # open_customer_profile itself couldn't establish a session.
                 await self._bump(stats, "sessions_expired")
                 await db.update_customer(cid, session_status="expired")
                 emit("session_invalid", {"customer_id": cid})
@@ -379,6 +400,56 @@ class RunManager:
             if plock is not None and plock_held:
                 plock.release()  # only release the lock WE acquired
         emit("customer_done", {"customer_id": cid, "stats": dict(stats)})
+
+    async def _heal_session(self, cid, ctx, name, emit) -> bool:
+        """AUTO-HEAL an expired session IN-PLACE on the already-open context.
+
+        Drives login_and_capture on the runner's existing page (we already hold
+        this customer's profile lock, so we must NOT call relogin_customer —
+        it acquires the same non-reentrant lock and would deadlock). On success:
+        re-export storage_state, flip session_status back to active, return True.
+        Returns False if login can't be completed (then the caller surfaces it).
+        """
+        try:
+            from backend.account_creator import DaisyBridge
+            from backend.browser.driver import export_storage_state
+            from backend.browser.login_flow import login_and_capture
+
+            customer = await db.get_customer(cid)
+            if not customer or not customer.get("password"):
+                return False  # no creds to relogin with — genuinely needs a human
+            daisy_cfg = await db.get_setting("daisy")
+            token = customer.get("number_token", "")
+            api_url = customer.get("api_url", "")
+            import json
+            hosts = json.loads(customer.get("mirror_hosts") or "[]")
+            page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+
+            async with DaisyBridge(root=daisy_cfg.get("root")) as daisy:
+                async def poll_otp() -> str:
+                    res = await daisy.fetch_otp(token, api_url, hosts)
+                    return res.get("code") or ""
+
+                outcome = await login_and_capture(
+                    page, customer["email"], customer["password"], poll_otp,
+                    address={"full_address": customer.get("notes") or ""},
+                    emit=emit)
+            if outcome != "logged_in":
+                return False
+            storage = await export_storage_state(ctx, cid)
+            fields = {"session_status": "active"}
+            if storage:
+                fields["storage_state_path"] = storage
+            await db.update_customer(cid, **fields)
+            emit("relogin_done", {"customer_id": cid})
+            emit("log", {"level": "info",
+                         "message": f"{name}: session auto-healed (re-login OK)"})
+            return True
+        except Exception as exc:  # heal is best-effort; never crash the run
+            emit("log", {"level": "error",
+                         "message": f"{name}: auto-heal errored: "
+                                    f"{type(exc).__name__}: {exc}"})
+            return False
 
     async def _claim_order(self, run_id, cid, page, oid, so, cfg, stats, emit,
                            run_claim) -> None:
