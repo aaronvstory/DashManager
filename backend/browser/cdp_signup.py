@@ -39,6 +39,9 @@ from backend.browser.uc_signup import (BOT_BLOCK_MARKERS, SIGNUP_URL,
 # Old working scripts reached signup via the LOGIN page, then clicked "Sign Up"
 # — never a cold /signup land (which scores as a low-trust signal).
 LOGIN_URL = "https://www.doordash.com/consumer/login/"
+# Ground-truth confirmation: the account's own profile page must show the
+# identity we signed up with. This is THE success check (not just a URL redirect).
+EDIT_PROFILE_URL = "https://www.doordash.com/consumer/edit_profile"
 
 # CDP field selectors — same stable autocomplete attributes as uc_signup, but
 # CDP's press_keys/select use CSS, so we keep the CSS forms here.
@@ -358,7 +361,7 @@ SKIP_SELECTORS = ('button:contains("Skip")', 'button:contains("Not now")',
 
 
 def _finish_account(sb: Any, identity: dict[str, Any], os_input: bool,
-                    emit: Any, shot: Any) -> None:
+                    emit: Any, shot: Any) -> dict[str, Any]:
     """Post-verification: the account exists but lands on the home page with an
     'Enter delivery address' prompt + a possible DashPass upsell. Fill the
     address (press Enter to pick the first suggestion) then skip the upsell, so
@@ -391,9 +394,72 @@ def _finish_account(sb: Any, identity: dict[str, Any], os_input: bool,
         _skip_upsell(sb, os_input)
         shot("08_finished")
         emit("signup_onboarding_done", {})
+        # GROUND-TRUTH confirmation: profile page must show our identity.
+        confirm = _confirm_edit_profile(sb, identity)
+        shot("09_edit_profile")
+        emit("signup_profile_confirmed", confirm)
+        return confirm
     except Exception as exc:
         emit("signup_onboarding_warn",
              {"error": f"{type(exc).__name__}: {exc}"[:120]})
+    return {"confirmed": False, "matched": [], "url": ""}
+
+
+def _confirm_edit_profile(sb: Any, identity: dict[str, Any]) -> dict[str, Any]:
+    """Navigate to /consumer/edit_profile and confirm OUR identity shows there.
+
+    This is the ground-truth success check: a created account's profile page
+    renders the email/first/last we signed up with. Returns
+    {"confirmed": bool, "matched": [...], "url": ...}. Best-effort; never raises.
+    """
+    out: dict[str, Any] = {"confirmed": False, "matched": [], "url": ""}
+    try:
+        try:
+            sb.cdp.open(EDIT_PROFILE_URL)
+        except Exception:
+            sb.cdp.get(EDIT_PROFILE_URL)
+        time.sleep(4.0)
+        out["url"] = _cdp_url(sb)
+        # the profile fields are inputs whose .value holds our data; also scan
+        # the body text as a fallback.
+        email = (identity.get("email") or "").lower()
+        first = (identity.get("first_name") or "").lower()
+        last = (identity.get("last_name") or "").lower()
+        haystack = ""
+        try:
+            haystack += (_body_text_cdp(sb) or "").lower()
+        except Exception:
+            pass
+        for sel in ('input[autocomplete="email"]', 'input[type="email"]',
+                    'input[autocomplete="given-name"]',
+                    'input[autocomplete="family-name"]', "input"):
+            try:
+                for el in (sb.cdp.find_elements(sel) or []):
+                    try:
+                        haystack += " " + (el.get_attribute("value") or "").lower()
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+        matched = [k for k, v in (("email", email), ("first", first),
+                                  ("last", last)) if v and v in haystack]
+        out["matched"] = matched
+        # email is the strong signal; first OR last as corroboration
+        out["confirmed"] = ("email" in matched) or (
+            "first" in matched and "last" in matched)
+    except Exception:
+        pass
+    return out
+
+
+def _body_text_cdp(sb: Any) -> str:
+    try:
+        return sb.cdp.get_text("body") or ""
+    except Exception:
+        try:
+            return sb.get_text("body") or ""
+        except Exception:
+            return ""
 
 
 def _click_submit_button(sb: Any, os_input: bool = False) -> bool:
@@ -670,7 +736,8 @@ def signup_via_cdp(identity: dict[str, Any], *,
                 if any(m in _cdp_url(sb) for m in SUCCESS_URL_MARKERS):
                     result["outcome"] = "created"
                     result["storage_state"] = _export_storage(sb)
-                    _finish_account(sb, identity, os_input, _emit, _shot)
+                    result["profile_confirmed"] = _finish_account(
+                        sb, identity, os_input, _emit, _shot)
                     _shot("05_created_nootp")
                     return result
                 if _page_has(sb, BOT_BLOCK_MARKERS):
@@ -708,8 +775,8 @@ def signup_via_cdp(identity: dict[str, Any], *,
                                 _shot("06_created")
                                 # post-verify: fill delivery address + skip the
                                 # DashPass upsell so the account is fully usable.
-                                _finish_account(sb, identity, os_input,
-                                                _emit, _shot)
+                                result["profile_confirmed"] = _finish_account(
+                                    sb, identity, os_input, _emit, _shot)
                                 return result
                 time.sleep(3.0)
             result["outcome"] = "otp_timeout"
