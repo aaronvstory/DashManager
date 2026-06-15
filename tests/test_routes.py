@@ -221,3 +221,38 @@ async def test_proxies_test_one_404_for_unknown(client, monkeypatch):
                         lambda *a, **k: [dict(_FAKE_PROXY)])
     r = await client.post("/api/proxies/test/not-a-real-id")
     assert r.status_code == 404
+
+
+async def test_proxies_test_one_success_forwards_fields(client, monkeypatch):
+    from backend.browser import proxy_pool
+    monkeypatch.setattr(proxy_pool, "load_proxies",
+                        lambda *a, **k: [dict(_FAKE_PROXY)])
+    pid = proxy_pool.proxy_id(_FAKE_PROXY)
+    monkeypatch.setattr(proxy_pool, "local_ip", lambda *a, **k: "9.9.9.9")
+    monkeypatch.setattr(
+        proxy_pool, "check_proxy",
+        lambda px, **k: {"id": proxy_pool.proxy_id(px), "alive": True,
+                         "exit_ip": "1.2.3.4", "country": "US", "city": "Reno",
+                         "region": "Nevada", "latency_ms": 300.0, "error": "",
+                         "differs_from_local": True})
+    r = await client.post(f"/api/proxies/test/{pid}")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["local_ip"] == "9.9.9.9"
+    assert body["exit_ip"] == "1.2.3.4" and body["city"] == "Reno"
+    assert body["id"] == pid
+    assert "TOPSECRET" not in r.text   # liveness response never echoes the pw
+
+
+async def test_proxies_test_all_failure_is_500_without_creds(client, monkeypatch):
+    from backend.browser import proxy_pool
+
+    def boom(*a, **k):
+        # An error string that (maliciously) embeds the password — the route's
+        # 500 detail must not leak it.
+        raise RuntimeError("connect failed via TOPSECRET@host")
+
+    monkeypatch.setattr(proxy_pool, "check_all", boom)
+    r = await client.post("/api/proxies/test")
+    assert r.status_code == 500
+    assert "detail" in r.json()

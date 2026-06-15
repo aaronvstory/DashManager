@@ -184,9 +184,12 @@ function ProxyCard({
 }) {
   const tested = !!result
   const alive = result?.alive ?? false
-  // A live exit IP that equals the PC's IP means the proxy isn't routing —
-  // surface it as a warning even though the request "succeeded".
+  // Tri-state routing proof (the backend only sets differs_from_local when it
+  // could fetch the PC's own IP). true → routes elsewhere ✓; false → exit IP
+  // equals the PC's IP (proxy not routing) ⚠; null → comparison not done, so
+  // we say nothing rather than falsely claiming success.
   const samePc = result?.differs_from_local === false
+  const routesElsewhere = result?.differs_from_local === true
 
   return (
     <div
@@ -238,9 +241,13 @@ function ProxyCard({
             <div className="mt-1 border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[0.7rem] font-medium text-amber-600 dark:text-amber-400">
               ⚠ Exit IP equals this PC's IP ({localIp}) — proxy may not be routing.
             </div>
-          ) : (
+          ) : routesElsewhere ? (
             <div className="mt-1 text-[0.7rem] text-emerald-600 dark:text-emerald-400">
               ✓ Routes through a different IP than this PC.
+            </div>
+          ) : (
+            <div className="mt-1 text-[0.7rem] text-muted-foreground">
+              Couldn't compare against this PC's IP.
             </div>
           )}
         </div>

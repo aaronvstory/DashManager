@@ -12,12 +12,14 @@ proxy), so they're off-loaded to a thread to keep the event loop responsive.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
 from backend.browser import proxy_pool
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -57,8 +59,11 @@ async def test_all_proxies() -> dict[str, Any]:
     try:
         return await asyncio.to_thread(proxy_pool.check_all)
     except Exception as exc:  # noqa: BLE001 — a probe must never 500
-        raise HTTPException(status_code=500,
-                            detail=f"proxy test failed: {exc}")
+        # Do NOT echo the raw exception: it could embed the proxy URL (creds).
+        # Log it server-side; return a generic message to the client.
+        logger.exception("proxy test-all failed")
+        raise HTTPException(status_code=500, detail="proxy test failed") \
+            from exc
 
 
 @router.post("/test/{proxy_id}")

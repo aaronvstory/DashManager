@@ -128,7 +128,10 @@ def proxy_id(proxy: dict[str, str]) -> str:
     a host:port but differ in their flags get distinct ids (a truncated id would
     collide and make per-proxy testing probe the wrong line).
     """
-    return f"{proxy['host']}:{proxy['port']}#{proxy.get('username','')}"
+    # Separator is '~' (a URL-unreserved char) NOT '#': the id is used as a
+    # path segment in /api/proxies/test/{id}, and a '#' would be parsed as a URL
+    # fragment and truncate the path.
+    return f"{proxy['host']}:{proxy['port']}~{proxy.get('username','')}"
 
 
 def load_proxies(path: str | Path | None = None) -> list[dict[str, str]]:
