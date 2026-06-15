@@ -202,6 +202,49 @@ class DaisyBridge:
         return (await self._call(
             "list_recent_customers", {"limit": limit}))["customers"]
 
+    # ── Slice 1: full CustomerDaisy surface ──────────────────────────────────
+    async def list_customers(self, limit: int = 200
+                             ) -> list[dict[str, Any]]:
+        """All CustomerDaisy customers (newest first), normalized + token-bearing."""
+        return (await self._call(
+            "list_customers", {"limit": limit}))["customers"]
+
+    async def customer_count(self) -> int:
+        return int((await self._call("customer_count"))["count"])
+
+    async def get_customer(self, customer_id: str) -> dict[str, Any] | None:
+        return (await self._call(
+            "get_customer", {"customer_id": customer_id}))["customer"]
+
+    async def update_customer(self, customer_id: str, fields: dict[str, Any]
+                              ) -> dict[str, Any] | None:
+        """Update whitelisted identity/address fields on a CustomerDaisy row."""
+        return (await self._call(
+            "update_customer",
+            {"customer_id": customer_id, "fields": fields}))["customer"]
+
+    async def delete_customer(self, customer_id: str) -> bool:
+        return bool((await self._call(
+            "delete_customer", {"customer_id": customer_id}))["deleted"])
+
+    async def export(self, fmt: str = "json", limit: int = 1000
+                     ) -> dict[str, Any]:
+        """Export customers as csv|json|txt TEXT (caller decides where to save)."""
+        return await self._call("export", {"format": fmt, "limit": limit})
+
+    async def list_addresses(self) -> list[dict[str, Any]]:
+        """The user's anchor-address pool (my_addresses.json)."""
+        return (await self._call("list_addresses"))["addresses"]
+
+    async def generate_address(self, origin_address: str,
+                               radius_miles: float = 5.0
+                               ) -> dict[str, Any] | None:
+        """A radius-scoped real address near an origin (no customer created)."""
+        return (await self._call(
+            "generate_address",
+            {"origin_address": origin_address,
+             "radius_miles": radius_miles}))["address"]
+
 
 def _os_environ() -> dict[str, str]:
     import os
