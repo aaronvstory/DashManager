@@ -193,39 +193,52 @@ async def start_login(body: LoginBody | None = None) -> dict[str, Any]:
 
 
 async def _run_create_account(body: CreateAccountBody) -> None:
-    from backend.account_creator import create_account
     from datetime import datetime, timezone
 
-    daisy_cfg = await db.get_setting("daisy")
-    origin = body.location_origin or daisy_cfg.get("location_origin")
-    radius = (body.radius_miles if body.radius_miles is not None
-              else float(daisy_cfg.get("radius_miles", 5.0)))
+    # Outer guard: a failure BEFORE the loop (settings fetch, bad count, import)
+    # would otherwise propagate out of the asyncio task and get swallowed,
+    # leaving the dialog stuck in "running" with no terminal event. Always emit
+    # something terminal.
     count = max(1, int(body.count or 1))
-    # Stamp a shared batch id/label so the run groups under one '<label> - claude'
-    # batch in CustomerDaisy (and the in-app Batch OTP view). The '- claude'
-    # suffix is the user's naming convention; appended once here.
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    base = (body.batch_label or f"batch {stamp}").strip()
-    batch_label = base if base.endswith("- claude") else f"{base} - claude"
-    batch_id = f"claude_{stamp}"
-    bus.publish("batch_started", {"count": count, "batch_label": batch_label})
+    try:
+        from backend.account_creator import create_account
 
-    created = 0
-    for i in range(count):
-        bus.publish("batch_progress", {"index": i + 1, "of": count,
-                                       "created": created})
-        try:
-            await create_account(
-                location_origin=origin, radius_miles=radius,
-                bucket_date=body.bucket_date, daisy_root=daisy_cfg.get("root"),
-                headless=body.headless,
-                batch_id=batch_id, batch_label=batch_label)
-            created += 1
-        except Exception as e:  # one account's failure never aborts the batch
-            bus.publish("account_failed", {"error": str(e),
-                                           "index": i + 1, "of": count})
-    bus.publish("batch_done", {"created": created, "of": count,
-                               "batch_label": batch_label})
+        daisy_cfg = await db.get_setting("daisy")
+        origin = body.location_origin or daisy_cfg.get("location_origin")
+        radius = (body.radius_miles if body.radius_miles is not None
+                  else float(daisy_cfg.get("radius_miles", 5.0)))
+        # Stamp a shared batch id/label so the run groups under one
+        # '<label> - claude' batch in CustomerDaisy (and the in-app Batch OTP
+        # view). The '- claude' suffix is the user's naming convention.
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        base = (body.batch_label or f"batch {stamp}").strip()
+        batch_label = base if base.endswith("- claude") else f"{base} - claude"
+        batch_id = f"claude_{stamp}"
+        # Send `of` (mirrors batch_progress/batch_done) so the dialog reads one
+        # consistent key; keep `count` for back-compat.
+        bus.publish("batch_started", {"of": count, "count": count,
+                                      "batch_label": batch_label})
+
+        created = 0
+        for i in range(count):
+            bus.publish("batch_progress", {"index": i + 1, "of": count,
+                                           "created": created})
+            try:
+                await create_account(
+                    location_origin=origin, radius_miles=radius,
+                    bucket_date=body.bucket_date,
+                    daisy_root=daisy_cfg.get("root"),
+                    headless=body.headless,
+                    batch_id=batch_id, batch_label=batch_label)
+                created += 1
+            except Exception as e:  # one account's failure never aborts a batch
+                bus.publish("account_failed", {"error": str(e),
+                                               "index": i + 1, "of": count})
+        bus.publish("batch_done", {"created": created, "of": count,
+                                   "batch_label": batch_label})
+    except Exception as e:  # pre-loop / setup failure — still terminate the UI
+        bus.publish("account_failed", {"error": str(e), "index": 0, "of": count})
+        bus.publish("batch_done", {"created": 0, "of": count})
 
 
 @router.post("/create-account")

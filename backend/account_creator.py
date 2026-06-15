@@ -191,28 +191,38 @@ async def create_account(*, location_origin: str | None,
             _emit("log", {"level": "warn",
                           "message": f"CustomerDaisy save failed: {exc}"})
 
-        cid = await db.create_customer(
-            bucket,
-            first_name=identity.get("first_name", ""),
-            last_name=identity.get("last_name", ""),
-            email=identity.get("email", ""),
-            phone=identity.get("phone_number", ""),
-            password=identity.get("password", ""),
-            number_token=identity.get("number_token", ""),
-            api_url=identity.get("api_url", ""),
-            mirror_hosts=json.dumps(identity.get("mirror_hosts", [])),
-            notes=_notes(identity, daisy_id))
+        # The account is ALREADY created on DoorDash here, and storage_backup
+        # holds its real session cookies. If DB persistence raises (locked DB,
+        # constraint, etc.) the pending JSON would otherwise be orphaned in
+        # SESSIONS_DIR forever — an irrecoverable session for an account with no
+        # row. Clean it up on any persistence failure before re-raising.
+        try:
+            cid = await db.create_customer(
+                bucket,
+                first_name=identity.get("first_name", ""),
+                last_name=identity.get("last_name", ""),
+                email=identity.get("email", ""),
+                phone=identity.get("phone_number", ""),
+                password=identity.get("password", ""),
+                number_token=identity.get("number_token", ""),
+                api_url=identity.get("api_url", ""),
+                mirror_hosts=json.dumps(identity.get("mirror_hosts", [])),
+                notes=_notes(identity, daisy_id))
 
-        # Persist the captured session. signup_via_cdp returns cookies only (no
-        # persistent profile to adopt), so we just move the pending storage JSON
-        # into the customer's session path — the login/scrape machinery rehydrates
-        # a Playwright context from storage_state on next use.
-        final_storage = config.SESSIONS_DIR / f"{cid}_storage.json"
-        if storage_backup and Path(storage_backup).exists():
-            Path(storage_backup).replace(final_storage)
-        await db.update_customer(cid,
-                                 storage_state_path=str(final_storage),
-                                 session_status="active")
+            # Persist the captured session. signup_via_cdp returns cookies only
+            # (no persistent profile to adopt), so we just move the pending
+            # storage JSON into the customer's session path — the login/scrape
+            # machinery rehydrates a Playwright context from storage_state.
+            final_storage = config.SESSIONS_DIR / f"{cid}_storage.json"
+            if storage_backup and Path(storage_backup).exists():
+                Path(storage_backup).replace(final_storage)
+            await db.update_customer(cid,
+                                     storage_state_path=str(final_storage),
+                                     session_status="active")
+        except Exception:
+            if storage_backup:
+                Path(storage_backup).unlink(missing_ok=True)
+            raise
 
         summary = {"customer_id": cid, "daisy_id": daisy_id,
                    "name": f"{identity.get('first_name','')} "
