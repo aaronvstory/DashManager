@@ -40,6 +40,9 @@ from backend.browser.uc_signup import (BOT_BLOCK_MARKERS, SIGNUP_URL,
                                        normalize_phone)
 
 HOMEPAGE = "https://www.doordash.com/"
+# The old working scripts reached signup via the LOGIN page, then clicked
+# "Sign Up" — never a cold /signup land (which scores as low-trust).
+LOGIN_URL = "https://www.doordash.com/consumer/login/"
 
 # A modest, watchable window so the headed run doesn't fill the user's monitor
 # (the supervised refund/signup sessions standardize on ~1200x720).
@@ -167,12 +170,19 @@ async def signup_via_camoufox(
     otp_total_wait_s: float = 180.0,
     warmup_s: float = 6.0,
     screenshot_dir: str | None = None,
+    force_direct: bool = False,
+    target_os: str = "windows",
 ) -> dict[str, Any]:
     """Create one DoorDash account via Camoufox (Firefox stealth). Async.
 
     ``poll_otp`` is an async-or-sync callable returning the current api.cc code
     ('' if not arrived). On "created" the returned storage_state is a
     Playwright-compatible cookies dict for the per-customer profile machinery.
+
+    ``force_direct`` skips ALL proxies and runs on the home IP (what every old
+    working script did; the LightningProxies gateway was hurting). ``target_os``
+    picks the consistent desktop fingerprint OS ("windows"/"macos"/"linux") —
+    Camoufox has no mobile fingerprint, so desktop-consistent is the design.
     """
     from camoufox.async_api import AsyncCamoufox
 
@@ -211,12 +221,30 @@ async def signup_via_camoufox(
     # ── The post-warmup flow (form → submit → outcome → OTP), run on the page
     #    of whichever proxy successfully warmed up. Mutates `result`. ──────────
     async def _run_flow(page: Any) -> dict[str, Any]:
-        # ── 2) Go to signup ──
+        # ── 2) Reach signup with a warm session: visit the consumer LOGIN page
+        #    first (earns trust cookies), settle, THEN navigate directly to the
+        #    known-correct CONSUMER signup URL. We do NOT click a generic
+        #    "Sign Up" link — the login page's "Sign Up" goes to the DASHER
+        #    (driver) signup at dasher.doordash.com, the wrong form. Going
+        #    straight to SIGNUP_URL after the login visit avoids that trap while
+        #    still avoiding a stone-cold /signup land. ──
+        try:
+            await page.goto(LOGIN_URL, wait_until="domcontentloaded",
+                            timeout=GOTO_TIMEOUT_MS)
+            await asyncio.sleep(random.uniform(1.5, 2.8))
+            await _wander_mouse(page)
+        except Exception:
+            pass
         await page.goto(SIGNUP_URL, wait_until="domcontentloaded",
                         timeout=GOTO_TIMEOUT_MS)
         await asyncio.sleep(random.uniform(2.0, 3.5))
         await _wander_mouse(page)
-        _emit("signup_form_open", {})
+        # Guard: never proceed on the dasher signup form (wrong target).
+        if "dasher.doordash.com" in page.url:
+            await page.goto(SIGNUP_URL, wait_until="domcontentloaded",
+                            timeout=GOTO_TIMEOUT_MS)
+            await asyncio.sleep(1.5)
+        _emit("signup_form_open", {"url": page.url[:80]})
         await _shot(page, "form_open")
 
         # bot block can fire on load
@@ -315,11 +343,14 @@ async def signup_via_camoufox(
     #    loaded (so a dead/slow proxy can never hang the run — we move on). ──
     async def _warmup(page: Any) -> bool:
         _emit("signup_warmup", {})
+        # Use Playwright's OWN navigation timeout (fails cleanly) — do NOT wrap
+        # in asyncio.wait_for: cancelling page.goto mid-navigation corrupts the
+        # Camoufox page and the NEXT goto throws TargetClosedError (the live
+        # crash). "commit" fires as soon as the response starts (enough to earn
+        # the _px3 cookie) without waiting for the heavy homepage to fully parse.
         try:
-            await asyncio.wait_for(
-                page.goto(HOMEPAGE, wait_until="domcontentloaded",
-                          timeout=GOTO_TIMEOUT_MS),
-                timeout=WARMUP_TIMEOUT_S)
+            await page.goto(HOMEPAGE, wait_until="commit",
+                            timeout=GOTO_TIMEOUT_MS)
         except Exception:
             return False
         await asyncio.sleep(warmup_s)
@@ -337,12 +368,15 @@ async def signup_via_camoufox(
     # actually loads the homepage, then stay on it for the WHOLE signup (never
     # rotate mid-account — PerimeterX gotcha #E1). Direct (None) is the last
     # resort, logged loudly. geoip=True only when a proxy is set.
-    candidates: list[dict[str, str] | None] = list(iter_proxies())
-    candidates.append(None)  # direct as final fallback
+    if force_direct:
+        candidates: list[dict[str, str] | None] = [None]  # home IP only
+    else:
+        candidates = list(iter_proxies())
+        candidates.append(None)  # direct as final fallback
 
     for proxy in candidates:
         cam_kwargs: dict[str, Any] = {
-            "headless": headless, "humanize": True, "os": "windows",
+            "headless": headless, "humanize": True, "os": target_os,
             # Fixed modest window so it doesn't fill the user's monitor. (Camoufox
             # warns fixed sizes are slightly more fingerprintable, but an
             # un-watchable giant window is worse for a headed, supervised run.)

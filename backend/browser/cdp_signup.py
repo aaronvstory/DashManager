@@ -36,6 +36,10 @@ from backend.browser.uc_signup import (BOT_BLOCK_MARKERS, SIGNUP_URL,
                                        SUCCESS_URL_MARKERS, VERIFY_MARKERS,
                                        normalize_phone)
 
+# Old working scripts reached signup via the LOGIN page, then clicked "Sign Up"
+# — never a cold /signup land (which scores as a low-trust signal).
+LOGIN_URL = "https://www.doordash.com/consumer/login/"
+
 # CDP field selectors — same stable autocomplete attributes as uc_signup, but
 # CDP's press_keys/select use CSS, so we keep the CSS forms here.
 SEL_FIRST = 'input[autocomplete="given-name"]'
@@ -355,9 +359,25 @@ def signup_via_cdp(identity: dict[str, Any], *,
     sb = None
     try:
         with SB(**kwargs) as sb:
-            sb.activate_cdp_mode(SIGNUP_URL)
+            # Warm the session on the consumer LOGIN page first (trust cookies),
+            # then navigate DIRECTLY to the consumer signup URL. We do NOT click
+            # a generic "Sign Up" link — the login page's "Sign Up" goes to the
+            # DASHER (driver) signup (dasher.doordash.com), the wrong form.
+            sb.activate_cdp_mode(LOGIN_URL)
+            time.sleep(2.5)
+            try:
+                sb.cdp.open(SIGNUP_URL)
+            except Exception:
+                sb.cdp.get(SIGNUP_URL)
             time.sleep(3.0)
-            _emit("signup_form_open", {})
+            # Guard: never proceed on the dasher signup form.
+            try:
+                if "dasher.doordash.com" in _cdp_url(sb):
+                    sb.cdp.open(SIGNUP_URL)
+                    time.sleep(2.0)
+            except Exception:
+                pass
+            _emit("signup_form_open", {"url": _cdp_url(sb)[:80]})
             _shot("01_open")
 
             # The bot/CF gate can fire on LOAD (rare) or SUBMIT (our usual 403).
