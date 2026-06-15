@@ -210,10 +210,10 @@ export function SettingsCard({
   children: ReactNode
 }) {
   return (
-    <Card className="shadow-sm">
+    <Card>
       <CardHeader className="border-b">
         <div className="flex items-center gap-3.5">
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 ring-1 ring-primary/15">
+          <div className="flex size-9 shrink-0 items-center justify-center border border-primary/30 bg-primary/10">
             <Icon className="size-4 text-primary" />
           </div>
           <div className="space-y-1">

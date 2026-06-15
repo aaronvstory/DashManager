@@ -21,7 +21,7 @@ function SettingsSkeleton() {
   return (
     <div className="max-w-3xl space-y-6">
       {[0, 1, 2].map((i) => (
-        <Card key={i} className="shadow-sm">
+        <Card key={i}>
           <CardHeader className="border-b">
             <div className="flex items-center gap-3.5">
               <Skeleton className="size-9 rounded-lg" />

@@ -46,42 +46,46 @@
     --color-card: var(--card);
     --color-foreground: var(--foreground);
     --color-background: var(--background);
-    --radius-sm: calc(var(--radius) * 0.6);
-    --radius-md: calc(var(--radius) * 0.8);
-    --radius-lg: var(--radius);
-    --radius-xl: calc(var(--radius) * 1.4);
-    --radius-2xl: calc(var(--radius) * 1.8);
-    --radius-3xl: calc(var(--radius) * 2.2);
-    --radius-4xl: calc(var(--radius) * 2.6);
+    /* BRUTALIST: hard corners everywhere. Radius is ~0 across the scale, so
+       every shadcn component that reaches for rounded-md/lg/xl renders square.
+       A hairline 2px on the largest containers only, to avoid pixel-fighting
+       on big panels — still reads as sharp. */
+    --radius-sm: 0px;
+    --radius-md: 0px;
+    --radius-lg: 0px;
+    --radius-xl: 0px;
+    --radius-2xl: 2px;
+    --radius-3xl: 2px;
+    --radius-4xl: 2px;
 }
 
-/* Light theme — zinc surfaces, DoorDash red accent */
+/* Light theme — BRUTALIST: paper-white, hard near-black borders, DoorDash red. */
 :root {
-    --background: #fafafa;
-    --foreground: #09090b;
+    --background: #f4f4f1;
+    --foreground: #0a0a0a;
     --card: #ffffff;
-    --card-foreground: #09090b;
+    --card-foreground: #0a0a0a;
     --popover: #ffffff;
-    --popover-foreground: #09090b;
-    --primary: #eb1700;
-    --primary-hover: #ff3008;
+    --popover-foreground: #0a0a0a;
+    --primary: #e01700;
+    --primary-hover: #ff2d16;
     --primary-foreground: #ffffff;
-    --secondary: #f4f4f5;
-    --secondary-foreground: #18181b;
-    --muted: #f4f4f5;
-    --muted-foreground: #71717b;
-    --accent: #f4f4f5;
-    --accent-foreground: #18181b;
-    --destructive: #dc2626;
-    --border: #e4e4e7;
-    --input: #e4e4e7;
-    --ring: #eb1700;
-    --chart-1: #eb1700;
-    --chart-2: #f97316;
-    --chart-3: #f59e0b;
-    --chart-4: #14b8a6;
-    --chart-5: #6366f1;
-    --radius: 0.625rem;
+    --secondary: #ebebe8;
+    --secondary-foreground: #0a0a0a;
+    --muted: #ebebe8;
+    --muted-foreground: #5c5c58;
+    --accent: #e4e4e0;
+    --accent-foreground: #0a0a0a;
+    --destructive: #cc1f1f;
+    --border: #1a1a1a;
+    --input: #1a1a1a;
+    --ring: #e01700;
+    --chart-1: #e01700;
+    --chart-2: #d97706;
+    --chart-3: #15803d;
+    --chart-4: #0d9488;
+    --chart-5: #4f46e5;
+    --radius: 0px;
     --sidebar: #f7f7f8;
     --sidebar-foreground: #3f3f46;
     --sidebar-primary: #eb1700;
@@ -92,41 +96,43 @@
     --sidebar-ring: #ff3008;
 }
 
-/* Dark theme — DEFAULT. Warm near-black (a touch of red/brown in the charcoal,
-   echoing the daily report's parchment-on-black character) with raised cards. */
+/* Dark theme — DEFAULT. BRUTALIST: true near-black, flat panels (no raised
+   warm cards), HARD high-contrast hairline borders that actually read as
+   structure, DoorDash red used as solid blocks not glows. */
 .dark {
-    --background: #0e0d0c;
-    --foreground: #f4efe7;
-    --card: #1a1815;
-    --card-foreground: #f4efe7;
-    --popover: #1f1c19;
-    --popover-foreground: #f4efe7;
-    --primary: #ef2b1f;
-    --primary-hover: #ff5a4d;
+    --background: #0a0a0a;
+    --foreground: #f5f5f3;
+    --card: #131313;
+    --card-foreground: #f5f5f3;
+    --popover: #161616;
+    --popover-foreground: #f5f5f3;
+    --primary: #ff2d16;
+    --primary-hover: #ff4a36;
     --primary-foreground: #ffffff;
-    --secondary: #232019;
-    --secondary-foreground: #f4efe7;
-    --muted: #221f1b;
-    --muted-foreground: #a8a097;
-    --accent: #272320;
-    --accent-foreground: #f4efe7;
-    --destructive: #ff6b5e;
-    --border: rgba(244, 239, 231, 0.09);
-    --input: rgba(244, 239, 231, 0.13);
-    --ring: #ff5a4d;
-    --chart-1: #ff5a4d;
-    --chart-2: #e9b04b;
-    --chart-3: #4ec98a;
+    --secondary: #1c1c1c;
+    --secondary-foreground: #f5f5f3;
+    --muted: #1a1a1a;
+    --muted-foreground: #9a9a96;
+    --accent: #1f1f1f;
+    --accent-foreground: #ffffff;
+    --destructive: #ff4d4d;
+    /* Hard, visible borders — the load-bearing element of the brutalist look. */
+    --border: rgba(245, 245, 243, 0.16);
+    --input: rgba(245, 245, 243, 0.22);
+    --ring: #ff2d16;
+    --chart-1: #ff2d16;
+    --chart-2: #f5a623;
+    --chart-3: #34c759;
     --chart-4: #2dd4bf;
-    --chart-5: #818cf8;
-    --sidebar: #0a0908;
-    --sidebar-foreground: #d4cdc2;
-    --sidebar-primary: #ef2b1f;
+    --chart-5: #8a8aff;
+    --sidebar: #0a0a0a;
+    --sidebar-foreground: #c8c8c4;
+    --sidebar-primary: #ff2d16;
     --sidebar-primary-foreground: #ffffff;
-    --sidebar-accent: #232019;
-    --sidebar-accent-foreground: #f4efe7;
-    --sidebar-border: rgba(244, 239, 231, 0.07);
-    --sidebar-ring: #ff5a4d;
+    --sidebar-accent: #1c1c1c;
+    --sidebar-accent-foreground: #ffffff;
+    --sidebar-border: rgba(245, 245, 243, 0.14);
+    --sidebar-ring: #ff2d16;
 }
 
 @layer base {
@@ -142,25 +148,31 @@
   html {
     @apply font-sans;
     }
-  /* Ambient warmth — a faint DoorDash-red wash bleeding from the top, the
-     same gesture the daily report uses. Fixed so it doesn't scroll away. */
-  .dark body::before {
-    content: "";
-    position: fixed;
-    inset: 0;
-    z-index: 0;
-    pointer-events: none;
-    background:
-      radial-gradient(120% 80% at 100% -10%, rgba(239, 43, 31, 0.08), transparent 55%),
-      radial-gradient(90% 60% at -10% 0%, rgba(239, 43, 31, 0.04), transparent 50%);
-    }
-  /* Keep app content above the ambient wash. */
-  #root {
-    position: relative;
-    z-index: 1;
-    }
+  /* BRUTALIST: no ambient gradient wash — flat black, structure comes from
+     borders and type, not glows. (Removed the radial red wash on purpose.) */
   /* Mono numerals read as data, not prose. */
   .tabular-nums {
     font-variant-numeric: tabular-nums;
     }
+}
+
+/* ── Brutalist primitives ──────────────────────────────────────────────────
+   Small, reusable classes the redesigned components lean on so the language is
+   consistent: hard edges, heavy borders, uppercase micro-labels, mono data. */
+@layer components {
+  /* A hard-edged panel: square, hairline border, flat fill. The base unit. */
+  .bx {
+    @apply border border-border bg-card;
+    border-radius: 0;
+  }
+  /* Section eyebrow / column header micro-label. */
+  .eyebrow {
+    @apply text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-muted-foreground;
+  }
+  /* Data figure — mono, tight, tabular. Money, counts, ids. */
+  .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+  }
 }

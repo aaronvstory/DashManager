@@ -116,6 +116,15 @@ export interface Order {
   claims?: Claim[]
   /** HOW the refund happened + the proof line (derived server-side). */
   resolution?: OrderResolution
+  /** Proof screenshots tied to this order (report view). */
+  screenshots?: ProofShot[]
+}
+
+/** A proof screenshot with its served URL (report view). */
+export interface ProofShot {
+  url: string
+  label: string
+  kind: string
 }
 
 /**
@@ -127,6 +136,39 @@ export interface OrderResolution {
   label: string
   /** Short proof: claim amount/destination, or the agent's confirming line. */
   confirmation: string
+}
+
+/** Full native-report model from /api/reports/<date>/data. */
+export interface ReportData {
+  date: string
+  customers: ReportCustomer[]
+  summary: ReportSummary
+  html_url: string
+}
+
+export interface ReportSummary {
+  customers: number
+  orders: number
+  refunded: number
+  pursuing: number
+  unconfirmed: number
+  needs_you: number
+  no_orders: number
+  total_refunded: number
+}
+
+export interface ReportCustomer {
+  id: number
+  first_name: string
+  last_name: string
+  email: string
+  phone: string
+  notes: string
+  bucket_date: string
+  session_status: SessionStatus
+  // (credentials like number_token are stripped server-side — not present here)
+  orders: Order[]
+  screenshots?: ProofShot[]
 }
 
 /** A customer enriched with derived pills + their orders, from /customers/full. */

@@ -294,6 +294,13 @@ async def list_customers() -> list[dict[str, Any]]:
         "SELECT * FROM customers ORDER BY bucket_date DESC, created_at DESC")
 
 
+async def list_customers_for_bucket(bucket_date: str) -> list[dict[str, Any]]:
+    """Customers in one bucket, oldest id first — scoped query (no in-memory
+    filter), so the report endpoint doesn't load the whole table."""
+    return await query(
+        "SELECT * FROM customers WHERE bucket_date=? ORDER BY id", (bucket_date,))
+
+
 _CUSTOMER_FIELDS = {"first_name", "last_name", "email", "phone", "bucket_date",
                     "storage_state_path", "cookies_path", "session_status",
                     "notes", "password", "number_token", "api_url",
@@ -376,6 +383,48 @@ async def list_orders(customer_id: int | None = None) -> list[dict[str, Any]]:
         return await query("SELECT * FROM orders ORDER BY id")
     return await query("SELECT * FROM orders WHERE customer_id=? ORDER BY id",
                        (customer_id,))
+
+
+# ── Bucket-scoped batch reads (avoid per-customer/per-order N+1) ──────────────
+# These pull a whole bucket's orders / claims / chats / messages / screenshots
+# in a handful of JOINed queries so callers (the report endpoint) can group in
+# memory instead of issuing a query per row.
+
+async def list_orders_for_bucket(bucket_date: str) -> list[dict[str, Any]]:
+    return await query(
+        "SELECT o.* FROM orders o JOIN customers c ON o.customer_id=c.id "
+        "WHERE c.bucket_date=? ORDER BY o.customer_id, o.id", (bucket_date,))
+
+
+async def list_claims_for_bucket(bucket_date: str) -> list[dict[str, Any]]:
+    return await query(
+        "SELECT cl.* FROM claims cl JOIN customers c ON cl.customer_id=c.id "
+        "WHERE c.bucket_date=? ORDER BY cl.id", (bucket_date,))
+
+
+async def list_chats_for_bucket(bucket_date: str) -> list[dict[str, Any]]:
+    # order_id IS NOT NULL: the report view groups chats UNDER their order, so an
+    # order-less legacy chat (pre-V5 customer-keyed) has nowhere to attach and is
+    # intentionally excluded here. All chats since V5 are order-keyed, so today
+    # this drops zero rows; if old order-less chats ever need surfacing, add a
+    # per-customer "orphan chats" bucket to the report view.
+    return await query(
+        "SELECT ch.* FROM chats ch JOIN customers c ON ch.customer_id=c.id "
+        "WHERE c.bucket_date=? AND ch.order_id IS NOT NULL ORDER BY ch.id",
+        (bucket_date,))
+
+
+async def list_chat_messages_for_bucket(bucket_date: str) -> list[dict[str, Any]]:
+    return await query(
+        "SELECT m.* FROM chat_messages m JOIN chats ch ON m.chat_id=ch.id "
+        "JOIN customers c ON ch.customer_id=c.id "
+        "WHERE c.bucket_date=? ORDER BY m.id", (bucket_date,))
+
+
+async def list_screenshots_for_bucket(bucket_date: str) -> list[dict[str, Any]]:
+    return await query(
+        "SELECT s.* FROM screenshots s JOIN customers c ON s.customer_id=c.id "
+        "WHERE c.bucket_date=? ORDER BY s.id", (bucket_date,))
 
 
 # ── Runs ─────────────────────────────────────────────────────────────────────

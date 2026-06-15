@@ -33,10 +33,10 @@ function Bubble({ message }: { message: ChatMessage }) {
     >
       <div
         className={cn(
-          "rounded-2xl px-3.5 py-2 text-sm leading-relaxed break-words whitespace-pre-wrap",
+          "px-3.5 py-2 text-sm leading-relaxed break-words whitespace-pre-wrap",
           out
-            ? "rounded-br-sm border border-primary/25 bg-primary/10"
-            : "rounded-bl-sm bg-muted",
+            ? "border-l-2 border-primary bg-primary/10"
+            : "border-l-2 border-border bg-muted",
         )}
       >
         {message.content}
