@@ -85,6 +85,26 @@ def test_update_customer_whitelisted_only(daisy_db):
     assert w._update_customer("nope", {"city": "X"}) is None
 
 
+def test_update_customer_phone_alias(daisy_db):
+    # the read shape exposes `phone`; updating with that key must hit the
+    # primary_phone column (not silently no-op).
+    row = w._update_customer("cd-1", {"phone": "5559998888"})
+    assert row["phone"] == "5559998888"
+
+
+def test_normalize_row_null_columns_become_empty(daisy_db):
+    import sqlite3
+    con = sqlite3.connect(str(daisy_db))
+    con.execute("INSERT INTO customers (customer_id, first_name, email) "
+                "VALUES ('cd-3', 'Cy', NULL)")  # email NULL, address NULL, etc.
+    con.commit()
+    con.close()
+    row = w._get_customer("cd-3")
+    assert row["email"] == ""           # NULL -> "", not None
+    assert row["full_address"] == ""
+    assert row["phone"] == ""
+
+
 def test_delete_customer(daisy_db):
     assert w._delete_customer("cd-2") is True
     assert w._customer_count() == 1

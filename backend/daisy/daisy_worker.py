@@ -164,25 +164,28 @@ def _normalize_row(r: dict) -> dict:
         hosts_list = [h for h in raw_hosts if h]
     else:
         hosts_list = [h for h in str(raw_hosts).split(",") if h]
+    # `r.get(k, "")` returns None for a NULL column (key exists, value is None);
+    # `or ""` coerces those to "" so exports/UI never show "None" or hit a
+    # TypeError downstream.
     return {
-        "customer_id": r.get("customer_id", ""),
-        "first_name": r.get("first_name", ""),
-        "last_name": r.get("last_name", ""),
-        "full_name": r.get("full_name", ""),
-        "email": r.get("email", ""),
-        "password": r.get("password", ""),
-        "phone": r.get("primary_phone", ""),
-        "full_address": r.get("full_address", ""),
-        "city": r.get("city", ""),
-        "state": r.get("state", ""),
-        "zip_code": r.get("zip_code", ""),
+        "customer_id": r.get("customer_id") or "",
+        "first_name": r.get("first_name") or "",
+        "last_name": r.get("last_name") or "",
+        "full_name": r.get("full_name") or "",
+        "email": r.get("email") or "",
+        "password": r.get("password") or "",
+        "phone": r.get("primary_phone") or "",
+        "full_address": r.get("full_address") or "",
+        "city": r.get("city") or "",
+        "state": r.get("state") or "",
+        "zip_code": r.get("zip_code") or "",
         "verification_completed": bool(r.get("verification_completed")),
         "number_token": (meta.get("apicc_number_token")
                          or r.get("primary_verification_id") or ""),
-        "api_url": meta.get("apicc_api_url", ""),
+        "api_url": meta.get("apicc_api_url") or "",
         "mirror_hosts": hosts_list,
-        "created_at": r.get("created_at", ""),
-        "updated_at": r.get("updated_at", ""),
+        "created_at": r.get("created_at") or "",
+        "updated_at": r.get("updated_at") or "",
     }
 
 
@@ -223,8 +226,15 @@ _UPDATABLE = {
 
 
 def _update_customer(customer_id: str, fields: dict) -> dict | None:
-    """Update whitelisted columns on a CustomerDaisy row; return the new row."""
-    updates = {k: v for k, v in (fields or {}).items() if k in _UPDATABLE}
+    """Update whitelisted columns on a CustomerDaisy row; return the new row.
+
+    Accepts the read-shape key `phone` as an alias for the DB column
+    `primary_phone` so a caller can round-trip the same key it read.
+    """
+    fields = dict(fields or {})
+    if "phone" in fields and "primary_phone" not in fields:
+        fields["primary_phone"] = fields.pop("phone")
+    updates = {k: v for k, v in fields.items() if k in _UPDATABLE}
     if not updates:
         return _get_customer(customer_id)
     con = _connect()
@@ -280,7 +290,8 @@ def _export(fmt: str, limit: int) -> dict:
     if fmt == "csv":
         import csv
         import io
-        buf = io.StringIO()
+        # newline="" so csv's \r\n isn't doubled to \r\r\n on Windows StringIO.
+        buf = io.StringIO(newline="")
         w = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         for r in rows:
