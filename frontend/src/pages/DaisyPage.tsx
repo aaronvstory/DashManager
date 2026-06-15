@@ -185,7 +185,9 @@ export default function DaisyPage() {
                               del.mutate(c.customer_id)
                             }
                           }}
-                          disabled={del.isPending}
+                          // Disable only THIS row's button while it's deleting
+                          // (del.variables is the id passed to mutate), not all.
+                          disabled={del.isPending && del.variables === c.customer_id}
                         >
                           <Trash2 className="size-4 text-primary" />
                         </Button>

@@ -45,6 +45,17 @@ async def _dashmanager_emails() -> set[str]:
             for c in await db.list_customers() if c.get("email")}
 
 
+# The worker's _normalize_row is intentionally COMPLETE (internal callers like
+# re-adoption need the full row, incl. the plaintext password). The HTTP layer
+# must NOT leak that password to the browser — strip it here before returning.
+# (Export already strips it worker-side; this covers list/get/update.)
+_PUBLIC_EXCLUDE = {"password"}
+
+
+def _safe(row: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in row.items() if k not in _PUBLIC_EXCLUDE}
+
+
 @router.get("")
 async def list_daisy_customers(limit: int = 200) -> dict[str, Any]:
     """CustomerDaisy's customers (newest first), each tagged `in_dashmanager`.
@@ -59,7 +70,7 @@ async def list_daisy_customers(limit: int = 200) -> dict[str, Any]:
     dm_emails = await _dashmanager_emails()
     for c in customers:
         c["in_dashmanager"] = (c.get("email") or "").lower() in dm_emails
-    return {"customers": customers, "count": count}
+    return {"customers": [_safe(c) for c in customers], "count": count}
 
 
 @router.get("/{customer_id}")
@@ -71,7 +82,7 @@ async def get_daisy_customer(customer_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="customer not found")
     dm_emails = await _dashmanager_emails()
     cust["in_dashmanager"] = (cust.get("email") or "").lower() in dm_emails
-    return cust
+    return _safe(cust)
 
 
 class DaisyPatch(BaseModel):
@@ -97,7 +108,7 @@ async def update_daisy_customer(customer_id: str, body: DaisyPatch
         row = await d.update_customer(customer_id, fields)
     if row is None:
         raise HTTPException(status_code=404, detail="customer not found")
-    return row
+    return _safe(row)
 
 
 @router.delete("/{customer_id}")

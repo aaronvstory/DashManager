@@ -105,6 +105,24 @@ async def test_get_found(client, monkeypatch):
     assert r.json()["in_dashmanager"] is False
 
 
+async def test_routes_never_leak_password(client, monkeypatch):
+    # the worker's normalized row carries the plaintext password; the HTTP
+    # routes MUST strip it (it would otherwise sit in the browser's cache).
+    row = {"customer_id": "cd-1", "email": "a@x.net", "password": "SECRETpw",
+           "first_name": "Ada"}
+    _patch_bridge(monkeypatch, _FakeBridge([dict(row)], get=dict(row),
+                                           updated=dict(row)))
+    r = await client.get("/api/daisy")
+    assert "SECRETpw" not in r.text
+    assert "password" not in r.json()["customers"][0]
+
+    r = await client.get("/api/daisy/cd-1")
+    assert "SECRETpw" not in r.text and "password" not in r.json()
+
+    r = await client.patch("/api/daisy/cd-1", json={"city": "Reno"})
+    assert "SECRETpw" not in r.text and "password" not in r.json()
+
+
 async def test_patch_forwards_fields(client, monkeypatch):
     b = _patch_bridge(monkeypatch, _FakeBridge(
         [], updated={"customer_id": "cd-1", "city": "Sparks"}))
