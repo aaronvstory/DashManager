@@ -27,11 +27,25 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 from backend import db
+from backend.daisy.bridge import DaisyError
 
 if TYPE_CHECKING:
     from backend.daisy.bridge import DaisyBridge
 
 router = APIRouter()
+
+
+def _address_http_error(exc: Exception) -> HTTPException:
+    """Map a worker address error (surfaced as a DaisyError string) to HTTP.
+
+    The worker raises IndexError ("out of range") for a bad index and ValueError
+    ("needs a non-empty full_address") for bad input; both arrive here as the
+    DaisyError message. 404 for out-of-range, 400 otherwise.
+    """
+    msg = str(exc)
+    status = 404 if "out of range" in msg else 400
+    # Worker-authored message (addresses are the user's own, not creds).
+    return HTTPException(status_code=status, detail=msg.split(": ")[-1])
 
 
 async def _bridge() -> DaisyBridge:
@@ -98,6 +112,40 @@ async def list_anchor_addresses() -> dict[str, Any]:
     return {"addresses": addresses}
 
 
+@router.post("/addresses")
+async def add_anchor_address(body: AnchorAddress) -> dict[str, Any]:
+    """Append an address to the anchor pool; returns the new full list."""
+    bridge = await _bridge()
+    async with bridge as d:
+        addresses = await d.add_address(body.model_dump())
+    return {"addresses": addresses}
+
+
+@router.patch("/addresses/{index}")
+async def update_anchor_address(index: int, body: AnchorAddress
+                                ) -> dict[str, Any]:
+    """Replace the anchor address at ``index`` (0-based). 404 if out of range."""
+    bridge = await _bridge()
+    try:
+        async with bridge as d:
+            addresses = await d.update_address(index, body.model_dump())
+    except DaisyError as exc:
+        raise _address_http_error(exc) from exc
+    return {"addresses": addresses}
+
+
+@router.delete("/addresses/{index}")
+async def delete_anchor_address(index: int) -> dict[str, Any]:
+    """Remove the anchor address at ``index`` (0-based). 404 if out of range."""
+    bridge = await _bridge()
+    try:
+        async with bridge as d:
+            addresses = await d.delete_address(index)
+    except DaisyError as exc:
+        raise _address_http_error(exc) from exc
+    return {"addresses": addresses}
+
+
 @router.get("/{customer_id}")
 async def get_daisy_customer(customer_id: str) -> dict[str, Any]:
     bridge = await _bridge()
@@ -108,6 +156,16 @@ async def get_daisy_customer(customer_id: str) -> dict[str, Any]:
     dm_emails = await _dashmanager_emails()
     cust["in_dashmanager"] = (cust.get("email") or "").lower() in dm_emails
     return _safe(cust)
+
+
+class AnchorAddress(BaseModel):
+    # An anchor-pool entry. full_address is the only required field; the worker
+    # also validates it's non-empty. extra=forbid so a typo'd key fails loud.
+    model_config = {"extra": "forbid"}
+    full_address: str
+    name: str = ""
+    city: str = ""
+    state: str = ""
 
 
 class DaisyPatch(BaseModel):

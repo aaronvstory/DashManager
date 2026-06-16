@@ -250,6 +250,24 @@ class DaisyBridge:
         """The user's anchor-address pool (my_addresses.json)."""
         return (await self._call("list_addresses"))["addresses"]
 
+    async def add_address(self, address: dict[str, Any]
+                          ) -> list[dict[str, Any]]:
+        """Append an address to the pool; returns the new full list."""
+        return (await self._call(
+            "add_address", {"address": address}))["addresses"]
+
+    async def update_address(self, index: int, address: dict[str, Any]
+                             ) -> list[dict[str, Any]]:
+        """Replace the address at ``index`` (0-based); returns the new list."""
+        return (await self._call(
+            "update_address",
+            {"index": index, "address": address}))["addresses"]
+
+    async def delete_address(self, index: int) -> list[dict[str, Any]]:
+        """Remove the address at ``index`` (0-based); returns the new list."""
+        return (await self._call(
+            "delete_address", {"index": index}))["addresses"]
+
     async def generate_address(self, origin_address: str,
                                radius_miles: float = 5.0
                                ) -> dict[str, Any] | None:
