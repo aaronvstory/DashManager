@@ -62,19 +62,21 @@ def test_merges_geo_and_ip_from_two_echoes(monkeypatch):
 
 def test_early_break_when_first_echo_has_ip_and_country(monkeypatch):
     # If the geo echo already returns BOTH ip and country, check_proxy stops
-    # early and never calls the second echo.
-    calls = {"n": 0}
+    # early and never calls the second echo. Record the URLs hit and assert on
+    # them AFTER the call — an assert INSIDE get() would be swallowed by
+    # check_proxy's `except Exception`, giving false assurance.
+    seen: list[str] = []
     both = {"ip": "198.51.100.9", "country": "CA",
             "geo": {"city": "Toronto", "region_name": "Ontario"}}
 
     def get(url, proxies=None, timeout=None):
-        calls["n"] += 1
-        assert pp.IP_ECHO_GEO in url          # bare echo must NOT be hit
+        seen.append(url)
         return _Resp(both)
 
     monkeypatch.setattr(requests, "get", get)
     r = pp.check_proxy(PROXY)
-    assert calls["n"] == 1                     # short-circuited
+    assert len(seen) == 1                       # short-circuited after echo 1
+    assert pp.IP_ECHO_BARE not in seen          # bare echo was NOT hit
     assert r["exit_ip"] == "198.51.100.9" and r["country"] == "CA"
 
 
@@ -90,6 +92,9 @@ def test_error_string_scrubs_creds(monkeypatch):
     assert r["alive"] is False
     assert "secretpass123" not in r["error"]   # password scrubbed
     assert r["error"]                          # but an error IS reported
+    # prove the scrub REPLACEMENT actually ran (not just that the password
+    # happened to be absent) — the redacted URL token must be present.
+    assert "<proxy>" in r["error"]
 
 
 def test_both_echoes_fail_is_not_alive_never_raises(monkeypatch):
@@ -101,6 +106,7 @@ def test_both_echoes_fail_is_not_alive_never_raises(monkeypatch):
     assert r["alive"] is False
     assert r["exit_ip"] == ""
     assert r["latency_ms"] is None
+    assert r["error"]                       # the failure IS reported, not dropped
 
 
 def test_differs_from_local_true_when_exit_ip_differs(monkeypatch):
