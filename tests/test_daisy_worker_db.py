@@ -116,8 +116,10 @@ def test_analytics_ranks_and_buckets_blanks(tmp_path, monkeypatch):
     assert a["by_state"] == [{"key": "NV", "count": 3},
                              {"key": "CA", "count": 1},
                              {"key": "—", "count": 1}]
-    # Reno(3) before Sparks(1) before —(1)
-    assert a["by_city"][0] == {"key": "Reno", "count": 3}
+    # Reno(3) before Sparks(1) before —(1) — Sparks<— by codepoint at the tie.
+    assert a["by_city"] == [{"key": "Reno", "count": 3},
+                            {"key": "Sparks", "count": 1},
+                            {"key": "—", "count": 1}]
 
 
 def test_update_customer_whitelisted_only(daisy_db):
