@@ -87,6 +87,10 @@ export default function DaisyPage() {
               <Download data-icon="inline-start" />
               JSON
             </Button>
+            <Button variant="outline" size="sm" render={<a href="/api/daisy/export/txt" />}>
+              <Download data-icon="inline-start" />
+              TXT
+            </Button>
             <Button
               variant="outline"
               size="sm"
