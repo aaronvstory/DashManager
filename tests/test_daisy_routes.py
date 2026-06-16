@@ -169,7 +169,46 @@ async def test_export_csv_is_attachment(client, monkeypatch):
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/csv")
     assert "attachment" in r.headers["content-disposition"]
+    assert 'customerdaisy.csv' in r.headers["content-disposition"]
     assert r.text == "a,b\n1,2\n"
+
+
+async def test_export_json_is_attachment(client, monkeypatch):
+    _patch_bridge(monkeypatch, _FakeBridge([], export_text='[{"a": 1}]'))
+    r = await client.get("/api/daisy/export/json")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/json")
+    assert "attachment" in r.headers["content-disposition"]
+    assert 'customerdaisy.json' in r.headers["content-disposition"]
+    assert r.text == '[{"a": 1}]'
+
+
+async def test_export_txt_is_attachment(client, monkeypatch):
+    # txt is a valid export format (the worker emits it); the route must map it
+    # to text/plain and serve it as an attachment, same as csv/json.
+    _patch_bridge(monkeypatch, _FakeBridge([], export_text="Ada · ada@x.net\n"))
+    r = await client.get("/api/daisy/export/txt")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/plain")
+    assert "attachment" in r.headers["content-disposition"]
+    assert 'customerdaisy.txt' in r.headers["content-disposition"]
+    assert r.text == "Ada · ada@x.net\n"
+
+
+async def test_export_serves_worker_text_verbatim_no_password(client,
+                                                              monkeypatch):
+    # The export password-strip is the WORKER's job (daisy_worker._export drops
+    # the password column for json and allowlists columns for csv/txt). The
+    # route is a thin pass-through, so it must serve the worker's already-safe
+    # text verbatim. This pins the contract: given stripped worker output, the
+    # HTTP body carries no password. (If the worker ever regresses, that's a
+    # worker-side test's job — the route can't re-strip a json blob it doesn't
+    # parse without owning a responsibility that lives one layer down.)
+    safe_json = '[{"email": "a@x.net", "first_name": "Ada"}]'
+    _patch_bridge(monkeypatch, _FakeBridge([], export_text=safe_json))
+    r = await client.get("/api/daisy/export/json")
+    assert r.status_code == 200
+    assert "password" not in r.text and r.text == safe_json
 
 
 async def test_export_bad_format_400(client, monkeypatch):
