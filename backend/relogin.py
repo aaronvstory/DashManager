@@ -16,6 +16,7 @@ from typing import Any
 from backend import db
 from backend.daisy.bridge import DaisyBridge
 from backend.events import bus
+from backend.otp_fetch import _loads_list
 
 
 async def _resolve_password(customer: dict[str, Any]) -> str:
@@ -27,10 +28,9 @@ async def _resolve_password(customer: dict[str, Any]) -> str:
 
 def _token_fields(customer: dict[str, Any]) -> tuple[str, str, list[str]]:
     # mirror_hosts is a JSON-string TEXT column, but a caller may hand us the
-    # row before it's serialized (already a list). Reuse the shared loader so a
-    # list-shaped value isn't silently dropped to [] (which would lose the api.cc
-    # mirror hosts the OTP poll needs).
-    from backend.otp_fetch import _loads_list
+    # row before it's serialized (already a list). The shared _loads_list handles
+    # both so a list-shaped value isn't silently dropped to [] (which would lose
+    # the api.cc mirror hosts the OTP poll needs).
     token = customer.get("number_token") or ""
     api_url = customer.get("api_url") or ""
     return token, api_url, _loads_list(customer.get("mirror_hosts"))
