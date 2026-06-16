@@ -343,6 +343,22 @@ def _list_addresses() -> list[dict]:
     return out
 
 
+def _req(args: dict, key: str, cmd: str):
+    """Fetch a required command arg, or raise a descriptive ValueError.
+
+    A bare ``args[key]`` raises ``KeyError(key)``, which main() serializes back
+    over the pipe as ``error: "'key'"`` — useless for diagnosing which command
+    was malformed. This names both the command and the missing arg instead.
+
+    Treats absent / None / empty-string as missing. For string args
+    (customer_id, token, customer) that's exactly right; don't reuse this for a
+    numeric/boolean arg where 0/False would be wrongly rejected.
+    """
+    if key not in args or args[key] in (None, ""):
+        raise ValueError(f"{cmd} needs {key}")
+    return args[key]
+
+
 def handle(mgr: Managers, cmd: str, args: dict) -> dict:
     if cmd == "ping":
         return {"pong": True}
@@ -388,14 +404,16 @@ def handle(mgr: Managers, cmd: str, args: dict) -> dict:
         return {"number": info}
 
     if cmd == "fetch_otp":
+        token = _req(args, "token", cmd)        # validate before touching mgr
         res = mgr.apicc.fetch_code_once(
-            args["token"], args.get("api_url", ""),
+            token, args.get("api_url", ""),
             args.get("mirror_hosts") or [])
         return {"code": res.get("code", ""), "sms_text": res.get("sms_text", ""),
                 "error": res.get("error")}
 
     if cmd == "save_customer":
-        cid = mgr.db.save_customer(dict(args["customer"]))
+        customer = _req(args, "customer", cmd)   # validate before touching mgr
+        cid = mgr.db.save_customer(dict(customer))
         return {"customer_id": cid}
 
     if cmd == "list_recent_customers":
@@ -414,15 +432,15 @@ def handle(mgr: Managers, cmd: str, args: dict) -> dict:
         return {"count": _customer_count()}
 
     if cmd == "get_customer":
-        return {"customer": _get_customer(str(args["customer_id"]))}
+        return {"customer": _get_customer(str(_req(args, "customer_id", cmd)))}
 
     if cmd == "update_customer":
-        row = _update_customer(str(args["customer_id"]),
+        row = _update_customer(str(_req(args, "customer_id", cmd)),
                                dict(args.get("fields", {})))
         return {"customer": row, "updated": row is not None}
 
     if cmd == "delete_customer":
-        return {"deleted": _delete_customer(str(args["customer_id"]))}
+        return {"deleted": _delete_customer(str(_req(args, "customer_id", cmd)))}
 
     if cmd == "export":
         return _export(args.get("format", "json"), int(args.get("limit", 1000)))
