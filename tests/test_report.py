@@ -128,6 +128,50 @@ def test_needs_you_logic():
         assert report._order_needs_you({"refund_status": st}) is True
 
 
+def test_needs_you_unchecked_vs_unknown_distinction():
+    # INTENTIONAL contract: `unknown` (receipt read but unparseable) needs a
+    # human, while the default `unchecked` (not yet scraped this run — transient,
+    # a re-run resolves it) does NOT flag. A missing refund_status defaults to
+    # unchecked -> False. Pinned so the asymmetry is a conscious choice.
+    assert report._order_needs_you({"refund_status": "unchecked"}) is False
+    assert report._order_needs_you({}) is False          # default == unchecked
+    assert report._order_needs_you({"refund_status": "unknown"}) is True
+
+
+def test_summarize_counts_over_sample_model():
+    # The summary-card math (not just that the labels render): 3 customers,
+    # 3 orders, 1 refunded, 2 pursuing (pending_claim + not_refunded), no
+    # unconfirmed, 1 no-orders customer, 2 needs-you, 2 active sessions.
+    s = report._summarize(_sample_model()["customers"])
+    assert s == {"customers": 3, "orders": 3, "refunded": 1, "pursuing": 2,
+                 "unconfirmed": 0, "no_orders": 1, "needs_you": 2, "active": 2}
+
+
+def test_summarize_unconfirmed_counts_as_pursuing_and_needs_you():
+    # ZERO-TOLERANCE: an `unconfirmed` order increments unconfirmed AND pursuing
+    # AND needs_you (it is NOT done) — a refunded order increments only refunded.
+    rows = [{
+        "session_status": "active",
+        "orders": [
+            {"refund_status": "unconfirmed"},
+            {"refund_status": "refunded"},
+            {"refund_status": "unchecked"},   # transient — not pursuing/needs-you
+        ],
+    }]
+    s = report._summarize(rows)
+    assert s["orders"] == 3
+    assert s["refunded"] == 1
+    assert s["unconfirmed"] == 1
+    assert s["pursuing"] == 1                  # only the unconfirmed one
+    assert s["needs_you"] == 1                 # only the unconfirmed one
+    assert s["active"] == 1
+
+
+def test_summarize_empty():
+    s = report._summarize([])
+    assert s["customers"] == 0 and s["orders"] == 0 and s["needs_you"] == 0
+
+
 def test_resolution_method_unconfirmed_never_reads_resolved():
     # ZERO-TOLERANCE display: an `unconfirmed` order with a "won" chat must NOT
     # show an affirmative "Agent chat" resolution — that would contradict its
