@@ -7,6 +7,7 @@ needs to cover reconnect gaps.
 from __future__ import annotations
 
 import asyncio
+import itertools
 from collections import deque
 from datetime import datetime, timezone
 from typing import Any
@@ -17,7 +18,11 @@ class EventBus:
                  ) -> None:
         self._subs: set[asyncio.Queue] = set()
         self._ring: deque[dict[str, Any]] = deque(maxlen=ring_size)
-        self._next_id = 1
+        # itertools.count, not `self._next_id += 1`: publish() runs from worker
+        # THREADS too, and a bare `+= 1` is a 3-bytecode read-modify-write the
+        # GIL can yield between (dup/skip an id). count().__next__ is a single
+        # C-level atomic-under-GIL call — safe without a lock.
+        self._ids = itertools.count(1)
         # Per-subscriber queue bound. A subscriber whose SSE consumer stalls (or
         # silently died without us noticing) must NOT make publish() grow its
         # queue without limit (memory leak) or raise QueueFull and break delivery
@@ -46,13 +51,12 @@ class EventBus:
     def publish(self, type: str, data: dict[str, Any] | None = None,
                 run_id: int | None = None) -> dict[str, Any]:
         event = {
-            "id": self._next_id,
+            "id": next(self._ids),       # atomic-under-GIL across threads
             "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "run_id": run_id,
             "type": type,
             "data": data or {},
         }
-        self._next_id += 1
         self._ring.append(event)         # deque.append is atomic — fine off-loop
         # asyncio.Queue is NOT thread-safe. publish() is called from worker
         # THREADS too (e.g. the SYNC signup_via_cdp runs under asyncio.to_thread
@@ -74,6 +78,12 @@ class EventBus:
         # bound loop via call_soon_threadsafe. If there's no live bound loop
         # (none yet, or it's closed/stopped — subscribers gone with it), drop:
         # a thread can't safely touch the queues and there's nothing to deliver.
+        # ORDERING: ids stay strictly monotonic (assigned above, atomically), but
+        # *delivery* order is not guaranteed across this boundary — an off-loop
+        # event scheduled here runs after whatever's already queued on the loop,
+        # so it can reach a subscriber AFTER an on-loop event with a higher id.
+        # That's fine: the ring + Last-Event-ID replay reconciles by id, and SSE
+        # consumers key on id, not arrival order.
         loop = self._loop
         if loop is not None and not loop.is_closed():
             try:
