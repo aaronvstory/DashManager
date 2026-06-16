@@ -13,7 +13,7 @@ import asyncio
 import re
 import time
 from collections import Counter
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from playwright.async_api import Locator, Page
 
@@ -359,7 +359,8 @@ async def run_chat(page: Page, strategy: ChatStrategy, ctx: ChatContext, *,
     agent_reached = False
     transcript: list[ChatTurn] = []
 
-    async def _rec(direction: str, content: str) -> None:
+    async def _rec(direction: Literal["out", "in", "system"],
+                   content: str) -> None:
         transcript.append(ChatTurn(direction=direction, content=content))
         # The runner's record() both persists AND emits chat_message with the
         # chat_id; emitting here too would double every message in the UI.
@@ -409,15 +410,20 @@ async def run_chat(page: Page, strategy: ChatStrategy, ctx: ChatContext, *,
         while not reply or is_bot_reply(reply, chat_cfg["bot_patterns"]):
             escalations += 1
             if escalations > chat_cfg["max_escalations"]:
+                await _rec("system", "Could not reach a human agent — gave up "
+                           f"after {escalations - 1} escalation attempts.")
                 await end_chat(page)
                 return ChatOutcome.blocked.value, False
             _notify(emit, "chat_escalation", {"attempt": escalations})
+            await _rec("system", f"Escalation attempt {escalations} — sending "
+                       f"'{chat_cfg['agent_word']}' to reach a human agent.")
             reply = await _exchange(chat_cfg["agent_word"],
                                     max_wait=human_wait)
             if reply is None:
                 return ChatOutcome.failed.value, False
 
         agent_reached = True
+        await _rec("system", "Reached a human agent.")
         # Re-send the request so the human sees it directly (user-specified);
         # a missing reply here is fine — the strategy loop keeps waiting.
         reply = await _exchange(ctx.opening_message)
