@@ -19,6 +19,9 @@ def bridge(monkeypatch):
         return {
             "list_customers": {"customers": [{"customer_id": "x"}]},
             "customer_count": {"count": 7},
+            "analytics": {"total": 7, "verified": 4, "unverified": 3,
+                          "by_state": [{"key": "NV", "count": 7}],
+                          "by_city": [{"key": "Reno", "count": 7}]},
             "get_customer": {"customer": {"customer_id": "cd-1"}},
             "update_customer": {"customer": {"city": "Sparks"}, "updated": True},
             "delete_customer": {"deleted": True},
@@ -45,6 +48,13 @@ async def test_list_customers(bridge):
 async def test_customer_count(bridge):
     assert await bridge.customer_count() == 7
     assert bridge._calls[-1][0] == "customer_count"
+
+
+async def test_analytics(bridge):
+    a = await bridge.analytics()
+    assert a["total"] == 7 and a["verified"] == 4 and a["unverified"] == 3
+    assert a["by_state"][0] == {"key": "NV", "count": 7}
+    assert bridge._calls[-1] == ("analytics", {"limit": -1})
 
 
 async def test_get_customer(bridge):

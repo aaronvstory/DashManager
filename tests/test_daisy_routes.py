@@ -37,6 +37,13 @@ class _FakeBridge:
     async def customer_count(self):
         return len(self._rows)
 
+    async def analytics(self, limit=-1):
+        # default matches DaisyBridge.analytics (limit=-1 -> whole pool).
+        self.calls.append(("analytics", limit))
+        return {"total": 2, "verified": 1, "unverified": 1,
+                "by_state": [{"key": "NV", "count": 2}],
+                "by_city": [{"key": "Reno", "count": 2}]}
+
     async def get_customer(self, cid):
         self.calls.append(("get_customer", cid))
         return self._get
@@ -126,6 +133,19 @@ async def test_list_tags_in_dashmanager_by_email(client, monkeypatch):
     by_id = {c["customer_id"]: c for c in body["customers"]}
     assert by_id["cd-1"]["in_dashmanager"] is True   # email matches DM row
     assert by_id["cd-2"]["in_dashmanager"] is False
+
+
+async def test_analytics_route(client, monkeypatch):
+    # /analytics must be matched as a literal, NOT captured as /{customer_id}.
+    b = _patch_bridge(monkeypatch, _FakeBridge([]))
+    r = await client.get("/api/daisy/analytics")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 2 and body["verified"] == 1
+    assert body["by_state"][0] == {"key": "NV", "count": 2}
+    # it hit analytics (with the whole-pool default), not get_customer
+    assert ("analytics", -1) in b.calls
+    assert not any(c[0] == "get_customer" for c in b.calls)
 
 
 async def test_get_404_when_missing(client, monkeypatch):
