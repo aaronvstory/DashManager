@@ -277,3 +277,17 @@ def test_refund_label_value_on_later_line_after_blank():
     assert r.status == RefundStatus.refunded
     assert r.total_amount == pytest.approx(112.34)
     assert r.refund_amount == pytest.approx(112.34)
+
+
+def test_two_genuine_refund_lines_degrade_safely_to_partial():
+    # A real receipt only ever carries ONE Refund line (HARVEST_NOTES). In the
+    # hypothetical of two genuine partial refunds that SUM to the total, the
+    # last-wins rule reads only the smaller ($62.34 < total) -> `partial`. This
+    # is the SAFE degradation: partial routes to a chat + human re-check, never
+    # a false `refunded`. Pinned so the zero-tolerance bar is provably held even
+    # in this edge — and so a future change to sum/flag is a conscious decision.
+    txt = "Total\n$112.34\nRefund\n-$50.00\nRefund\n-$62.34"
+    r = detect(txt, CFG)
+    assert r.status == RefundStatus.partial        # NOT a false `refunded`
+    assert r.refund_amount == pytest.approx(62.34)  # last wins (documented)
+    assert r.total_amount == pytest.approx(112.34)
