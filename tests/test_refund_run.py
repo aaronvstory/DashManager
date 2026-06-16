@@ -15,7 +15,8 @@ from __future__ import annotations
 
 from backend.browser.refund_detector import RefundResult
 from backend.models import RefundStatus
-from backend.refund_run import resolution_write
+from backend import refund_run
+from backend.refund_run import _scope_dict, resolution_write
 
 
 def test_full_refund_is_refunded_and_promoted():
@@ -72,3 +73,63 @@ def test_refund_amount_falls_back_to_price_when_missing():
     _status, _total, amount, promoted = resolution_write(rr, 42.5)
     assert amount == 42.5
     assert promoted is True
+
+
+# ── scope resolution: WHICH customers a refund command touches (real money,
+#    so the precedence + filtering must be pinned). ──
+
+def test_scope_dict_prefers_ids_over_bucket():
+    # --ids wins over --bucket (a caller targeting specific customers must not
+    # accidentally fan out to the whole bucket).
+    assert _scope_dict("2026-06-16", [17, 20]) == {"customer_ids": [17, 20]}
+
+
+def test_scope_dict_bucket_when_no_ids():
+    assert _scope_dict("2026-06-16", None) == {"bucket_date": "2026-06-16"}
+
+
+def test_scope_dict_both_none_is_bucket_none():
+    # Both absent -> {"bucket_date": None}. This is SAFE: RunManager resolves it
+    # with a truthiness check (scope.get("bucket_date") is falsy) -> selects
+    # NOBODY, not "all bucketless customers". main() also guards this upstream.
+    assert _scope_dict(None, None) == {"bucket_date": None}
+
+
+_CUSTS = [
+    {"id": 17, "bucket_date": "2026-06-16"},
+    {"id": 20, "bucket_date": "2026-06-16"},
+    {"id": 99, "bucket_date": "2026-06-15"},
+]
+
+
+async def test_scope_customers_filters_by_ids(monkeypatch):
+    async def fake_list():
+        return list(_CUSTS)
+    monkeypatch.setattr(refund_run.db, "list_customers", fake_list)
+    out = await refund_run._scope_customers(None, [17, 99])
+    assert {c["id"] for c in out} == {17, 99}
+
+
+async def test_scope_customers_ids_win_over_bucket(monkeypatch):
+    # given BOTH, ids win (consistent with _scope_dict) — a stray bucket arg
+    # must not widen an id-scoped run.
+    async def fake_list():
+        return list(_CUSTS)
+    monkeypatch.setattr(refund_run.db, "list_customers", fake_list)
+    out = await refund_run._scope_customers("2026-06-15", [17])
+    assert [c["id"] for c in out] == [17]      # NOT the 2026-06-15 customer 99
+
+
+async def test_scope_customers_filters_by_bucket(monkeypatch):
+    async def fake_list():
+        return list(_CUSTS)
+    monkeypatch.setattr(refund_run.db, "list_customers", fake_list)
+    out = await refund_run._scope_customers("2026-06-16", None)
+    assert {c["id"] for c in out} == {17, 20}
+
+
+async def test_scope_customers_both_none_is_empty(monkeypatch):
+    async def fake_list():
+        return list(_CUSTS)
+    monkeypatch.setattr(refund_run.db, "list_customers", fake_list)
+    assert await refund_run._scope_customers(None, None) == []
