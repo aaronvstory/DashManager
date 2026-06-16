@@ -335,3 +335,28 @@ def test_resolve_batch_whitespace_id_mints():
     bid, label = _resolve_batch("   ", None, "20260616_073000")
     assert bid == "claude_20260616_073000"
     assert label == "batch 20260616_073000 - claude"
+
+
+# ── SPA catch-all must NOT swallow unknown /api/* paths (stale-backend trap) ──
+
+async def test_unknown_api_route_404s_json_not_spa_shell(client):
+    # An unmatched /api/* path must return a clean 404 JSON — NOT index.html.
+    # (Falling through to the SPA shell is what made a STALE backend's missing
+    # routes look like "couldn't reach <thing>" instead of an honest 404.)
+    r = await client.get("/api/this-route-does-not-exist")
+    assert r.status_code == 404
+    assert "text/html" not in r.headers.get("content-type", "")
+    assert "<!doctype html" not in r.text.lower()
+
+
+async def test_unknown_api_subpath_also_404s(client):
+    r = await client.get("/api/daisy/not-a-real-endpoint")
+    assert r.status_code == 404
+
+
+async def test_non_api_path_still_serves_spa_shell(client):
+    # A client-route hard-refresh (/reports, /database, …) must STILL fall back
+    # to index.html so client-side routing works — only /api/* is excluded.
+    r = await client.get("/reports")
+    assert r.status_code == 200
+    assert "<!doctype html" in r.text.lower()
