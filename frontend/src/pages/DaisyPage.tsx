@@ -18,6 +18,7 @@ import { Check, Database, Download, Pencil, RefreshCw, Trash2 } from "lucide-rea
 import { toast } from "sonner"
 import { AddressBook } from "@/components/daisy/address-book"
 import { DaisyAnalytics } from "@/components/daisy/daisy-analytics"
+import { EditCustomerDialog } from "@/components/daisy/edit-customer-dialog"
 import { EmptyState } from "@/components/empty-state"
 import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
@@ -35,6 +36,7 @@ interface DaisyCustomer {
   full_address: string
   city: string
   state: string
+  zip_code: string
   created_at: string
   verification_completed: boolean
   in_dashmanager: boolean
@@ -48,6 +50,9 @@ interface DaisyListResponse {
 export default function DaisyPage() {
   const qc = useQueryClient()
   const [q, setQ] = useState("")
+  // The row being edited (null = dialog closed). Holding the record (not just an
+  // id) means the dialog seeds its form without a second fetch.
+  const [editing, setEditing] = useState<DaisyCustomer | null>(null)
 
   const list = useQuery({
     queryKey: ["daisy"],
@@ -178,8 +183,8 @@ export default function DaisyPage() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          title="Edit (coming soon)"
-                          disabled
+                          title="Edit"
+                          onClick={() => setEditing(c)}
                         >
                           <Pencil className="size-4" />
                         </Button>
@@ -218,6 +223,14 @@ export default function DaisyPage() {
       {/* The anchor address book is independent of the customer pool — always
           available to read/add/edit/delete, even when there are no customers. */}
       <AddressBook />
+
+      <EditCustomerDialog
+        customer={editing}
+        open={editing !== null}
+        onOpenChange={(o) => {
+          if (!o) setEditing(null)
+        }}
+      />
     </>
   )
 }
