@@ -127,7 +127,21 @@ class DaisyBridge:
             # restarts it instead of writing to a closed stdin (BrokenPipe).
             self._proc = None
             raise DaisyError("CustomerDaisy worker exited unexpectedly")
-        return json.loads(raw.decode("utf-8"))
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            # The worker swaps stdout->stderr so CustomerDaisy's own prints don't
+            # corrupt the protocol, but a stray non-JSON line on real stdout (a
+            # C-ext warning, output before _bootstrap) would otherwise raise a
+            # bare JSONDecodeError that _call's except doesn't catch — leaking a
+            # confusing error AND leaving the now-desynced handle alive. Unlike
+            # EOF (where the worker already exited), the worker is still ALIVE
+            # here — it sent bytes — so KILL it (not just drop the ref), else it
+            # orphans a live proc blocked on a now-half-closed pipe.
+            snippet = raw.decode("utf-8", "replace").strip()[:120]
+            await self._kill_proc()
+            raise DaisyError(
+                f"worker sent non-JSON line: {snippet!r}") from exc
 
     async def _call(self, cmd: str, args: dict | None = None,
                     timeout: float = 90) -> dict[str, Any]:
