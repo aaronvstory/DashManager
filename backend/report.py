@@ -130,13 +130,17 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, int]:
                 # Tracked separately AND as pursuing — it is NOT done.
                 s["unconfirmed"] += 1
                 s["pursuing"] += 1
-            elif st in ("not_refunded", "partial", "pending_claim", "remake"):
+            elif st in ("not_refunded", "partial", "pending_claim", "remake",
+                        "unknown"):
+                # `unknown` = a receipt we READ but couldn't parse — it needs a
+                # human (see _order_needs_you), so it belongs in pursuing, NOT
+                # lumped with the transient `unchecked`.
                 s["pursuing"] += 1
             else:
-                # `unchecked` (not yet scraped) or `unknown`/anything else not
-                # in a recognized bucket. Count it so the breakdown is
-                # EXHAUSTIVE — refunded + pursuing + unchecked == orders — and no
-                # order is silently uncounted on a money-tracking board.
+                # `unchecked` (not yet scraped) or any other unrecognized status.
+                # Count it so the breakdown is EXHAUSTIVE — refunded + pursuing +
+                # unchecked == orders — and no order is silently uncounted on a
+                # money-tracking board.
                 s["unchecked"] += 1
             if _order_needs_you(o):
                 s["needs_you"] += 1

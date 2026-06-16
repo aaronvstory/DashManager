@@ -184,20 +184,26 @@ def test_summarize_unconfirmed_counts_as_pursuing_and_needs_you():
 
 def test_summarize_is_exhaustive_no_silent_gaps():
     # Every order lands in exactly one top-level bucket: refunded + pursuing +
-    # unchecked == orders (pursuing already includes unconfirmed). An order with
-    # an unrecognized status is bucketed as `unchecked`, never silently dropped.
+    # unchecked == orders (pursuing already includes unconfirmed). `unknown`
+    # (read-but-unparseable, needs a human) -> pursuing, consistent with
+    # _order_needs_you; only the transient `unchecked`/missing/unrecognized ->
+    # unchecked. Nothing is silently dropped.
     rows = [{"orders": [
         {"refund_status": "refunded"},
         {"refund_status": "not_refunded"},
         {"refund_status": "unconfirmed"},
+        {"refund_status": "unknown"},               # read-but-unparseable
         {"refund_status": "unchecked"},
         {"refund_status": "some_future_status"},   # unrecognized -> unchecked
         {},                                         # missing -> unchecked default
     ]}]
     s = report._summarize(rows)
-    assert s["orders"] == 6
+    assert s["orders"] == 7
     assert s["refunded"] + s["pursuing"] + s["unchecked"] == s["orders"]
-    assert s["unchecked"] == 3                  # unchecked + future + missing
+    assert s["pursuing"] == 3               # not_refunded + unconfirmed + unknown
+    assert s["unchecked"] == 3              # unchecked + some_future + missing
+    # the unknown order needs a human; the unchecked ones do NOT.
+    assert s["needs_you"] == 3              # not_refunded + unconfirmed + unknown
 
 
 def test_summarize_empty():
