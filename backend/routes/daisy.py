@@ -152,6 +152,19 @@ async def delete_anchor_address(index: int) -> dict[str, Any]:
     return {"addresses": addresses}
 
 
+@router.post("/generate-address")
+async def generate_address(body: GenerateAddressBody) -> dict[str, Any]:
+    """Generate a real MapQuest address near ``origin_address`` (no customer
+    created). Returns ``{"address": {...}}`` or ``{"address": null}`` when
+    MapQuest finds nothing nearby — the caller can then add it to the pool.
+    """
+    bridge = await _bridge()
+    async with bridge as d:
+        address = await d.generate_address(body.origin_address,
+                                           body.radius_miles)
+    return {"address": address}
+
+
 @router.get("/{customer_id}")
 async def get_daisy_customer(customer_id: str) -> dict[str, Any]:
     bridge = await _bridge()
@@ -184,6 +197,30 @@ class AnchorAddress(BaseModel):
         v = v.strip()
         if info.field_name == "full_address" and not v:
             raise ValueError("full_address must not be blank")
+        return v
+
+
+class GenerateAddressBody(BaseModel):
+    # Generate a real MapQuest address near an origin (no customer created) —
+    # for the address-book "generate near origin" helper.
+    model_config = {"extra": "forbid"}
+    origin_address: str
+    radius_miles: float = 5.0
+
+    @field_validator("origin_address")
+    @classmethod
+    def _origin_not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("origin_address must not be blank")
+        return v
+
+    @field_validator("radius_miles")
+    @classmethod
+    def _radius_in_range(cls, v: float) -> float:
+        # A sane radius — 0 would find nothing, a huge value isn't "near".
+        if not 0 < v <= 100:
+            raise ValueError("radius_miles must be between 0 and 100")
         return v
 
 
