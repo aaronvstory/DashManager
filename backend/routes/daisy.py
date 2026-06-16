@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationInfo, field_validator
 
 from backend import db
 from backend.daisy.bridge import DaisyError
@@ -120,9 +120,9 @@ async def add_anchor_address(body: AnchorAddress) -> dict[str, Any]:
         async with bridge as d:
             addresses = await d.add_address(body.model_dump())
     except DaisyError as exc:
-        # e.g. a whitespace-only full_address passes Pydantic but the worker's
-        # _clean_address rejects it -> 400, not an unformatted 500. Also covers a
-        # corrupt my_addresses.json (the edit aborts rather than clobbering it).
+        # A blank full_address is already rejected upstream (422 in AnchorAddress);
+        # this maps the remaining worker errors — a corrupt my_addresses.json (the
+        # edit aborts rather than clobbering it), a disk error — to 4xx, not a 500.
         raise _address_http_error(exc) from exc
     return {"addresses": addresses}
 
@@ -165,13 +165,26 @@ async def get_daisy_customer(customer_id: str) -> dict[str, Any]:
 
 
 class AnchorAddress(BaseModel):
-    # An anchor-pool entry. full_address is the only required field; the worker
-    # also validates it's non-empty. extra=forbid so a typo'd key fails loud.
+    # An anchor-pool entry. extra=forbid so a typo'd key fails loud at the edge.
     model_config = {"extra": "forbid"}
     full_address: str
     name: str = ""
     city: str = ""
     state: str = ""
+
+    @field_validator("full_address", "name", "city", "state")
+    @classmethod
+    def _clean(cls, v: str, info: ValidationInfo) -> str:
+        # Strip every field AND reject a blank full_address in ONE validator, so
+        # there's no implicit "strip must run before the blank-check" ordering a
+        # refactor could break. The blank check applies only to full_address
+        # (name/city/state default to "" and may legitimately be empty).
+        # Rejecting here (422) beats round-tripping to the worker, which still
+        # validates as a backstop.
+        v = v.strip()
+        if info.field_name == "full_address" and not v:
+            raise ValueError("full_address must not be blank")
+        return v
 
 
 class DaisyPatch(BaseModel):

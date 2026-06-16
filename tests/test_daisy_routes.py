@@ -58,13 +58,9 @@ class _FakeBridge:
         return [{"name": "Home", "full_address": "1 Main St, Reno, NV"}]
 
     async def add_address(self, address):
+        # The route now rejects a blank full_address at the Pydantic edge (422),
+        # so the bridge only ever sees a clean, non-empty address here.
         self.calls.append(("add_address", address))
-        from backend.daisy.bridge import DaisyError
-        if not (address.get("full_address") or "").strip():
-            # mirrors the worker: a blank full_address is rejected, surfaced as
-            # a DaisyError -> the route maps it to 400 (not an unhandled 500).
-            raise DaisyError("add_address failed: address needs a non-empty "
-                             "full_address")
         return [{"full_address": "1 Main St, Reno, NV"}, address]
 
     async def update_address(self, index, address):
@@ -281,13 +277,25 @@ async def test_add_address_requires_full_address(client, monkeypatch):
     assert r.status_code == 422            # full_address is required
 
 
-async def test_add_address_whitespace_is_400_not_500(client, monkeypatch):
-    # a whitespace-only full_address passes Pydantic (it's a non-empty str) but
-    # the worker rejects it -> the route maps the DaisyError to 400, never 500.
+async def test_add_address_blank_full_address_is_422(client, monkeypatch):
+    # a blank/whitespace full_address is rejected at the EDGE (422) — it never
+    # round-trips to the worker. (The worker still validates as a backstop.)
     _patch_bridge(monkeypatch, _FakeBridge([]))
-    r = await client.post("/api/daisy/addresses", json={"full_address": "   "})
-    assert r.status_code == 400
-    assert "full_address" in r.json()["detail"]
+    for blank in ("", "   "):
+        r = await client.post("/api/daisy/addresses",
+                              json={"full_address": blank})
+        assert r.status_code == 422
+
+
+async def test_add_address_strips_whitespace(client, monkeypatch):
+    # the model strips every field, so the worker receives clean values.
+    b = _patch_bridge(monkeypatch, _FakeBridge([]))
+    r = await client.post("/api/daisy/addresses",
+                          json={"full_address": "  2 Oak Ave  ", "name": " Home "})
+    assert r.status_code == 200
+    assert b.calls[-1] == ("add_address",
+                           {"full_address": "2 Oak Ave", "name": "Home",
+                            "city": "", "state": ""})
 
 
 async def test_update_address_route(client, monkeypatch):
