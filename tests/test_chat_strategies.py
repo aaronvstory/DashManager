@@ -203,6 +203,22 @@ async def test_llm_transcript_maps_out_assistant_in_user():
     assert messages[2] == {"role": "user", "content": "support said this"}
 
 
+async def test_llm_skips_system_turns():
+    # "system" turns are driver status notes (escalation/agent-reached), NOT
+    # conversation — they must never be fed to the LLM as user/assistant msgs.
+    strategy, fake = make_llm('{"action":"send","message":"ok"}')
+    await strategy.next_action([ChatTurn("out", "I sent this"),
+                                ChatTurn("system", "Reached a human agent."),
+                                ChatTurn("in", "support said this")])
+    messages = fake.calls[0]
+    contents = [m["content"] for m in messages]
+    assert "Reached a human agent." not in contents
+    # only the system prompt + the two real turns survive
+    assert messages[1] == {"role": "assistant", "content": "I sent this"}
+    assert messages[2] == {"role": "user", "content": "support said this"}
+    assert len(messages) == 3
+
+
 async def test_llm_end_success():
     strategy, _ = make_llm(
         '{"action":"end","outcome":"success","reason":"refund confirmed"}')

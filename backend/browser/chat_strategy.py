@@ -40,7 +40,10 @@ class ChatContext:
 
 @dataclass
 class ChatTurn:
-    direction: Literal["out", "in"]
+    # "out" = us → support, "in" = support → us, "system" = a driver status note
+    # (escalation attempt / agent reached / gave up) rendered as a centered
+    # system bubble in the report transcript.
+    direction: Literal["out", "in", "system"]
     content: str
 
 
@@ -359,6 +362,11 @@ class LlmStrategy(ChatStrategy):
         messages: list[dict[str, str]] = [
             {"role": "system", "content": self._system_prompt}]
         for turn in transcript:
+            # "system" turns are driver status notes (escalation/agent-reached),
+            # NOT part of the conversation — never feed them to the LLM as a
+            # user/assistant message (they'd pollute the context).
+            if turn.direction == "system":
+                continue
             role = "assistant" if turn.direction == "out" else "user"
             messages.append({"role": role, "content": turn.content})
         if not transcript:
