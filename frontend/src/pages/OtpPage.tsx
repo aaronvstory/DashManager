@@ -134,8 +134,11 @@ function BucketOtp({ paused }: { paused: boolean }) {
     return [...set].sort((a, b) => (a < b ? 1 : -1))
   }, [customersQ.data])
 
+  // Pick the newest bucket, and recover if a background refetch drops the
+  // currently-selected one (stale selection → empty table otherwise).
   useEffect(() => {
-    if (bucket === null && buckets.length > 0) setBucket(buckets[0])
+    if (buckets.length > 0 && (bucket === null || !buckets.includes(bucket)))
+      setBucket(buckets[0])
   }, [buckets, bucket])
 
   const otpQ = useQuery({
@@ -201,8 +204,13 @@ function BatchOtp({ paused }: { paused: boolean }) {
 
   const batches = batchesQ.data?.batches ?? []
 
+  // Pick the first batch, and recover if a refetch drops the selected one.
   useEffect(() => {
-    if (batchId === null && batches.length > 0)
+    if (batches.length === 0) return
+    const exists = batches.some(
+      (b) => (b.batch_id || b.batch_label) === batchId,
+    )
+    if (batchId === null || !exists)
       setBatchId(batches[0].batch_id || batches[0].batch_label)
   }, [batches, batchId])
 

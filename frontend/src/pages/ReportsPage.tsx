@@ -6,7 +6,7 @@
  * transcripts. "Open HTML" still links the standalone file for printing/sharing.
  */
 
-import { useEffect, useState } from "react"
+import { useEffect } from "react"
 import { useSearchParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { format, parseISO } from "date-fns"
@@ -45,13 +45,15 @@ function prettyDate(date: string): string {
 
 export default function ReportsPage() {
   const qc = useQueryClient()
-  // A ?date=YYYY-MM-DD param (e.g. the Customer Data → "this day's report"
-  // cross-link) pre-selects that day — but only once the reports list confirms
-  // it exists, else a bucket with no report yet would stick on a 404. The seed
-  // can't go in useState's initializer: the list is async (empty at init).
-  const [searchParams] = useSearchParams()
-  const seedDate = searchParams.get("date")
-  const [selected, setSelected] = useState<string | null>(null)
+  // The URL is the source of truth for the selected day, so the view is
+  // shareable/bookmarkable and the Customer Data → "this day's report"
+  // cross-link (?date=YYYY-MM-DD) just works. selectDate updates the URL.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const selected = searchParams.get("date")
+
+  function selectDate(date: string, replace = false) {
+    setSearchParams({ date }, { replace })
+  }
 
   const list = useQuery({
     queryKey: ["reports"],
@@ -59,11 +61,15 @@ export default function ReportsPage() {
   })
   const reports = list.data?.reports ?? []
 
+  // Seed the URL once the list loads: keep a valid ?date= as-is, else default to
+  // the newest report (replace, so it doesn't add a history entry). A ?date=
+  // pointing at a day with no report would otherwise 404 forever.
   useEffect(() => {
-    if (selected !== null || reports.length === 0) return
-    const valid = seedDate && reports.some((r) => r.date === seedDate)
-    setSelected(valid ? seedDate : reports[0].date)
-  }, [reports, selected, seedDate])
+    if (reports.length === 0) return
+    if (selected && reports.some((r) => r.date === selected)) return
+    selectDate(reports[0].date, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- selectDate stable
+  }, [reports, selected])
 
   const detail = useQuery({
     queryKey: ["report-data", selected],
@@ -119,7 +125,7 @@ export default function ReportsPage() {
                 <button
                   key={r.date}
                   type="button"
-                  onClick={() => setSelected(r.date)}
+                  onClick={() => selectDate(r.date)}
                   className={cn(
                     "border px-3.5 py-2 text-left transition-colors",
                     active
