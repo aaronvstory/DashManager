@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException, Response
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ValidationInfo, field_validator
 
 from backend import db
 from backend.daisy.bridge import DaisyError
@@ -174,16 +174,15 @@ class AnchorAddress(BaseModel):
 
     @field_validator("full_address", "name", "city", "state")
     @classmethod
-    def _strip(cls, v: str) -> str:
-        return v.strip()
-
-    @field_validator("full_address")
-    @classmethod
-    def _full_address_not_blank(cls, v: str) -> str:
-        # Reject a blank/whitespace full_address HERE (422) rather than letting
-        # it round-trip to the worker and bounce back as a generic 400 — the
-        # worker still validates as a backstop, but the edge should fail fast.
-        if not v:
+    def _clean(cls, v: str, info: ValidationInfo) -> str:
+        # Strip every field AND reject a blank full_address in ONE validator, so
+        # there's no implicit "strip must run before the blank-check" ordering a
+        # refactor could break. The blank check applies only to full_address
+        # (name/city/state default to "" and may legitimately be empty).
+        # Rejecting here (422) beats round-tripping to the worker, which still
+        # validates as a backstop.
+        v = v.strip()
+        if info.field_name == "full_address" and not v:
             raise ValueError("full_address must not be blank")
         return v
 
