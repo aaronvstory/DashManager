@@ -2,12 +2,13 @@
  * Anchor Address Book — read/add/edit/delete CustomerDaisy's my_addresses.json
  * interactively. The anchor pool is the user's own saved addresses, offered in
  * the create-account dialog as a batch origin alongside the predefined
- * locations. Backed by /api/daisy/addresses (GET list, POST add, PUT /{index},
- * DELETE /{index}); the worker persists my_addresses.json atomically.
+ * locations. Backed by /api/daisy/addresses (GET list, POST add, PATCH /{index},
+ * DELETE /{index}) + /api/daisy/generate-address (a real MapQuest address near
+ * an origin); the worker persists my_addresses.json atomically.
  */
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Check, MapPin, Pencil, Plus, Trash2, X } from "lucide-react"
+import { Check, MapPin, Pencil, Plus, Sparkles, Trash2, X } from "lucide-react"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -25,6 +26,10 @@ interface AnchorResponse {
   addresses: Anchor[]
 }
 
+interface GenerateResponse {
+  address: { full_address?: string; city?: string; state?: string } | null
+}
+
 const EMPTY: Anchor = { name: "", full_address: "", city: "", state: "" }
 
 export function AddressBook() {
@@ -32,6 +37,7 @@ export function AddressBook() {
   const [draft, setDraft] = useState<Anchor>(EMPTY)
   const [editIndex, setEditIndex] = useState<number | null>(null)
   const [editDraft, setEditDraft] = useState<Anchor>(EMPTY)
+  const [origin, setOrigin] = useState("")
 
   const q = useQuery({
     queryKey: ["daisy-address-book"],
@@ -74,12 +80,37 @@ export function AddressBook() {
     onError: () => toast.error("Couldn't remove address"),
   })
 
+  // Generate a real MapQuest address near the typed origin and drop it into the
+  // add-form draft (ready to review + Add) — does NOT save it directly.
+  const generate = useMutation({
+    mutationFn: (originAddress: string) =>
+      api.post<GenerateResponse>("/daisy/generate-address", {
+        origin_address: originAddress,
+      }),
+    onSuccess: (res) => {
+      const a = res.address
+      if (!a?.full_address) {
+        toast.warning("No address found near that origin — try another")
+        return
+      }
+      setDraft({
+        name: "",
+        full_address: a.full_address,
+        city: a.city ?? "",
+        state: a.state ?? "",
+      })
+      toast.success("Generated — review and Add")
+    },
+    onError: () => toast.error("Couldn't generate an address"),
+  })
+
   const rows = q.data?.addresses ?? []
   const canAdd = draft.full_address.trim().length > 0
   // Index-based identity: while ANY mutation is in flight the list may be about
   // to shift, so disable every mutating control to prevent acting on a stale
   // index (the refetch on success re-renders with fresh indices).
   const busy = add.isPending || update.isPending || del.isPending
+  const canGenerate = origin.trim().length > 0
 
   return (
     <section className="mt-10 border border-border bg-card">
@@ -99,6 +130,31 @@ export function AddressBook() {
         required; name/city/state are optional labels.
       </p>
 
+      {/* Generate-near-origin: fills the add form with a real MapQuest address
+          near the given origin (review, then Add). */}
+      <div className="flex flex-col gap-2 px-4 pt-3 sm:flex-row sm:items-center">
+        <Input
+          placeholder="Generate near an origin address (e.g. 706 N Broad St, Edenton NC)…"
+          value={origin}
+          disabled={busy || generate.isPending}
+          onChange={(e) => setOrigin(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && canGenerate && !busy && !generate.isPending)
+              generate.mutate(origin.trim())
+          }}
+        />
+        <Button
+          variant="outline"
+          size="sm"
+          className="shrink-0"
+          disabled={!canGenerate || busy || generate.isPending}
+          onClick={() => generate.mutate(origin.trim())}
+        >
+          <Sparkles data-icon="inline-start" />
+          {generate.isPending ? "Generating…" : "Generate"}
+        </Button>
+      </div>
+
       {/* Add row */}
       <div className="grid grid-cols-1 gap-2 px-4 py-3 sm:grid-cols-[1fr_2fr_1fr_auto_auto]">
         <Input
@@ -111,7 +167,8 @@ export function AddressBook() {
           value={draft.full_address}
           onChange={(e) => setDraft({ ...draft, full_address: e.target.value })}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && canAdd) add.mutate(draft)
+            if (e.key === "Enter" && canAdd && !busy && !generate.isPending)
+              add.mutate(draft)
           }}
         />
         <Input
@@ -127,7 +184,7 @@ export function AddressBook() {
         />
         <Button
           size="sm"
-          disabled={!canAdd || busy}
+          disabled={!canAdd || busy || generate.isPending}
           onClick={() => add.mutate(draft)}
         >
           <Plus data-icon="inline-start" />

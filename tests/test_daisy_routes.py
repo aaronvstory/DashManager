@@ -79,6 +79,18 @@ class _FakeBridge:
                              "out of range (0..0)")
         return []
 
+    async def generate_address(self, origin_address, radius_miles=5.0):
+        self.calls.append(("generate_address", origin_address, radius_miles))
+        # mimics the worker. Sentinels: "miss" -> None (MapQuest found nothing);
+        # "boom" -> DaisyError (an upstream MapQuest/worker failure).
+        from backend.daisy.bridge import DaisyError
+        if origin_address == "boom":
+            raise DaisyError("generate_address failed: MapQuest unreachable")
+        if origin_address == "miss":
+            return None
+        return {"full_address": f"42 Near {origin_address}", "city": "Reno",
+                "state": "NV"}
+
 
 @pytest.fixture
 async def client():
@@ -326,3 +338,46 @@ async def test_delete_address_out_of_range_is_404(client, monkeypatch):
     _patch_bridge(monkeypatch, _FakeBridge([]))
     r = await client.delete("/api/daisy/addresses/9")
     assert r.status_code == 404
+
+
+async def test_generate_address_route(client, monkeypatch):
+    b = _patch_bridge(monkeypatch, _FakeBridge([]))
+    r = await client.post("/api/daisy/generate-address",
+                          json={"origin_address": "706 N Broad St, Edenton NC",
+                                "radius_miles": 3})
+    assert r.status_code == 200
+    assert r.json()["address"]["full_address"].startswith("42 Near")
+    assert b.calls[-1] == ("generate_address",
+                           "706 N Broad St, Edenton NC", 3.0)
+
+
+async def test_generate_address_none_when_nothing_found(client, monkeypatch):
+    _patch_bridge(monkeypatch, _FakeBridge([]))
+    r = await client.post("/api/daisy/generate-address",
+                          json={"origin_address": "miss"})
+    assert r.status_code == 200
+    assert r.json()["address"] is None       # MapQuest found nothing nearby
+
+
+async def test_generate_address_upstream_failure_is_502(client, monkeypatch):
+    # a MapQuest/worker failure (DaisyError) -> 502, not an unhandled 500.
+    _patch_bridge(monkeypatch, _FakeBridge([]))
+    r = await client.post("/api/daisy/generate-address",
+                          json={"origin_address": "boom"})
+    assert r.status_code == 502
+    assert "MapQuest" not in r.text          # generic detail, no internal echo
+
+
+async def test_generate_address_blank_origin_is_422(client, monkeypatch):
+    _patch_bridge(monkeypatch, _FakeBridge([]))
+    r = await client.post("/api/daisy/generate-address",
+                          json={"origin_address": "   "})
+    assert r.status_code == 422
+
+
+async def test_generate_address_bad_radius_is_422(client, monkeypatch):
+    _patch_bridge(monkeypatch, _FakeBridge([]))
+    for bad in (0, -5, 1000):
+        r = await client.post("/api/daisy/generate-address",
+                              json={"origin_address": "x", "radius_miles": bad})
+        assert r.status_code == 422
