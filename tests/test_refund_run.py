@@ -13,10 +13,12 @@ share a price or sit cents apart, so reconciliation is UUID-driven only.
 """
 from __future__ import annotations
 
+import pytest
+
 from backend.browser.refund_detector import RefundResult
 from backend.models import RefundStatus
 from backend import refund_run
-from backend.refund_run import _scope_dict, resolution_write
+from backend.refund_run import _scope_customers, _scope_dict, resolution_write
 
 
 def test_full_refund_is_refunded_and_promoted():
@@ -102,34 +104,30 @@ _CUSTS = [
 ]
 
 
-async def test_scope_customers_filters_by_ids(monkeypatch):
+@pytest.fixture
+def patched_customers(monkeypatch):
+    """Point refund_run's db.list_customers at the fixed _CUSTS pool."""
     async def fake_list():
         return list(_CUSTS)
     monkeypatch.setattr(refund_run.db, "list_customers", fake_list)
-    out = await refund_run._scope_customers(None, [17, 99])
+
+
+async def test_scope_customers_filters_by_ids(patched_customers):
+    out = await _scope_customers(None, [17, 99])
     assert {c["id"] for c in out} == {17, 99}
 
 
-async def test_scope_customers_ids_win_over_bucket(monkeypatch):
+async def test_scope_customers_ids_win_over_bucket(patched_customers):
     # given BOTH, ids win (consistent with _scope_dict) — a stray bucket arg
     # must not widen an id-scoped run.
-    async def fake_list():
-        return list(_CUSTS)
-    monkeypatch.setattr(refund_run.db, "list_customers", fake_list)
-    out = await refund_run._scope_customers("2026-06-15", [17])
+    out = await _scope_customers("2026-06-15", [17])
     assert [c["id"] for c in out] == [17]      # NOT the 2026-06-15 customer 99
 
 
-async def test_scope_customers_filters_by_bucket(monkeypatch):
-    async def fake_list():
-        return list(_CUSTS)
-    monkeypatch.setattr(refund_run.db, "list_customers", fake_list)
-    out = await refund_run._scope_customers("2026-06-16", None)
+async def test_scope_customers_filters_by_bucket(patched_customers):
+    out = await _scope_customers("2026-06-16", None)
     assert {c["id"] for c in out} == {17, 20}
 
 
-async def test_scope_customers_both_none_is_empty(monkeypatch):
-    async def fake_list():
-        return list(_CUSTS)
-    monkeypatch.setattr(refund_run.db, "list_customers", fake_list)
-    assert await refund_run._scope_customers(None, None) == []
+async def test_scope_customers_both_none_is_empty(patched_customers):
+    assert await _scope_customers(None, None) == []
