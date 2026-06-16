@@ -63,18 +63,24 @@ async def test_fetch_bucket_otps_degrades_failed_shard(monkeypatch):
     async def fake_list():
         return custs
 
-    monkeypatch.setattr(otp_fetch.db, "list_customers", fake_list)
-    monkeypatch.setattr(otp_fetch, "POOL_SIZE", 2)
+    from backend.daisy import sharded
 
-    real_shard = otp_fetch._fetch_shard
+    monkeypatch.setattr(otp_fetch.db, "list_customers", fake_list)
+    # POOL_SIZE now lives in the shared sharded helper.
+    monkeypatch.setattr(sharded, "POOL_SIZE", 2)
+
     calls = {"n": 0}
 
+    # New _fetch_shard signature: takes [(idx, customer)], returns {idx: row}.
     async def flaky_shard(shard):
         calls["n"] += 1
-        # First shard's bridge "fails to start"; others return code-less rows.
-        if calls["n"] == 1:
+        if calls["n"] == 1:                     # first shard's bridge "dies"
             raise RuntimeError("bridge down")
-        return [otp_fetch._error_row(c, "no code yet") for c in shard]
+        out = {}
+        for idx, c in shard:
+            row = otp_fetch._error_row(c, "no code yet")
+            out[idx] = row
+        return out
 
     monkeypatch.setattr(otp_fetch, "_fetch_shard", flaky_shard)
 
@@ -83,4 +89,3 @@ async def test_fetch_bucket_otps_degrades_failed_shard(monkeypatch):
     # the failed shard's customers carry the bridge-failure note
     failed = [r for r in rows if "bridge failed" in r["error"]]
     assert failed and all(r["code"] == "" for r in rows)
-    assert real_shard is not None  # sanity: original existed
