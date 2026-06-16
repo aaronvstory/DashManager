@@ -1,12 +1,11 @@
-import { BrowserRouter, Route, Routes } from "react-router-dom"
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom"
 import { AppLayout } from "@/components/app-layout"
 import { Toaster } from "@/components/ui/sonner"
-import BatchOtpPage from "@/pages/BatchOtpPage"
 import CustomersPage from "@/pages/CustomersPage"
 import DaisyPage from "@/pages/DaisyPage"
 import DatabasePage from "@/pages/DatabasePage"
 import HistoryPage from "@/pages/HistoryPage"
-import LiveOtpPage from "@/pages/LiveOtpPage"
+import OtpPage from "@/pages/OtpPage"
 import ProxiesPage from "@/pages/ProxiesPage"
 import ReportsPage from "@/pages/ReportsPage"
 import RunPage from "@/pages/RunPage"
@@ -21,8 +20,9 @@ export default function App() {
           <Route path="/daisy" element={<DaisyPage />} />
           <Route path="/database" element={<DatabasePage />} />
           <Route path="/run" element={<RunPage />} />
-          <Route path="/otp" element={<LiveOtpPage />} />
-          <Route path="/batch-otp" element={<BatchOtpPage />} />
+          <Route path="/otp" element={<OtpPage />} />
+          {/* Live OTP + Batch OTP merged into one page; keep the old path alive. */}
+          <Route path="/batch-otp" element={<Navigate to="/otp" replace />} />
           <Route path="/history" element={<HistoryPage />} />
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/proxies" element={<ProxiesPage />} />

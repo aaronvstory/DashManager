@@ -7,6 +7,7 @@
  */
 
 import { useEffect, useState } from "react"
+import { useSearchParams } from "react-router-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { format, parseISO } from "date-fns"
 import { AlertCircle, ExternalLink, FileText, RefreshCw } from "lucide-react"
@@ -44,7 +45,12 @@ function prettyDate(date: string): string {
 
 export default function ReportsPage() {
   const qc = useQueryClient()
-  const [selected, setSelected] = useState<string | null>(null)
+  // A ?date=YYYY-MM-DD param (e.g. the Customer Data → "this day's report"
+  // cross-link) pre-selects that day; otherwise the newest report is chosen.
+  const [searchParams] = useSearchParams()
+  const [selected, setSelected] = useState<string | null>(
+    () => searchParams.get("date"),
+  )
 
   const list = useQuery({
     queryKey: ["reports"],

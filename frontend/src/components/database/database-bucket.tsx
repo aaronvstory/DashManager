@@ -1,6 +1,7 @@
 import { useState } from "react"
+import { Link } from "react-router-dom"
 import { format, isToday } from "date-fns"
-import { ChevronDown } from "lucide-react"
+import { ChevronDown, FileText } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { parseBucketDate } from "@/components/customers/helpers"
@@ -87,6 +88,15 @@ export function DatabaseBucket({
 
       {open ? (
         <CardContent className="space-y-2.5">
+          {/* Cross-link to the frozen daily worklog for this date (proof +
+              transcripts) — the complement to this live data view. */}
+          <Link
+            to={`/reports?date=${date}`}
+            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+          >
+            <FileText className="size-3.5" />
+            View this day's report
+          </Link>
           {customers.map((c) => (
             <DatabaseCustomer key={c.id} customer={c} />
           ))}

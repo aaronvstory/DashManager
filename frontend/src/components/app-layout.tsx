@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useLocation } from "react-router-dom"
-import { Database, FileText, Flower2, History, Layers, Network, Play, Settings, Smartphone, Users } from "lucide-react"
+import { Database, FileText, Flower2, History, Network, Play, Settings, Smartphone, Users } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Logo } from "@/components/logo"
@@ -15,13 +15,17 @@ interface NavItem {
   end?: boolean
 }
 
+// Each item has ONE clear job. "Customers" = the bucket board (manage who's in
+// each date bucket). "Customer Data" = the live per-customer database (sessions,
+// every scraped order, raw audit). "Reports" = the frozen daily refund worklog
+// (proof + transcripts). "Refund Run" = launch/monitor a refund-check run. "OTP"
+// = live SMS codes (by bucket or by batch).
 const NAV: NavItem[] = [
   { to: "/", label: "Customers", icon: Users, end: true },
   { to: "/daisy", label: "CustomerDaisy", icon: Flower2 },
-  { to: "/database", label: "Database", icon: Database },
-  { to: "/run", label: "Run", icon: Play },
-  { to: "/otp", label: "Live OTP", icon: Smartphone },
-  { to: "/batch-otp", label: "Batch OTP", icon: Layers },
+  { to: "/database", label: "Customer Data", icon: Database },
+  { to: "/run", label: "Refund Run", icon: Play },
+  { to: "/otp", label: "OTP", icon: Smartphone },
   { to: "/history", label: "History", icon: History },
   { to: "/reports", label: "Reports", icon: FileText },
   { to: "/proxies", label: "Proxies", icon: Network },
