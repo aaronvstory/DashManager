@@ -136,9 +136,10 @@ export function AddressBook() {
         <Input
           placeholder="Generate near an origin address (e.g. 706 N Broad St, Edenton NC)…"
           value={origin}
+          disabled={busy || generate.isPending}
           onChange={(e) => setOrigin(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && canGenerate && !generate.isPending)
+            if (e.key === "Enter" && canGenerate && !busy && !generate.isPending)
               generate.mutate(origin.trim())
           }}
         />
@@ -146,7 +147,7 @@ export function AddressBook() {
           variant="outline"
           size="sm"
           className="shrink-0"
-          disabled={!canGenerate || generate.isPending}
+          disabled={!canGenerate || busy || generate.isPending}
           onClick={() => generate.mutate(origin.trim())}
         >
           <Sparkles data-icon="inline-start" />
@@ -166,7 +167,8 @@ export function AddressBook() {
           value={draft.full_address}
           onChange={(e) => setDraft({ ...draft, full_address: e.target.value })}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && canAdd) add.mutate(draft)
+            if (e.key === "Enter" && canAdd && !busy && !generate.isPending)
+              add.mutate(draft)
           }}
         />
         <Input
@@ -182,7 +184,7 @@ export function AddressBook() {
         />
         <Button
           size="sm"
-          disabled={!canAdd || busy}
+          disabled={!canAdd || busy || generate.isPending}
           onClick={() => add.mutate(draft)}
         >
           <Plus data-icon="inline-start" />
