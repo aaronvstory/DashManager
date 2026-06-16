@@ -94,6 +94,12 @@ def detect(page_text: str, cfg: dict) -> RefundResult:
 
     If a label appears multiple times the LAST occurrence wins — pages can
     mention totals elsewhere (marketing copy, summaries) before the breakdown.
+    For ``Refund`` this is safe: a real receipt breakdown carries exactly ONE
+    ``Refund -$X`` line (verified live, see HARVEST_NOTES), so "last wins" only
+    ever discards a stray earlier mention. In the hypothetical of two genuine
+    refund lines summing to the total, last-wins reads the smaller and yields
+    ``partial`` — which routes to a chat + human re-check (never a false
+    ``refunded``), so the zero-tolerance bar holds even there.
     """
     text = page_text or ""
     lines = [ln.strip() for ln in text.splitlines()]
