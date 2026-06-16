@@ -159,9 +159,16 @@ async def generate_address(body: GenerateAddressBody) -> dict[str, Any]:
     MapQuest finds nothing nearby — the caller can then add it to the pool.
     """
     bridge = await _bridge()
-    async with bridge as d:
-        address = await d.generate_address(body.origin_address,
-                                           body.radius_miles)
+    try:
+        async with bridge as d:
+            address = await d.generate_address(body.origin_address,
+                                               body.radius_miles)
+    except DaisyError as exc:
+        # MapQuest (an upstream dependency, via the worker) failed — a missing
+        # key, quota, or network error. Surface a 502, not an unhandled 500, so
+        # the client gets a structured error like the sibling address routes.
+        raise HTTPException(status_code=502,
+                            detail="address generation failed") from exc
     return {"address": address}
 
 

@@ -81,8 +81,11 @@ class _FakeBridge:
 
     async def generate_address(self, origin_address, radius_miles=5.0):
         self.calls.append(("generate_address", origin_address, radius_miles))
-        # mimics the worker: a real address near the origin, or None if MapQuest
-        # finds nothing (the "  miss  " origin sentinel exercises the None path).
+        # mimics the worker. Sentinels: "miss" -> None (MapQuest found nothing);
+        # "boom" -> DaisyError (an upstream MapQuest/worker failure).
+        from backend.daisy.bridge import DaisyError
+        if origin_address == "boom":
+            raise DaisyError("generate_address failed: MapQuest unreachable")
         if origin_address == "miss":
             return None
         return {"full_address": f"42 Near {origin_address}", "city": "Reno",
@@ -354,6 +357,15 @@ async def test_generate_address_none_when_nothing_found(client, monkeypatch):
                           json={"origin_address": "miss"})
     assert r.status_code == 200
     assert r.json()["address"] is None       # MapQuest found nothing nearby
+
+
+async def test_generate_address_upstream_failure_is_502(client, monkeypatch):
+    # a MapQuest/worker failure (DaisyError) -> 502, not an unhandled 500.
+    _patch_bridge(monkeypatch, _FakeBridge([]))
+    r = await client.post("/api/daisy/generate-address",
+                          json={"origin_address": "boom"})
+    assert r.status_code == 502
+    assert "MapQuest" not in r.text          # generic detail, no internal echo
 
 
 async def test_generate_address_blank_origin_is_422(client, monkeypatch):
