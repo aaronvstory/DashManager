@@ -61,6 +61,9 @@ export default function DaisyPage() {
     onSuccess: () => {
       toast.success("Deleted from CustomerDaisy")
       void qc.invalidateQueries({ queryKey: ["daisy"] })
+      // the pool shrank — refresh the coverage analytics too, else its tiles
+      // show stale counts next to the just-updated customer list.
+      void qc.invalidateQueries({ queryKey: ["daisy-analytics"] })
     },
     onError: () => toast.error("Delete failed"),
   })
