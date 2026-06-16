@@ -90,6 +90,24 @@ async def test_full_queue_does_not_break_delivery_to_others():
     assert got == [1, 2, 3, 4, 5]         # healthy received EVERY event
 
 
+async def test_misbehaving_subscriber_does_not_break_delivery_to_others():
+    # _deliver swallows ANY put failure, not just QueueFull — fan-out is
+    # best-effort and the durable record is the ring + DB. A subscriber whose
+    # put_nowait raises an unexpected error must NOT kill publish() or starve a
+    # healthy subscriber that comes after it in the set.
+    bus = EventBus()
+
+    class BrokenQueue(asyncio.Queue):
+        def put_nowait(self, item):
+            raise RuntimeError("subscriber is broken")
+
+    bus._subs.add(BrokenQueue())          # raises a non-QueueFull error on put
+    healthy = bus.subscribe()
+    bus.publish("log", {"ok": True})      # must not raise despite the broken sub
+    got = await asyncio.wait_for(healthy.get(), timeout=1)
+    assert got["data"] == {"ok": True}    # healthy sub still received the event
+
+
 async def test_unsubscribe_during_delivery_does_not_raise():
     # The SSE generator unsubscribes from its `finally` (on client disconnect),
     # which can fire while _deliver is mid-iteration over the subscriber set. If

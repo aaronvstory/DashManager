@@ -47,10 +47,13 @@ class EventBus:
         for q in list(self._subs):
             try:
                 q.put_nowait(event)
-            except asyncio.QueueFull:
-                # A stalled/dead subscriber — drop this event for it (it can
-                # replay from the ring on reconnect) rather than block, grow
-                # unbounded, or break delivery to the others.
+            except Exception:
+                # One bad subscriber must NEVER break delivery to the others or
+                # kill the publisher's coroutine. QueueFull is the expected case
+                # (stalled/dead consumer — it replays from the ring on
+                # reconnect), but we swallow ANY put failure: this is
+                # best-effort fan-out, and the durable record is the ring + DB,
+                # not this queue. So we keep fanning out to the remaining subs.
                 pass
 
     def publish(self, type: str, data: dict[str, Any] | None = None,
