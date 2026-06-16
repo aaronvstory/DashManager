@@ -232,3 +232,48 @@ def test_remake_pending_claim_still_claimable():
     r = detect(txt, CFG)
     assert r.status == RefundStatus.pending_claim
     assert r.remake_seen is True
+
+
+# ── Safety-critical edges: these pin behavior the money classification relies
+#    on, so a future _label_amounts refactor can't silently regress it. ──
+
+def test_multiple_refund_lines_last_wins():
+    # A stray "Refund" amount in summary/marketing copy BEFORE the real
+    # breakdown must not win — the LAST Refund occurrence does (same rule as
+    # Total). Here a $5.00 mention precedes the real -$112.34 refund line.
+    txt = ("Refund\n-$5.00\nin a promo blurb\n"
+           "Subtotal\n$50.95\nTotal\n$112.34\nRefund\n-$112.34")
+    r = detect(txt, CFG)
+    assert r.status == RefundStatus.refunded
+    assert r.refund_amount == pytest.approx(112.34)   # last wins, NOT $5.00
+    assert r.total_amount == pytest.approx(112.34)
+
+
+def test_refund_prose_is_not_captured_as_amount():
+    # "Refunded to your Visa..." is prose, not a Refund breakdown line — it must
+    # NOT be read as a refund amount (the label-exact / money-token rule). A
+    # false positive here would mislabel money as refunded.
+    txt = "Total\n$62.54\nRefunded to your Visa card ending 1234\nGet help"
+    r = detect(txt, CFG)
+    assert r.status == RefundStatus.not_refunded
+    assert r.refund_amount is None
+
+
+def test_refund_exceeding_total_is_refunded():
+    # Refund can edge slightly OVER total (e.g. a tip adjustment): refund >=
+    # total -> refunded, never misclassified as partial.
+    txt = "Total\n$112.34\nRefund\n-$112.35"
+    r = detect(txt, CFG)
+    assert r.status == RefundStatus.refunded
+    assert r.refund_amount == pytest.approx(112.35)
+    assert r.total_amount == pytest.approx(112.34)
+
+
+def test_refund_label_value_on_later_line_after_blank():
+    # The bare-label path skips blank lines to the value (real innerText often
+    # has empty lines between a label and its amount).
+    txt = "Subtotal\n$50.95\nTotal\n\n$112.34\nRefund\n\n-$112.34"
+    r = detect(txt, CFG)
+    assert r.status == RefundStatus.refunded
+    assert r.total_amount == pytest.approx(112.34)
+    assert r.refund_amount == pytest.approx(112.34)
