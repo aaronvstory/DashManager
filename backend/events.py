@@ -23,7 +23,9 @@ class EventBus:
         # queue without limit (memory leak) or raise QueueFull and break delivery
         # to OTHER subscribers. So queues are bounded and publish DROPS on a full
         # one — the ring buffer + Last-Event-ID replay recovers the gap when that
-        # client reconnects.
+        # client reconnects, AS LONG AS the gap fits within ring_size (a burst
+        # that overflows both the queue AND the ring loses the oldest events;
+        # durable history lives in the DB, the ring only covers reconnect gaps).
         self._sub_queue_size = sub_queue_size
 
     def publish(self, type: str, data: dict[str, Any] | None = None,
