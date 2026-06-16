@@ -112,6 +112,82 @@ def _cdp_source(sb: Any) -> str:
             return ""
 
 
+# The window the OS input must be aimed at. TALL (1000px) on purpose: the signup
+# form runs First/Last → Email → Phone → Password → Sign Up, taller than 720px,
+# so a short window pushed the "Sign Up" button BELOW the fold and the OS click
+# landed off-screen (live bug). 1000px tall keeps the whole form — button
+# included — visible so element-center clicks stay inside the window. Anchored
+# near top-left (x=40,y=40) so the whole frame is on-screen. (The keep-open
+# windows the user watches later stay at the project-standard 1200x720; only
+# this signup-driver window needs the extra height.)
+_WIN_X, _WIN_Y, _WIN_W, _WIN_H = 40, 40, 1200, 1000
+
+
+def focus_signup_window(sb: Any, *,
+                        emit: Callable[[str, dict], None] | None = None) -> bool:
+    """Foreground + restore the browser to a known 1200x720 rect BEFORE OS input.
+
+    os_input (PyAutoGUI) types into whatever window has OS focus, and
+    gui_click_element moves the REAL mouse to the element's SCREEN coordinates —
+    both assume the window is foreground and at the size/position SeleniumBase
+    thinks it is. If the window got shrunk, moved off-screen, or lost focus
+    (exactly the live bug: a tiny window, keystrokes hitting the URL bar), every
+    GUI fill misses. Call this immediately before any os_input phase.
+
+    Best-effort and self-reporting: tries CDP front+rect first, then an OS-level
+    pygetwindow activate as a backstop, and emits ``signup_window_focus`` with
+    the resulting rect so a recurrence is visible in the event log, not silent.
+    """
+    def _e(t: str, d: dict | None = None) -> None:
+        if emit:
+            try:
+                emit(t, d or {})
+            except Exception:
+                pass
+
+    ok = False
+    # 1. CDP: bring to front + force the known rect.
+    try:
+        sb.cdp.bring_active_window_to_front()
+    except Exception:
+        pass
+    try:
+        sb.cdp.set_window_rect(_WIN_X, _WIN_Y, _WIN_W, _WIN_H)
+        ok = True
+    except Exception:
+        pass
+    time.sleep(0.4)
+
+    # 2. OS-level backstop: a Chromium window can be at the right rect yet not be
+    # the FOREGROUND window (CDP front != Win32 SetForegroundWindow). pygetwindow
+    # activates it so real keystrokes land in it, not whatever was focused.
+    try:
+        import pygetwindow as gw  # available (verified); guard anyway
+        wins = [w for w in gw.getAllWindows()
+                if w.title and ("DoorDash" in w.title or "Chrom" in w.title)]
+        if wins:
+            w = wins[0]
+            try:
+                if w.isMinimized:
+                    w.restore()
+                w.activate()
+                ok = True
+            except Exception:
+                pass
+    except Exception:
+        pass
+    time.sleep(0.3)
+
+    # 3. Verify + report the actual rect so a bad window self-reports next time.
+    rect = None
+    try:
+        rect = sb.cdp.get_window_rect()
+    except Exception:
+        pass
+    _e("signup_window_focus", {"ok": ok, "rect": rect})
+    return ok
+
+
 def _cdp_url(sb: Any) -> str:
     try:
         return sb.cdp.get_current_url() or ""
@@ -367,6 +443,58 @@ SKIP_SELECTORS = ('button:contains("Skip")', 'button:contains("Not now")',
                   'button:contains("Maybe later")', 'a:contains("Skip")')
 
 
+# The "$0 delivery fee" home-page modal's address box. Real attrs (from the live
+# DOM): id=HomeAddressAutocomplete, placeholder="Enter delivery address",
+# role=combobox. Key on id/placeholder, most-specific first.
+HOME_ADDR_SELECTORS = (
+    '#HomeAddressAutocomplete',
+    'input[placeholder*="delivery address" i]',
+    'input[aria-controls*="AddressSearchAutocomplete" i]',
+    'input[role="combobox"]')
+
+
+def _field_present(sb: Any, selectors: tuple[str, ...]) -> bool:
+    """True if any of the selectors matches an element on the page right now."""
+    for sel in selectors:
+        try:
+            if sb.cdp.find_element(sel):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _fill_home_address(sb: Any, full_address: str) -> bool:
+    """Type the address into the home-page modal and commit it. Returns True iff
+    the field shows the address afterward.
+
+    Uses CDP press_keys (types into the element BY SELECTOR — no OS focus needed,
+    which is why the OS-input gui_write kept landing nowhere) and verifies the
+    value landed, retrying across the selector cascade, then presses Enter to
+    accept the first autocomplete suggestion.
+    """
+    for sel in HOME_ADDR_SELECTORS:
+        try:
+            if not sb.cdp.find_element(sel):
+                continue
+        except Exception:
+            continue
+        for _ in range(3):
+            try:
+                sb.cdp.click(sel)            # focus the field (DOM click)
+                time.sleep(0.3)
+                sb.cdp.press_keys(sel, full_address)  # focus-independent type
+                time.sleep(2.0)              # let autocomplete populate
+                if _field_value(sb, sel).strip():
+                    sb.cdp.press_keys(sel, "\n")   # accept first suggestion
+                    time.sleep(2.0)
+                    return True
+            except Exception:
+                pass
+            time.sleep(0.6)
+    return False
+
+
 def _finish_account(sb: Any, identity: dict[str, Any], os_input: bool,
                     emit: Any, shot: Any) -> dict[str, Any]:
     """Post-verification: the account exists but lands on the home page with an
@@ -378,25 +506,28 @@ def _finish_account(sb: Any, identity: dict[str, Any], os_input: bool,
     try:
         full_address = (identity.get("full_address")
                         or identity.get("address") or "")
-        # wait for the address field to render (slow ~20s post-redirect)
-        deadline = time.time() + 30
-        have_addr = False
-        while time.time() < deadline:
-            for sel in ADDR_SELECTORS:
-                try:
-                    if sb.cdp.find_element(sel):
-                        have_addr = True
-                        break
-                except Exception:
-                    continue
-            if have_addr:
-                break
-            time.sleep(1.5)
-        if have_addr and full_address:
-            if _fill_address(sb, full_address, os_input):
-                emit("signup_address_filled", {"address": full_address[:60]})
-                shot("07_address")
-        # a DashPass upsell may appear before or after the address step
+        # The post-signup "$0 delivery fee" modal renders with its address box
+        # ALREADY FOCUSED (caret blinking in it). So the whole flow is dead
+        # simple — and trying to be clever (find the element, scroll it into
+        # view, click it, pick a dropdown suggestion) is what kept failing.
+        # Just: wait for the modal to render, then TYPE the address with real OS
+        # keystrokes into the already-focused field and press Enter. No element
+        # lookup, no click, no suggestion handling.
+        if full_address:
+            # Poll for the "$0 delivery fee" modal's address box to render (on
+            # /home right after OTP; usually ~10s but slow machines vary). A
+            # deadline-poll beats a bare sleep(15): it proceeds the moment the
+            # field is present and still tolerates a slow render up to the cap.
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                if _field_present(sb, HOME_ADDR_SELECTORS):
+                    break
+                time.sleep(1.5)
+            ok = _fill_home_address(sb, full_address)
+            emit("signup_address_filled",
+                 {"address": full_address[:60], "ok": ok})
+            shot("07_address")
+        # a DashPass upsell may appear after the address step
         time.sleep(1.5)
         _skip_upsell(sb, os_input)
         shot("08_finished")
@@ -469,6 +600,36 @@ def _body_text_cdp(sb: Any) -> str:
             return ""
 
 
+def _gui_click_in_view(sb: Any, selector: str) -> bool:
+    """OS-click an element AFTER scrolling it into view.
+
+    gui_click_element moves the REAL mouse to the element's SCREEN coordinates,
+    computed from its in-page position. If the element is BELOW the fold (the
+    "Sign Up" button on the tall signup form, in a 720px-tall window), those
+    coordinates fall OUTSIDE the window and the click lands on the desktop —
+    which de-focuses the window and dead-ends the run (the live failure). Scroll
+    it into view first so its screen position is inside the visible viewport.
+    Returns True only if the OS click was actually issued.
+    """
+    try:
+        if not sb.cdp.find_element(selector):
+            return False
+    except Exception:
+        return False
+    # Scroll the button into view (centered-ish), then settle before the click
+    # so the rendered position the mouse aims at is the final one.
+    try:
+        sb.cdp.scroll_into_view(selector)
+        time.sleep(0.4)
+    except Exception:
+        pass  # best-effort: even un-scrolled, try the click below
+    try:
+        sb.cdp.gui_click_element(selector)
+        return True
+    except Exception:
+        return False
+
+
 def _click_submit_button(sb: Any, os_input: bool = False) -> bool:
     """Click a "Submit"/submit button (OS-click when os_input)."""
     for sel in OTP_SUBMIT_SELECTORS:
@@ -479,51 +640,15 @@ def _click_submit_button(sb: Any, os_input: bool = False) -> bool:
             continue
         try:
             if os_input:
-                sb.cdp.gui_click_element(sel)
+                # scroll into view first — the submit can sit below the fold.
+                if _gui_click_in_view(sb, sel):
+                    return True
+                continue
             else:
                 sb.cdp.click(sel)
-            return True
-        except Exception:
-            continue
-    return False
-
-
-def _fill_address(sb: Any, full_address: str, os_input: bool = False) -> bool:
-    """Fill the post-verify delivery-address field + press Enter to pick the
-    first suggestion. VERIFIES the value landed and retries (one acct missed the
-    address because the single attempt silently no-op'd). Returns True only if
-    the field actually shows the address."""
-    if not full_address:
-        return False
-    for sel in ADDR_SELECTORS:
-        try:
-            if not sb.cdp.find_element(sel):
-                continue
-        except Exception:
-            continue
-        for attempt in range(3):
-            try:
-                if os_input:
-                    sb.cdp.gui_click_element(sel)
-                    time.sleep(0.4)
-                    sb.cdp.gui_write(full_address)
-                else:
-                    sb.cdp.click(sel)
-                    sb.cdp.press_keys(sel, full_address)
-                time.sleep(2.5)  # let autocomplete suggestions populate
-                # verify the value landed before committing with Enter
-                if not _field_value(sb, sel).strip():
-                    time.sleep(0.6)
-                    continue  # no-op'd — retry this selector
-                try:
-                    sb.cdp.press_keys(sel, "\n")
-                except Exception:
-                    pass
-                time.sleep(2.0)
                 return True
-            except Exception:
-                time.sleep(0.5)
-                continue
+        except Exception:
+            continue
     return False
 
 
@@ -610,9 +735,10 @@ def signup_via_cdp(identity: dict[str, Any], *,
         kwargs["mobile"] = True
         kwargs["device_metrics"] = IOS_METRICS
     else:
-        # Desktop: the project-standard 1200x720 — fits the user's screen when
-        # resized (CLAUDE.md), watchable, doesn't fill the monitor.
-        kwargs["window_size"] = "1200,720"
+        # Desktop: 1200 wide, TALL (1000) so the whole signup form including the
+        # below-the-fold "Sign Up" button is visible to OS-level clicks (see
+        # _WIN_H). focus_signup_window re-asserts this exact rect before input.
+        kwargs["window_size"] = f"{_WIN_W},{_WIN_H}"
 
     sb = None
     try:
@@ -658,6 +784,12 @@ def signup_via_cdp(identity: dict[str, Any], *,
             # os_input=True uses REAL OS-level mouse+keyboard (PyAutoGUI) — the
             # synthetic CDP press_keys is what PerimeterX rejects; real hardware
             # telemetry is the behavioral fix being tested.
+            # BEFORE any OS input: foreground + restore the window to its known
+            # 1200x720 rect, or PyAutoGUI's element-center clicks miss the form
+            # (the live failure: a shrunk/unfocused window → keystrokes in the
+            # address bar). No-op for the CDP path (which targets the DOM).
+            if os_input:
+                focus_signup_window(sb, emit=emit)
             filler = _gui_press_any if os_input else _press_any
             fills = {k: (not val) for k, _sels, val in FIELDS}  # empty val = ok
             for _pass in range(3):
@@ -689,16 +821,15 @@ def signup_via_cdp(identity: dict[str, Any], *,
                 time.sleep(pre_submit_dwell_s)
 
             # Submit via real OS click too when os_input (consistent telemetry).
+            # The "Sign Up" button sits BELOW the fold on the tall form, so the
+            # OS click MUST scroll it into view first — else it clicks off the
+            # bottom of the window, de-focuses it, and dead-ends (live bug).
             submitted = False
             if os_input:
                 for sel in (SEL_SUBMIT, SEL_SUBMIT_FALLBACK):
-                    try:
-                        if sb.cdp.find_element(sel):
-                            sb.cdp.gui_click_element(sel)
-                            submitted = True
-                            break
-                    except Exception:
-                        continue
+                    if _gui_click_in_view(sb, sel):
+                        submitted = True
+                        break
             if not submitted:
                 try:
                     sb.cdp.click(SEL_SUBMIT)
@@ -777,23 +908,58 @@ def signup_via_cdp(identity: dict[str, Any], *,
                 if code and code not in tried:
                     tried.add(code)
                     _emit("otp_received", {"code": code})
-                    # _enter_otp now also CLICKS the modal's Submit button (the
-                    # live run stalled because entering the code alone didn't
-                    # advance) and uses OS input when os_input.
-                    if _enter_otp(sb, code, os_input):
-                        for _ in range(8):  # success redirect can be slow
-                            time.sleep(2.5)
-                            if any(m in _cdp_url(sb)
-                                   for m in SUCCESS_URL_MARKERS):
-                                result["outcome"] = "created"
-                                result["storage_state"] = _export_storage(sb)
-                                _emit("signup_created", {})
-                                _shot("06_created")
-                                # post-verify: fill delivery address + skip the
-                                # DashPass upsell so the account is fully usable.
-                                result["profile_confirmed"] = _finish_account(
-                                    sb, identity, os_input, _emit, _shot)
-                                return result
+                    # Re-focus before OTP: the verify step is the same OS-input
+                    # screen-coordinate path as the form fill, and focus can be
+                    # stolen between submit and the modal appearing.
+                    if os_input:
+                        focus_signup_window(sb, emit=emit)
+                    # Enter the OTP (also clicks the modal Submit; OS input when
+                    # os_input). CRITICAL: do NOT gate success on its return — it
+                    # over-strictly self-checks the digits and returns False even
+                    # when the code WAS accepted and the account got created (the
+                    # live bug: account on /home but run mislabeled otp_timeout,
+                    # so the address fill never ran). Instead, enter the code,
+                    # then judge success by the REAL page state below.
+                    _enter_otp(sb, code, os_input)
+                    # Wait GENEROUSLY for the post-OTP redirect to /home. Success
+                    # = a home/consumer URL OR the verify modal is gone (the
+                    # account exists the moment the OTP is accepted; the URL just
+                    # lags). The "$0 delivery fee" address modal renders ON /home.
+                    created = False
+                    post = time.time() + 60
+                    # The verify modal IS up right now (we just entered the code
+                    # into it). "modal_gone" only means success if it disappears
+                    # AND we didn't land on a bot-block/error page — a bare
+                    # not-_page_has check would fire True on ANY page lacking the
+                    # verify strings (blank/error/empty source), falsely marking
+                    # a failed signup "created". So: a home URL is success
+                    # outright; otherwise require the modal to vanish AND no
+                    # bot-block marker AND the URL left the verify/login step.
+                    while time.time() < post:
+                        url = _cdp_url(sb)
+                        if any(m in url for m in SUCCESS_URL_MARKERS):
+                            created = True
+                            break
+                        if _page_has(sb, BOT_BLOCK_MARKERS):
+                            break  # not created — bot-blocked after OTP
+                        modal_gone = not _page_has(sb, VERIFY_MARKERS)
+                        left_auth = not any(s in url.lower()
+                                            for s in ("verify", "/auth",
+                                                      "login"))
+                        if modal_gone and left_auth and "doordash.com" in url:
+                            created = True
+                            break
+                        time.sleep(2.0)
+                    if created:
+                        result["outcome"] = "created"
+                        result["storage_state"] = _export_storage(sb)
+                        _emit("signup_created", {"url": _cdp_url(sb)[:80]})
+                        _shot("06_created")
+                        # post-verify: fill delivery address + skip the
+                        # DashPass upsell so the account is fully usable.
+                        result["profile_confirmed"] = _finish_account(
+                            sb, identity, os_input, _emit, _shot)
+                        return result
                 time.sleep(3.0)
             result["outcome"] = "otp_timeout"
             _shot("06_otp_timeout")

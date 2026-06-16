@@ -140,3 +140,58 @@ def test_resolve_proxy_uses_proxy_pool_parser(tmp_path):
 
 def test_resolve_proxy_missing_file_is_none(tmp_path):
     assert c.resolve_proxy(str(tmp_path / "nope.txt")) is None
+
+
+def test_focus_signup_window_forces_front_and_rect():
+    # Before OS input, the window must be brought to front AND restored to the
+    # known 1200x720 rect — else PyAutoGUI's element-center clicks miss the form
+    # (the live bug: a shrunk/unfocused window typed into the address bar).
+    calls = []
+
+    class _Cdp:
+        def bring_active_window_to_front(self):
+            calls.append("front")
+
+        def set_window_rect(self, x, y, w, h):
+            calls.append(("rect", x, y, w, h))
+
+        def get_window_rect(self):
+            return {"x": c._WIN_X, "y": c._WIN_Y,
+                    "width": c._WIN_W, "height": c._WIN_H}
+
+    class FakeSB:
+        cdp = _Cdp()
+
+    events = []
+    ok = c.focus_signup_window(
+        FakeSB(), emit=lambda t, d: events.append((t, d)))
+
+    assert ok is True
+    assert "front" in calls
+    assert ("rect", c._WIN_X, c._WIN_Y, c._WIN_W, c._WIN_H) in calls
+    # It self-reports the resulting rect so a recurrence is visible in the log.
+    assert events and events[0][0] == "signup_window_focus"
+    assert events[0][1]["rect"]["width"] == 1200
+
+
+def test_focus_signup_window_survives_cdp_failure():
+    # Best-effort: if every CDP window call raises, it must NOT propagate (a
+    # focus hiccup must never abort a signup mid-flight) and still emit.
+    class _Cdp:
+        def bring_active_window_to_front(self):
+            raise RuntimeError("no window")
+
+        def set_window_rect(self, *a):
+            raise RuntimeError("no window")
+
+        def get_window_rect(self):
+            raise RuntimeError("no window")
+
+    class FakeSB:
+        cdp = _Cdp()
+
+    events = []
+    # Must not raise; ok may be False (pygetwindow may or may not find a window
+    # on the test box), but the event is always emitted.
+    c.focus_signup_window(FakeSB(), emit=lambda t, d: events.append((t, d)))
+    assert events and events[0][0] == "signup_window_focus"
