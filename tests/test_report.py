@@ -96,10 +96,9 @@ def test_render_shows_customers_orders_and_transcript():
 
 # ── _chat_block: pin the transcript bubble contract (consistency baseline) ──
 
-def _chat(messages, **kw):
-    return {"outcome": kw.get("outcome", "open"),
-            "agent_reached": kw.get("agent_reached", False),
-            "attempt_no": kw.get("attempt_no", 1), "messages": messages}
+def _chat(messages, *, outcome="open", agent_reached=False, attempt_no=1):
+    return {"outcome": outcome, "agent_reached": agent_reached,
+            "attempt_no": attempt_no, "messages": messages}
 
 
 def test_chat_block_maps_direction_to_bubble_side():
@@ -154,9 +153,15 @@ def test_chat_block_escapes_message_content():
 
 
 def test_chat_block_outcome_drives_tone_and_header():
+    # full tone map: success=good; failed/blocked=alert; manual_flag/
+    # review_blocked=warn; anything else (open/None)=muted.
     assert 'chat--good' in report._chat_block(_chat([], outcome="success"))
     assert 'chat--alert' in report._chat_block(_chat([], outcome="failed"))
+    assert 'chat--alert' in report._chat_block(_chat([], outcome="blocked"))
     assert 'chat--warn' in report._chat_block(_chat([], outcome="manual_flag"))
+    assert 'chat--warn' in report._chat_block(
+        _chat([], outcome="review_blocked"))
+    assert 'chat--muted' in report._chat_block(_chat([], outcome="open"))
     # header reflects whether a human was reached + the outcome + attempt no.
     head = report._chat_block(_chat([], agent_reached=True, attempt_no=3,
                                     outcome="success"))
