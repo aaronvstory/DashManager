@@ -215,8 +215,8 @@ function IdleView() {
   return (
     <>
       <PageHeader
-        title="Run"
-        description="Launch refund-check runs and watch orders, chats, and outcomes stream in live."
+        title="Refund Run"
+        description="Launch a refund-check run and watch orders, chats, and outcomes stream in live."
       />
       <FinishedRunSummary />
       <div className="grid items-start gap-6 lg:grid-cols-[1fr_24rem]">

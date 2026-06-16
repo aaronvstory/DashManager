@@ -92,8 +92,8 @@ export default function DatabasePage() {
   return (
     <>
       <PageHeader
-        title="Database"
-        description="Everything captured for each customer — sessions, identities, and scraped orders. Read-only."
+        title="Customer Data"
+        description="The live per-customer database — sessions, identities, and every scraped order. Read-only. For the daily refund worklog with proof + transcripts, see Reports."
       />
 
       {isLoading ? (
