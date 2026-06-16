@@ -120,9 +120,9 @@ async def add_anchor_address(body: AnchorAddress) -> dict[str, Any]:
         async with bridge as d:
             addresses = await d.add_address(body.model_dump())
     except DaisyError as exc:
-        # e.g. a whitespace-only full_address passes Pydantic but the worker's
-        # _clean_address rejects it -> 400, not an unformatted 500. Also covers a
-        # corrupt my_addresses.json (the edit aborts rather than clobbering it).
+        # A blank full_address is already rejected upstream (422 in AnchorAddress);
+        # this maps the remaining worker errors — a corrupt my_addresses.json (the
+        # edit aborts rather than clobbering it), a disk error — to 4xx, not a 500.
         raise _address_http_error(exc) from exc
     return {"addresses": addresses}
 
