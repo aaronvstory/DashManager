@@ -94,6 +94,66 @@ def test_render_shows_customers_orders_and_transcript():
     assert "Friday, June 12, 2026" in out
 
 
+# ── _chat_block: pin the transcript bubble contract (consistency baseline) ──
+
+def _chat(messages, **kw):
+    return {"outcome": kw.get("outcome", "open"),
+            "agent_reached": kw.get("agent_reached", False),
+            "attempt_no": kw.get("attempt_no", 1), "messages": messages}
+
+
+def test_chat_block_maps_direction_to_bubble_side():
+    # out -> us (right), in -> support (left), system -> sys (centered). Every
+    # speaker renders on a CONSISTENT side — this is the contract the report's
+    # transcripts rely on.
+    html = report._chat_block(_chat([
+        {"direction": "out", "content": "we ask"},
+        {"direction": "in", "content": "agent replies"},
+        {"direction": "system", "content": "connected to agent"},
+    ]))
+    assert 'class="bubble bubble--out"' in html and ">us<" in html
+    assert 'class="bubble bubble--in"' in html and ">support<" in html
+    assert 'class="bubble bubble--sys"' in html and ">sys<" in html
+    # bubble ORDER is preserved (us before support before sys).
+    assert html.index("we ask") < html.index("agent replies") < html.index(
+        "connected to agent")
+
+
+def test_chat_block_unknown_or_missing_direction_is_system():
+    # A message with an unrecognized or absent `direction` must NOT vanish — it
+    # falls back to a system bubble (so a malformed/legacy row still shows).
+    html = report._chat_block(_chat([
+        {"direction": "weird", "content": "odd line"},
+        {"content": "no direction key"},
+    ]))
+    assert html.count('bubble--sys') == 2
+    assert "odd line" in html and "no direction key" in html
+
+
+def test_chat_block_empty_messages_shows_placeholder():
+    html = report._chat_block(_chat([]))
+    assert "No messages captured." in html
+
+
+def test_chat_block_escapes_message_content():
+    html = report._chat_block(_chat([{"direction": "in",
+                                      "content": "<script>x</script>"}]))
+    assert "<script>x</script>" not in html
+    assert "&lt;script&gt;" in html
+
+
+def test_chat_block_outcome_drives_tone_and_header():
+    assert 'chat--good' in report._chat_block(_chat([], outcome="success"))
+    assert 'chat--alert' in report._chat_block(_chat([], outcome="failed"))
+    assert 'chat--warn' in report._chat_block(_chat([], outcome="manual_flag"))
+    # header reflects whether a human was reached + the outcome + attempt no.
+    head = report._chat_block(_chat([], agent_reached=True, attempt_no=3,
+                                    outcome="success"))
+    assert "attempt 3" in head and "reached a human" in head
+    assert "no human reached" in report._chat_block(
+        _chat([], agent_reached=False))
+
+
 def test_summary_cards_present():
     out = report.render_report(_sample_model())
     for label in ("Customers", "Orders", "Refunded", "Pursuing", "Needs you"):
