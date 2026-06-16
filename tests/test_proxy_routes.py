@@ -45,8 +45,11 @@ async def test_test_one_404_when_unknown(client, monkeypatch):
 async def test_test_one_returns_result_on_success(client, monkeypatch):
     _one_proxy(monkeypatch)
     monkeypatch.setattr(proxy_pool, "local_ip", lambda: "1.2.3.4")
-    monkeypatch.setattr(proxy_pool, "check_proxy",
-                        lambda target, local_ip=None: {"ok": True, "ip": "9.9.9.9"})
+    # keyword-only local_ip mirrors the real check_proxy(proxy, *, ..., local_ip)
+    # so the stub enforces the same contract the route relies on.
+    monkeypatch.setattr(
+        proxy_pool, "check_proxy",
+        lambda target, *, local_ip=None: {"ok": True, "ip": "9.9.9.9"})
     r = await client.post("/api/proxies/test/the-id")
     assert r.status_code == 200
     body = r.json()
@@ -59,7 +62,7 @@ async def test_test_one_500_never_leaks_creds(client, monkeypatch):
     _one_proxy(monkeypatch)
     monkeypatch.setattr(proxy_pool, "local_ip", lambda: "1.2.3.4")
 
-    def boom(target, local_ip=None):
+    def boom(target, *, local_ip=None):
         raise RuntimeError(f"connect failed for {SECRET}")
 
     monkeypatch.setattr(proxy_pool, "check_proxy", boom)
