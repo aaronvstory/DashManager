@@ -315,19 +315,31 @@ def _list_addresses() -> list[dict]:
         raw = json.loads(p.read_text("utf-8"))
     except (json.JSONDecodeError, OSError):
         return []
+    # JSON values can be any type (a hand-edited my_addresses.json may carry an
+    # int, null, etc.); coerce to a stripped string only for real strings so a
+    # non-string never reaches .strip() (AttributeError) or becomes a bogus
+    # address like "123".
+    def _s(v: object) -> str:
+        return v.strip() if isinstance(v, str) else ""
+
     items = raw.get("addresses", raw) if isinstance(raw, dict) else raw
     out = []
     for x in items if isinstance(items, list) else []:
         if isinstance(x, str):
-            out.append({"full_address": x})
+            full, name, city, state = _s(x), "", "", ""
         elif isinstance(x, dict):
-            out.append({
-                "name": x.get("name", ""),
-                "full_address": x.get("full_address")
-                                or x.get("address", ""),
-                "city": x.get("city", ""),
-                "state": x.get("state", ""),
-            })
+            # Prefer full_address, but fall back to the legacy "address" key when
+            # full_address is missing OR blank-after-strip (a whitespace-only
+            # full_address must not mask a real address).
+            full = _s(x.get("full_address")) or _s(x.get("address"))
+            name, city, state = (x.get("name", ""), x.get("city", ""),
+                                 x.get("state", ""))
+        else:
+            continue                       # skip non-str/non-dict junk entries
+        if not full:
+            continue                       # an address with no address is useless
+        out.append({"name": name, "full_address": full,
+                    "city": city, "state": state})
     return out
 
 

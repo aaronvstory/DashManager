@@ -145,6 +145,44 @@ def test_list_addresses_missing_and_present(tmp_path, monkeypatch):
     addrs = w._list_addresses()
     assert addrs[0]["full_address"] == "1 Main St, Reno, NV"
     assert addrs[1]["full_address"] == "9 Oak Ave, Reno, NV"   # bare string
+    # bare-string entries carry the same dict shape as dict entries
+    assert set(addrs[1]) == {"name", "full_address", "city", "state"}
+
+
+def test_list_addresses_skips_empty_and_junk(tmp_path, monkeypatch):
+    # An anchor entry with no usable address is useless — the worker drops it so
+    # downstream consumers (the create-dialog picker) never see a blank option,
+    # rather than relying on every consumer to filter defensively.
+    monkeypatch.setattr(w, "DAISY_ROOT", tmp_path)
+    (tmp_path / "my_addresses.json").write_text(
+        json.dumps({"addresses": [
+            {"name": "Real", "full_address": "1 Main St, Reno, NV"},
+            {"name": "NoAddr"},                 # dict, no full_address/address
+            {"full_address": "   "},            # whitespace-only -> empty
+            "",                                  # blank bare string
+            "  ",                                # whitespace bare string
+            123,                                 # non-str/non-dict junk
+            {"address": "2 Oak Ave, Reno, NV"},  # legacy 'address' key honored
+            # whitespace full_address must NOT mask a valid 'address' fallback
+            {"full_address": "   ", "address": "3 Pine St, Reno, NV"},
+            # non-string / null values must be coerced safely, never .strip()'d
+            {"full_address": 123},               # int -> dropped, no crash
+            {"full_address": None, "address": "4 Birch Ln, Reno, NV"},  # null -> fallback
+        ]}), encoding="utf-8")
+    addrs = w._list_addresses()
+    fulls = [a["full_address"] for a in addrs]
+    assert fulls == ["1 Main St, Reno, NV", "2 Oak Ave, Reno, NV",
+                     "3 Pine St, Reno, NV", "4 Birch Ln, Reno, NV"]
+
+
+def test_list_addresses_bare_list_no_wrapper(tmp_path, monkeypatch):
+    # my_addresses.json may be a bare list (no {"addresses": ...} wrapper).
+    monkeypatch.setattr(w, "DAISY_ROOT", tmp_path)
+    (tmp_path / "my_addresses.json").write_text(
+        json.dumps(["5 Pine Rd, Reno, NV", {"full_address": "6 Elm St"}]),
+        encoding="utf-8")
+    fulls = [a["full_address"] for a in w._list_addresses()]
+    assert fulls == ["5 Pine Rd, Reno, NV", "6 Elm St"]
 
 
 def test_db_functions_missing_db_are_safe(tmp_path, monkeypatch):
