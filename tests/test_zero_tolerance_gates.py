@@ -74,11 +74,13 @@ def test_refunded_is_never_lost_by_any_later_read():
 
 
 def test_garbage_current_status_defaults_to_unchecked():
-    # An unparseable stored status must not crash; it's treated as `unchecked`
-    # (rank 0) so a real fresh read wins cleanly.
+    # An unparseable / empty / missing stored status must not crash; it's
+    # treated as `unchecked` (rank 0) so a real fresh WEAK read wins cleanly.
+    # (Use weak `detected` values so the current-parsing fallback is actually
+    # exercised — a `refunded` detected would early-return before parsing.)
     assert R("not_a_real_status", S.not_refunded) == S.not_refunded
     assert R("", S.pending_claim) == S.pending_claim
-    assert R(None, S.refunded) == S.refunded
+    assert R(None, S.not_refunded) == S.not_refunded
 
 
 def test_unconfirmed_outranks_pending_claim_on_weak_read():
