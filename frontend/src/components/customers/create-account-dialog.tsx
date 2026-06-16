@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { format } from "date-fns"
 import {
   CalendarDays,
+  ChevronLeft,
   CircleAlert,
   CircleCheck,
   LoaderCircle,
@@ -30,18 +31,36 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { api, ApiError } from "@/lib/api"
 import type { CreateAccountRequest } from "@/lib/types"
+import {
+  SETTINGS_QUERY_KEY,
+  type AppSettings,
+} from "@/components/settings/shared"
 import { useRunStore } from "@/store/runStore"
 import { cn } from "@/lib/utils"
 import { apiErrorDetail } from "./helpers"
 import { HeadlessToggle, useHeadlessOverride } from "./headless-toggle"
+import { CopyValue } from "./copy-cell"
+import { ResultsTable, type CreatedRow } from "./results-table"
 
-type Phase = "idle" | "starting" | "running" | "created" | "failed"
+/** Sentinel option value: reveal a free-text field for a typed custom address. */
+const CUSTOM_ANCHOR = "__custom__"
+
+type Phase =
+  | "idle"
+  | "confirm"
+  | "starting"
+  | "running"
+  | "created"
+  | "failed"
 
 /** One row in the live progress list during account creation. */
 type StepKey = "identity" | "number" | "signup" | "otp" | "account"
@@ -93,14 +112,6 @@ interface RentedNumber {
   price: number | null
 }
 
-interface CreatedAccount {
-  customer_id: number
-  name: string
-  email: string
-  phone: string
-  bucket_date: string
-}
-
 function str(v: unknown, fallback = ""): string {
   return typeof v === "string" ? v : fallback
 }
@@ -127,8 +138,10 @@ export function CreateAccountDialog({
   const [date, setDate] = useState<Date>(() => new Date())
   const [dateOpen, setDateOpen] = useState(false)
   const [location, setLocation] = useState<string>("")
+  const [customAddress, setCustomAddress] = useState<string>("")
   const [radius, setRadius] = useState<string>("5")
   const [count, setCount] = useState<string>("1")
+  const [unique, setUnique] = useState<boolean>(true)
   const [batchLabel, setBatchLabel] = useState<string>("")
   const [batchInfo, setBatchInfo] = useState<{ index: number; of: number; created: number } | null>(null)
   const { headless, setHeadless } = useHeadlessOverride()
@@ -145,11 +158,20 @@ export function CreateAccountDialog({
   const [rented, setRented] = useState<RentedNumber | null>(null)
   const [otpCode, setOtpCode] = useState<string | null>(null)
   const [otpResent, setOtpResent] = useState(false)
-  const [created, setCreated] = useState<CreatedAccount | null>(null)
+  // Append-only across a batch — the results table accumulates every account.
+  const [results, setResults] = useState<CreatedRow[]>([])
+  // Human-readable "✅ [n/N] Name · email · phone" lines shown live as a log.
+  const [liveLines, setLiveLines] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
 
   /** Ignore SSE events that predate this creation attempt. */
   const baselineEventId = useRef(-1)
+
+  /** The batch index of the account currently being created — captured from
+      batch_progress so the account_created log line shows the right [n/N], even
+      if the NEXT account's batch_progress lands in the same React render batch
+      (reading batchInfo.index there would be one ahead). */
+  const currentBatchIdx = useRef(0)
 
   // Pull Daisy locations + balance when the dialog opens (subprocess: ~1-3s).
   const locationsQuery = useQuery({
@@ -172,6 +194,19 @@ export function CreateAccountDialog({
   const anchors = (anchorsQuery.data?.addresses ?? []).filter(
     (a) => a.full_address,
   )
+
+  // Daisy settings supply the default email-inbox password — prefill it (the
+  // user can override per batch). Display/prefill only; no write-back here.
+  const settingsQuery = useQuery({
+    queryKey: SETTINGS_QUERY_KEY,
+    queryFn: () => api.get<AppSettings>("/settings"),
+    enabled: open,
+    staleTime: 60_000,
+  })
+  // The email-inbox password CustomerDaisy will use for each new account. It's
+  // a server-side setting (not a per-request field), so this is shown read-only
+  // for transparency — change it on the Settings page, not here.
+  const defaultPassword = settingsQuery.data?.daisy?.default_password ?? ""
 
   // Default the location to the first option (Edenton) once they load.
   useEffect(() => {
@@ -198,6 +233,10 @@ export function CreateAccountDialog({
         setBatchInfo({ index: 0, of: num(d.of) ?? num(d.count) ?? 1, created: 0 })
         break
       case "batch_progress":
+        // Pin the index for the account about to be created; account_created
+        // reads this ref (not batchInfo) so a fast next-account batch_progress
+        // can't make the log line read one ahead.
+        currentBatchIdx.current = num(d.index) ?? 0
         setBatchInfo({
           index: num(d.index) ?? 0,
           of: num(d.of) ?? 1,
@@ -256,14 +295,27 @@ export function CreateAccountDialog({
       case "otp_resent":
         setOtpResent(true)
         break
-      case "account_created":
-        setCreated({
+      case "account_created": {
+        const row: CreatedRow = {
           customer_id: num(d.customer_id) ?? -1,
           name: str(d.name),
           email: str(d.email),
+          email_password: str(d.email_password),
           phone: str(d.phone),
+          daisy_id: str(d.daisy_id),
+          full_address: str(d.full_address),
+          dist_from_anchor: num(d.dist_from_anchor),
           bucket_date: str(d.bucket_date),
-        })
+        }
+        // Append (never overwrite) so a batch accumulates every account.
+        setResults((rs) => [...rs, row])
+        const nOf = batchInfo && batchInfo.of > 1
+          ? `[${currentBatchIdx.current}/${batchInfo.of}] `
+          : ""
+        setLiveLines((ls) => [
+          ...ls,
+          `✅ ${nOf}${row.name || "new customer"} · ${row.email} · ${row.phone}`,
+        ])
         setSteps({
           identity: "done",
           number: "done",
@@ -279,6 +331,7 @@ export function CreateAccountDialog({
           setPhase("created")
         }
         break
+      }
       case "account_failed":
         // a single failure in a batch is non-fatal — keep running; only fail the
         // whole dialog for a single (non-batch) creation.
@@ -304,11 +357,15 @@ export function CreateAccountDialog({
     setRented(null)
     setOtpCode(null)
     setOtpResent(false)
-    setCreated(null)
     setError(null)
-    // Per-account resets (mid-batch) preserve batch context; a full reset
-    // (close/idle) clears it.
-    if (!opts?.keepBatch) setBatchInfo(null)
+    // Per-account resets (mid-batch) preserve batch context AND the accumulated
+    // results/log — clearing them on keepBatch would leave only the last
+    // account in the table. A full reset (close/idle) clears everything.
+    if (!opts?.keepBatch) {
+      setBatchInfo(null)
+      setResults([])
+      setLiveLines([])
+    }
   }
 
   function resetToIdle() {
@@ -323,29 +380,36 @@ export function CreateAccountDialog({
       // Clear the batch label so a re-open with no initialBatch starts blank
       // (an add-to-batch label must not carry into a later plain create).
       setBatchLabel("")
+      setCustomAddress("")
       setDate(new Date())
       setDateOpen(false)
     }
+  }
+
+  /** The bare anchor address to send, resolving the 3 picker sources:
+      predefined location, "anchor:"-prefixed saved address, or a typed custom
+      address (the CUSTOM_ANCHOR sentinel). */
+  function resolvedOrigin(): string {
+    if (location === CUSTOM_ANCHOR) return customAddress.trim()
+    if (location.startsWith("anchor:")) return location.slice("anchor:".length)
+    return location
   }
 
   async function start() {
     resetProgress()
     setPhase("starting")
     baselineEventId.current = useRunStore.getState().lastEvent?.id ?? -1
+    currentBatchIdx.current = 0
     setBatchInfo(null)
     const radiusMiles = Number(radius)
     const n = Math.max(1, Math.floor(Number(count) || 1))
-    // Anchor-pool selections carry an "anchor:" prefix (so they can't be
-    // deduped against a predefined location of the same address) — strip it to
-    // send the bare origin address.
-    const origin = location.startsWith("anchor:")
-      ? location.slice("anchor:".length)
-      : location
+    const origin = resolvedOrigin()
     const body: CreateAccountRequest = {
       bucket_date: format(date, "yyyy-MM-dd"),
       location_origin: origin || undefined,
       radius_miles: Number.isFinite(radiusMiles) ? radiusMiles : undefined,
       count: n,
+      unique,
       batch_label: batchLabel.trim() || undefined,
       // Join the existing batch when the dialog was opened for that.
       batch_id: initialBatch?.batch_id || undefined,
@@ -368,7 +432,12 @@ export function CreateAccountDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent
+        className={cn(
+          // The results table needs room; the form/progress views stay compact.
+          phase === "created" ? "sm:max-w-3xl" : "sm:max-w-md",
+        )}
+      >
         <DialogHeader>
           <DialogTitle>Create account</DialogTitle>
           <DialogDescription>
@@ -412,15 +481,15 @@ export function CreateAccountDialog({
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="create-account-location">Location</Label>
+                <Label htmlFor="create-account-location">Anchor address</Label>
                 {locationsQuery.isLoading ? (
                   <div className="flex h-8 items-center gap-2 px-1 text-sm text-muted-foreground">
                     <LoaderCircle className="size-4 animate-spin" />
-                    Loading locations…
+                    Loading anchors…
                   </div>
                 ) : locationsQuery.isError ? (
                   <p className="text-sm text-destructive">
-                    Could not load locations.
+                    Could not load anchors.
                   </p>
                 ) : (
                   <Select
@@ -439,6 +508,7 @@ export function CreateAccountDialog({
                         // submit.
                         value: `anchor:${a.full_address}`,
                       })),
+                      { label: "✎ Custom address…", value: CUSTOM_ANCHOR },
                     ]}
                     value={location}
                     onValueChange={(v) => {
@@ -452,25 +522,49 @@ export function CreateAccountDialog({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {locations.map((l) => (
-                        <SelectItem key={l.index} value={l.full_address}>
-                          {l.name} — {l.city}, {l.state}
+                      {/* Source 1: the predefined CustomerDaisy anchors. */}
+                      <SelectGroup>
+                        <SelectLabel>Predefined anchors</SelectLabel>
+                        {locations.map((l) => (
+                          <SelectItem key={l.index} value={l.full_address}>
+                            {l.name} — {l.city}, {l.state}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                      {/* Source 2: the user's own saved anchor pool
+                          (my_addresses.json), managed in My Anchors. */}
+                      {anchors.length > 0 ? (
+                        <SelectGroup>
+                          <SelectLabel>My anchors</SelectLabel>
+                          {anchors.map((a) => (
+                            <SelectItem
+                              key={`anchor:${a.full_address}`}
+                              value={`anchor:${a.full_address}`}
+                            >
+                              ★ {a.name ? `${a.name} — ` : ""}
+                              {a.full_address}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      ) : null}
+                      {/* Source 3: a one-off typed address. */}
+                      <SelectGroup>
+                        <SelectLabel>Custom</SelectLabel>
+                        <SelectItem value={CUSTOM_ANCHOR}>
+                          ✎ Custom address…
                         </SelectItem>
-                      ))}
-                      {/* The user's own saved addresses (my_addresses.json),
-                          starred to distinguish them from predefined cities. */}
-                      {anchors.map((a) => (
-                        <SelectItem
-                          key={`anchor:${a.full_address}`}
-                          value={`anchor:${a.full_address}`}
-                        >
-                          ★ {a.name ? `${a.name} — ` : ""}
-                          {a.full_address}
-                        </SelectItem>
-                      ))}
+                      </SelectGroup>
                     </SelectContent>
                   </Select>
                 )}
+                {location === CUSTOM_ANCHOR ? (
+                  <Input
+                    aria-label="Custom anchor address"
+                    placeholder="123 Main St, City, ST 00000"
+                    value={customAddress}
+                    onChange={(e) => setCustomAddress(e.target.value)}
+                  />
+                ) : null}
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -495,6 +589,40 @@ export function CreateAccountDialog({
                     onChange={(e) => setCount(e.target.value)}
                   />
                 </div>
+              </div>
+
+              <div className="flex items-start justify-between gap-3 rounded-lg border border-border px-3 py-2.5">
+                <div className="space-y-0.5">
+                  <Label htmlFor="create-account-unique">
+                    Unique address per account
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    {unique
+                      ? "Each account gets its own address within the radius."
+                      : "All accounts share one address near the anchor."}
+                  </p>
+                </div>
+                <Switch
+                  id="create-account-unique"
+                  checked={unique}
+                  onCheckedChange={setUnique}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="create-account-email-pw">Email password</Label>
+                <Input
+                  id="create-account-email-pw"
+                  readOnly
+                  value={
+                    settingsQuery.isLoading ? "Loading…" : defaultPassword
+                  }
+                  className="text-muted-foreground"
+                />
+                <p className="text-xs text-muted-foreground">
+                  From CustomerDaisy settings; used for each new inbox. Change it
+                  on the Settings page.
+                </p>
               </div>
 
               {Number(count) > 1 ? (
@@ -547,11 +675,66 @@ export function CreateAccountDialog({
                 Cancel
               </DialogClose>
               <Button
-                onClick={() => void start()}
-                disabled={locationsQuery.isLoading}
+                onClick={() => setPhase("confirm")}
+                disabled={
+                  locationsQuery.isLoading ||
+                  (location === CUSTOM_ANCHOR && !customAddress.trim())
+                }
               >
                 <Sparkles data-icon="inline-start" />
-                Create account
+                Review
+              </Button>
+            </DialogFooter>
+          </>
+        ) : null}
+
+        {phase === "confirm" ? (
+          <>
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Review the generation settings, then proceed.
+              </p>
+              <dl className="divide-y divide-border rounded-lg border border-border text-sm">
+                <SettingRow label="Anchor">
+                  <CopyValue value={resolvedOrigin()} label="anchor address" />
+                </SettingRow>
+                <SettingRow label="Radius">
+                  <span className="num">{radius} mi</span>
+                </SettingRow>
+                <SettingRow label="Addresses">
+                  {unique ? "Unique per account" : "Shared (one address)"}
+                </SettingRow>
+                <SettingRow label="How many">
+                  <span className="num">
+                    {Math.max(1, Math.floor(Number(count) || 1))}
+                  </span>
+                </SettingRow>
+                <SettingRow label="Email PW">
+                  <CopyValue value={defaultPassword} label="email password" mono />
+                </SettingRow>
+                <SettingRow label="Bucket">
+                  <span className="num">{format(date, "yyyy-MM-dd")}</span>
+                </SettingRow>
+              </dl>
+              {balance !== null ? (
+                <p
+                  className={cn(
+                    "text-xs",
+                    lowBalance ? "text-amber-500" : "text-muted-foreground",
+                  )}
+                >
+                  api.cc balance: ${balance.toFixed(2)}
+                </p>
+              ) : null}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setPhase("idle")}>
+                <ChevronLeft data-icon="inline-start" />
+                Back
+              </Button>
+              <Button onClick={() => void start()}>
+                <Sparkles data-icon="inline-start" />
+                Looks good — proceed
               </Button>
             </DialogFooter>
           </>
@@ -579,6 +762,15 @@ export function CreateAccountDialog({
                 otpResent={otpResent}
               />
             </div>
+            {liveLines.length > 0 ? (
+              <div className="max-h-32 space-y-0.5 overflow-y-auto rounded-lg border border-border bg-card px-3 py-2 text-xs">
+                {liveLines.map((line, i) => (
+                  <p key={i} className="text-muted-foreground">
+                    {line}
+                  </p>
+                ))}
+              </div>
+            ) : null}
             <DialogFooter>
               <DialogClose render={<Button variant="outline" />}>
                 Hide — creation keeps running
@@ -589,24 +781,13 @@ export function CreateAccountDialog({
 
         {phase === "created" ? (
           <>
-            <div className="flex flex-col items-center gap-4 py-6 text-center">
-              <div className="flex size-12 items-center justify-center rounded-full bg-emerald-500/10 ring-1 ring-emerald-500/25">
-                <CircleCheck className="size-6 text-emerald-500" />
-              </div>
-              <div className="space-y-1">
-                <p className="text-sm font-medium">Account created</p>
-                <p className="text-sm text-muted-foreground">
-                  {created?.name || "Customer"}
-                  {created?.email ? ` · ${created.email}` : ""}
-                </p>
-                {created?.phone ? (
-                  <p className="text-xs text-muted-foreground">
-                    {created.phone}
-                    {created.bucket_date ? ` · ${created.bucket_date}` : ""}
-                  </p>
-                ) : null}
-              </div>
+            <div className="flex items-center gap-2 py-1 text-sm font-medium text-emerald-500">
+              <CircleCheck className="size-5" />
+              {results.length === 1
+                ? "Account created"
+                : `${results.length} accounts created`}
             </div>
+            <ResultsTable rows={results} />
             <DialogFooter>
               <Button variant="outline" onClick={resetToIdle}>
                 Create another
@@ -636,6 +817,22 @@ export function CreateAccountDialog({
         ) : null}
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** One label/value row in the confirm-step generation-settings card. */
+function SettingRow({
+  label,
+  children,
+}: {
+  label: string
+  children: ReactNode
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 px-3 py-2">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 truncate text-right font-medium">{children}</dd>
+    </div>
   )
 }
 

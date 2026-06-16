@@ -365,3 +365,111 @@ async def test_non_api_path_still_serves_spa_shell(client):
     r = await client.get("/reports")
     assert r.status_code == 200
     assert "<!doctype html" in r.text.lower()
+
+
+# ── create-account: the unique flag + per-batch address pre-resolve ──────────
+
+
+def test_create_account_body_accepts_unique():
+    """unique defaults True (per-account addresses); False = shared address."""
+    from backend.routes.customers import CreateAccountBody
+    assert CreateAccountBody().unique is True
+    assert CreateAccountBody(unique=False).unique is False
+
+
+class _FakeGenBridge:
+    """Async-context-manager stub exposing generate_address (the only bridge
+    call _run_create_account makes when unique=False)."""
+
+    def __init__(self, address: dict | None):
+        self._address = address
+        self.calls = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def generate_address(self, origin, radius):
+        self.calls += 1
+        return self._address
+
+
+def _patch_create(monkeypatch, bridge=None):
+    """Record every create_account(...) call; never touch the real flow.
+
+    _run_create_account does inline ``from backend.account_creator import
+    create_account`` and (unique=False) ``from backend.daisy.bridge import
+    DaisyBridge`` — patch the SOURCE attrs so the lazy imports resolve to fakes.
+    """
+    calls: list[dict] = []
+
+    async def fake_create(**kwargs):
+        calls.append(kwargs)
+        return {"customer_id": len(calls)}
+
+    monkeypatch.setattr("backend.account_creator.create_account", fake_create)
+    if bridge is not None:
+        monkeypatch.setattr("backend.daisy.bridge.DaisyBridge",
+                            lambda *a, **k: bridge)
+    return calls
+
+
+async def _drain_create_task():
+    """Await the fire-and-forget create task so assertions see the finished run."""
+    from backend.routes import customers
+    if customers._create_task:
+        await customers._create_task
+
+
+async def test_create_account_started_returns_started(client, monkeypatch):
+    _patch_create(monkeypatch)
+    r = await client.post("/api/customers/create-account",
+                          json={"count": 1, "unique": True})
+    assert r.status_code == 200
+    assert r.json() == {"started": True}
+    await _drain_create_task()
+
+
+async def test_create_account_unique_true_passes_no_fixed_address(
+        client, monkeypatch):
+    bridge = _FakeGenBridge({"full_address": "should not be used"})
+    calls = _patch_create(monkeypatch, bridge)
+    r = await client.post("/api/customers/create-account",
+                          json={"count": 2, "unique": True})
+    assert r.status_code == 200
+    await _drain_create_task()
+    # unique=True never pre-resolves a shared address.
+    assert bridge.calls == 0
+    assert len(calls) == 2
+    assert all(c["fixed_address"] is None for c in calls)
+
+
+async def test_create_account_unique_false_preresolves_one_address(
+        client, monkeypatch):
+    bridge = _FakeGenBridge({"full_address": "42 Shared St, Tampa, FL"})
+    calls = _patch_create(monkeypatch, bridge)
+    r = await client.post("/api/customers/create-account",
+                          json={"count": 3, "unique": False})
+    assert r.status_code == 200
+    await _drain_create_task()
+    # Exactly ONE pre-resolve for the whole batch; every account pinned to it.
+    assert bridge.calls == 1
+    assert len(calls) == 3
+    assert all(c["fixed_address"] == "42 Shared St, Tampa, FL" for c in calls)
+
+
+async def test_create_account_unique_false_falls_back_when_no_address(
+        client, monkeypatch):
+    """A flaky MapQuest lookup (None) must NOT abort the batch — fall back to
+    per-account unique addresses (fixed_address=None)."""
+    bridge = _FakeGenBridge(None)
+    calls = _patch_create(monkeypatch, bridge)
+    r = await client.post("/api/customers/create-account",
+                          json={"count": 2, "unique": False})
+    assert r.status_code == 200
+    await _drain_create_task()
+    assert bridge.calls == 1
+    assert len(calls) == 2
+    assert all(c["fixed_address"] is None for c in calls)

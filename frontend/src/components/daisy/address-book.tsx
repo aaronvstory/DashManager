@@ -117,7 +117,7 @@ export function AddressBook() {
       <header className="flex items-center gap-2 border-b border-border px-4 py-3">
         <MapPin className="size-4 text-muted-foreground" />
         <h2 className="font-mono text-sm font-semibold uppercase tracking-wide">
-          Anchor Address Book
+          My Anchors
         </h2>
         <span className="ml-auto font-mono text-xs text-muted-foreground">
           {rows.length} saved
@@ -125,9 +125,10 @@ export function AddressBook() {
       </header>
 
       <p className="px-4 pt-3 text-xs text-muted-foreground">
-        Your own saved addresses (CustomerDaisy's <code>my_addresses.json</code>).
-        Offered as a batch origin in the create-account dialog. Full address is
-        required; name/city/state are optional labels.
+        Your saved anchor addresses (CustomerDaisy's{" "}
+        <code>my_addresses.json</code>) — the <strong>My anchors</strong> source
+        in the Create account dialog's anchor picker. Full address is required;
+        name/city/state are optional labels.
       </p>
 
       {/* Generate-near-origin: fills the add form with a real MapQuest address

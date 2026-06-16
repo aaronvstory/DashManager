@@ -191,6 +191,9 @@ export interface CreateAccountRequest extends HeadlessOverride {
   location_origin?: string
   radius_miles?: number
   count?: number
+  /** True (default): each account gets its own address within the radius.
+      False: the whole batch shares ONE pre-resolved anchor address. */
+  unique?: boolean
   batch_label?: string
   /** Join an existing batch (add-one-to-batch) instead of minting a new id. */
   batch_id?: string
@@ -277,6 +280,7 @@ export type EventType =
   | "otp_waiting"
   | "otp_received"
   | "otp_resent"
+  | "address_set"
   | "account_created"
   | "account_failed"
   | "batch_started"
@@ -324,6 +328,7 @@ export const EVENT_TYPES: readonly EventType[] = [
   "otp_waiting",
   "otp_received",
   "otp_resent",
+  "address_set",
   "account_created",
   "account_failed",
   "batch_started",

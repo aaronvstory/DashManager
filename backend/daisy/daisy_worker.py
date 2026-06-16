@@ -527,6 +527,10 @@ def handle(mgr: Managers, cmd: str, args: dict) -> dict:
                     "longitude": addr.get("longitude"),
                     "address_source": addr.get("source", "mapquest_real_poi"),
                     "address_validated": True,
+                    # Miles from the anchor — MapQuest's POI radius search
+                    # returns this per result; carry it through for the
+                    # create-modal results table (Dist column).
+                    "dist_from_anchor": addr.get("distance_from_origin"),
                 })
         # Create the Mail.tm inbox now (so email is real + readable later).
         email = mgr.mail.create_account(data["first_name"], data["last_name"])
