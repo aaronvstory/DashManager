@@ -55,6 +55,13 @@ export default function OtpPage() {
   const [mode, setMode] = useState<Mode>("bucket")
   const [paused, setPaused] = useState(false)
 
+  // Switching mode mounts a fresh sub-view with new queries — resume live so it
+  // doesn't silently start paused just because the other mode was paused.
+  function selectMode(m: Mode) {
+    setMode(m)
+    setPaused(false)
+  }
+
   return (
     <>
       <PageHeader
@@ -66,7 +73,7 @@ export default function OtpPage() {
             <div className="flex overflow-hidden border border-border">
               <button
                 type="button"
-                onClick={() => setMode("bucket")}
+                onClick={() => selectMode("bucket")}
                 className={cn(
                   "px-3 py-1.5 text-sm font-medium transition-colors",
                   mode === "bucket"
@@ -78,7 +85,7 @@ export default function OtpPage() {
               </button>
               <button
                 type="button"
-                onClick={() => setMode("batch")}
+                onClick={() => selectMode("batch")}
                 className={cn(
                   "border-l border-border px-3 py-1.5 text-sm font-medium transition-colors",
                   mode === "batch"

@@ -4,8 +4,10 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { FreshnessBar } from "./freshness-bar"
 
-/** A live SMS-code row. `email` is shown only in batch mode (optional). */
+/** A live SMS-code row. `id` is present in bucket mode (the customer's DB id,
+    stable across polls); `email` is shown only in batch mode. */
 export interface OtpRow {
+  id?: number
   name: string
   phone: string
   code: string
@@ -70,9 +72,9 @@ export function OtpTable({
         <tbody>
           {rows.map((r, i) => (
             <OtpTableRow
-              // phone is the stable identity within a view; index disambiguates
-              // the rare case of two rows sharing one (reused) number.
-              key={`${r.phone}-${i}`}
+              // Prefer the customer DB id (stable across polls, bucket mode);
+              // fall back to phone+index for batch rows that carry no id.
+              key={r.id != null ? String(r.id) : `${r.phone}-${i}`}
               row={r}
               fetchedAt={fetchedAt}
               paused={paused}

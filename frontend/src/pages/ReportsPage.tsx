@@ -46,11 +46,12 @@ function prettyDate(date: string): string {
 export default function ReportsPage() {
   const qc = useQueryClient()
   // A ?date=YYYY-MM-DD param (e.g. the Customer Data → "this day's report"
-  // cross-link) pre-selects that day; otherwise the newest report is chosen.
+  // cross-link) pre-selects that day — but only once the reports list confirms
+  // it exists, else a bucket with no report yet would stick on a 404. The seed
+  // can't go in useState's initializer: the list is async (empty at init).
   const [searchParams] = useSearchParams()
-  const [selected, setSelected] = useState<string | null>(
-    () => searchParams.get("date"),
-  )
+  const seedDate = searchParams.get("date")
+  const [selected, setSelected] = useState<string | null>(null)
 
   const list = useQuery({
     queryKey: ["reports"],
@@ -59,8 +60,10 @@ export default function ReportsPage() {
   const reports = list.data?.reports ?? []
 
   useEffect(() => {
-    if (selected === null && reports.length > 0) setSelected(reports[0].date)
-  }, [reports, selected])
+    if (selected !== null || reports.length === 0) return
+    const valid = seedDate && reports.some((r) => r.date === seedDate)
+    setSelected(valid ? seedDate : reports[0].date)
+  }, [reports, selected, seedDate])
 
   const detail = useQuery({
     queryKey: ["report-data", selected],
