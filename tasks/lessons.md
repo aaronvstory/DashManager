@@ -33,3 +33,8 @@
 - **Finding:** Old working signup = `undetected_chromedriver` + REAL Chrome binary (`options.binary_location = ".../chrome.exe"`), only 3 cosmetic args (disable-notifications/infobars/mute-audio). NO mobile emulation, NO custom UA, NO proxy — ran on the home residential IP. Navigated to `consumer/login/` then clicked "Sign Up" (not direct /signup). Window 1023x919.
 - **Rule:** "Mobile mode" was a misremember — it was desktop UC Chrome on a clean home IP. The proxy may be HURTING (slow gateway / flagged residential). Test direct-IP UC Chrome as a first-class path.
 - **Context:** DashManager account creation. Selectors then were ID-based (FieldWrapper-N) — likely changed; key on autocomplete attrs now.
+
+## Deferred a free receipt-recheck on unconfirmed refunds (real money) — 2026-06-16
+- **Mistake:** Left 3 `unconfirmed` refund orders un-rechecked overnight, reporting "needs your manual attention / left for when you're around" — while running the IDENTICAL headed detect for another customer (Kristi) every 2h. When finally run, all 3 had posted (were already refunded, just unverified). Browser was open and clear repeatedly.
+- **Rule:** An `unconfirmed` order is a chat PROMISE, not a stuck case. `refund_run detect --ids <list>` is a ~60s read that auto-promotes posted refunds. NEVER defer it, NEVER hand it back to the user, and ALWAYS batch every unconfirmed/unchecked order into any detect pass already running (--ids is a comma list). A round isn't done while any order is unconfirmed/unchecked. Only a genuinely-stuck not_refunded (post-supervisor) waits for the user.
+- **Context:** Any DashManager refund session/cron. Updated [[feedback-autonomous-refund-sessions]] + /dash-refunds skill.
