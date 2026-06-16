@@ -97,6 +97,16 @@ def test_summary_cards_present():
         assert label in out
 
 
+def test_unchecked_card_shows_only_when_there_are_unchecked():
+    # clean board (sample model has 0 unchecked) -> no Unchecked card.
+    assert "Unchecked" not in report._summary_cards(
+        report._summarize(_sample_model()["customers"]))
+    # a board with an unchecked order -> the Unchecked card surfaces.
+    s = report._summarize([{"orders": [{"refund_status": "unchecked"}]}])
+    cards = report._summary_cards(s)
+    assert "Unchecked" in cards and ">1<" in cards
+
+
 def test_html_escaping_blocks_injection():
     model = _sample_model()
     model["customers"][0]["first_name"] = "<script>alert(1)</script>"
@@ -141,10 +151,11 @@ def test_needs_you_unchecked_vs_unknown_distinction():
 def test_summarize_counts_over_sample_model():
     # The summary-card math (not just that the labels render): 3 customers,
     # 3 orders, 1 refunded, 2 pursuing (pending_claim + not_refunded), no
-    # unconfirmed, 1 no-orders customer, 2 needs-you, 2 active sessions.
+    # unconfirmed/unchecked, 1 no-orders customer, 2 needs-you, 2 active sessions.
     s = report._summarize(_sample_model()["customers"])
     assert s == {"customers": 3, "orders": 3, "refunded": 1, "pursuing": 2,
-                 "unconfirmed": 0, "no_orders": 1, "needs_you": 2, "active": 2}
+                 "unconfirmed": 0, "unchecked": 0, "no_orders": 1,
+                 "needs_you": 2, "active": 2}
 
 
 def test_summarize_unconfirmed_counts_as_pursuing_and_needs_you():
@@ -163,8 +174,27 @@ def test_summarize_unconfirmed_counts_as_pursuing_and_needs_you():
     assert s["refunded"] == 1
     assert s["unconfirmed"] == 1
     assert s["pursuing"] == 1                  # only the unconfirmed one
+    assert s["unchecked"] == 1                 # the unchecked order is COUNTED
     assert s["needs_you"] == 1                 # only the unconfirmed one
     assert s["active"] == 1
+
+
+def test_summarize_is_exhaustive_no_silent_gaps():
+    # Every order lands in exactly one top-level bucket: refunded + pursuing +
+    # unchecked == orders (pursuing already includes unconfirmed). An order with
+    # an unrecognized status is bucketed as `unchecked`, never silently dropped.
+    rows = [{"orders": [
+        {"refund_status": "refunded"},
+        {"refund_status": "not_refunded"},
+        {"refund_status": "unconfirmed"},
+        {"refund_status": "unchecked"},
+        {"refund_status": "some_future_status"},   # unrecognized -> unchecked
+        {},                                         # missing -> unchecked default
+    ]}]
+    s = report._summarize(rows)
+    assert s["orders"] == 6
+    assert s["refunded"] + s["pursuing"] + s["unchecked"] == s["orders"]
+    assert s["unchecked"] == 3                  # unchecked + future + missing
 
 
 def test_summarize_empty():
@@ -172,7 +202,8 @@ def test_summarize_empty():
     # caught, not just the three keys we'd eyeball.
     assert report._summarize([]) == {
         "customers": 0, "orders": 0, "refunded": 0, "pursuing": 0,
-        "unconfirmed": 0, "no_orders": 0, "needs_you": 0, "active": 0}
+        "unconfirmed": 0, "unchecked": 0, "no_orders": 0, "needs_you": 0,
+        "active": 0}
 
 
 def test_resolution_method_unconfirmed_never_reads_resolved():
