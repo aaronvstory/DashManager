@@ -453,6 +453,17 @@ HOME_ADDR_SELECTORS = (
     'input[role="combobox"]')
 
 
+def _field_present(sb: Any, selectors: tuple[str, ...]) -> bool:
+    """True if any of the selectors matches an element on the page right now."""
+    for sel in selectors:
+        try:
+            if sb.cdp.find_element(sel):
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _fill_home_address(sb: Any, full_address: str) -> bool:
     """Type the address into the home-page modal and commit it. Returns True iff
     the field shows the address afterward.
@@ -503,10 +514,15 @@ def _finish_account(sb: Any, identity: dict[str, Any], os_input: bool,
         # keystrokes into the already-focused field and press Enter. No element
         # lookup, no click, no suggestion handling.
         if full_address:
-            # Wait for the "$0 delivery fee" modal (renders on /home right after
-            # OTP; ~10-15s). Then fill the address box (id=HomeAddressAutocomplete,
-            # placeholder "Enter delivery address") and press Enter.
-            time.sleep(15)
+            # Poll for the "$0 delivery fee" modal's address box to render (on
+            # /home right after OTP; usually ~10s but slow machines vary). A
+            # deadline-poll beats a bare sleep(15): it proceeds the moment the
+            # field is present and still tolerates a slow render up to the cap.
+            deadline = time.time() + 30
+            while time.time() < deadline:
+                if _field_present(sb, HOME_ADDR_SELECTORS):
+                    break
+                time.sleep(1.5)
             ok = _fill_home_address(sb, full_address)
             emit("signup_address_filled",
                  {"address": full_address[:60], "ok": ok})
@@ -911,11 +927,26 @@ def signup_via_cdp(identity: dict[str, Any], *,
                     # lags). The "$0 delivery fee" address modal renders ON /home.
                     created = False
                     post = time.time() + 60
+                    # The verify modal IS up right now (we just entered the code
+                    # into it). "modal_gone" only means success if it disappears
+                    # AND we didn't land on a bot-block/error page — a bare
+                    # not-_page_has check would fire True on ANY page lacking the
+                    # verify strings (blank/error/empty source), falsely marking
+                    # a failed signup "created". So: a home URL is success
+                    # outright; otherwise require the modal to vanish AND no
+                    # bot-block marker AND the URL left the verify/login step.
                     while time.time() < post:
-                        url_ok = any(m in _cdp_url(sb)
-                                     for m in SUCCESS_URL_MARKERS)
+                        url = _cdp_url(sb)
+                        if any(m in url for m in SUCCESS_URL_MARKERS):
+                            created = True
+                            break
+                        if _page_has(sb, BOT_BLOCK_MARKERS):
+                            break  # not created — bot-blocked after OTP
                         modal_gone = not _page_has(sb, VERIFY_MARKERS)
-                        if url_ok or modal_gone:
+                        left_auth = not any(s in url.lower()
+                                            for s in ("verify", "/auth",
+                                                      "login"))
+                        if modal_gone and left_auth and "doordash.com" in url:
                             created = True
                             break
                         time.sleep(2.0)
