@@ -165,11 +165,14 @@ def test_list_addresses_skips_empty_and_junk(tmp_path, monkeypatch):
             {"address": "2 Oak Ave, Reno, NV"},  # legacy 'address' key honored
             # whitespace full_address must NOT mask a valid 'address' fallback
             {"full_address": "   ", "address": "3 Pine St, Reno, NV"},
+            # non-string / null values must be coerced safely, never .strip()'d
+            {"full_address": 123},               # int -> dropped, no crash
+            {"full_address": None, "address": "4 Birch Ln, Reno, NV"},  # null -> fallback
         ]}), encoding="utf-8")
     addrs = w._list_addresses()
     fulls = [a["full_address"] for a in addrs]
     assert fulls == ["1 Main St, Reno, NV", "2 Oak Ave, Reno, NV",
-                     "3 Pine St, Reno, NV"]
+                     "3 Pine St, Reno, NV", "4 Birch Ln, Reno, NV"]
 
 
 def test_list_addresses_bare_list_no_wrapper(tmp_path, monkeypatch):
