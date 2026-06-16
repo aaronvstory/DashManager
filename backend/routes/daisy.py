@@ -96,6 +96,18 @@ async def list_daisy_customers(limit: int = 200) -> dict[str, Any]:
     return {"customers": [_safe(c) for c in customers], "count": count}
 
 
+# Static-segment route, declared BEFORE `/{customer_id}` so it's matched as a
+# literal (same reason as /addresses below).
+@router.get("/analytics")
+async def daisy_analytics() -> dict[str, Any]:
+    """Coverage analytics over the CustomerDaisy pool: totals + verified count +
+    by-state / by-city breakdowns (each ``[{key, count}]``, count-desc). Empty
+    zeros when CustomerDaisy's DB is absent."""
+    bridge = await _bridge()
+    async with bridge as d:
+        return await d.analytics()
+
+
 # NOTE: this static-segment route is declared BEFORE `/{customer_id}` so it is
 # matched as a literal, not captured as a customer id.
 @router.get("/addresses")

@@ -23,6 +23,7 @@ Commands:
   list_recent_customers {limit}         -> {customers: [...]}
   list_customers {limit}                -> {customers: [...]}   (full list)
   customer_count                        -> {count: int}
+  analytics {limit?}                    -> {total, verified, by_state, by_city}
   get_customer {customer_id}            -> {customer: {...}|null}
   update_customer {customer_id, fields} -> {customer, updated}
   delete_customer {customer_id}         -> {deleted: bool}
@@ -280,6 +281,39 @@ def _customer_count() -> int:
         con.close()
 
 
+def _analytics(limit: int = 100000) -> dict:
+    """Coverage/analytics over CustomerDaisy's pool — counts by state, by city,
+    and verified-vs-not. Pure aggregation over the SAME normalized rows the rest
+    of the surface reads (no extra DB shape), so it's missing-DB safe (-> zeros)
+    and unit-testable without CustomerDaisy live.
+
+    Returns ``{total, verified, unverified, by_state, by_city}`` where by_state
+    /by_city are ``[{key, count}]`` lists sorted by count desc then key asc (a
+    stable order for the UI). A blank state/city is bucketed under ``"—"`` so it
+    is visible rather than silently dropped.
+    """
+    rows = _list_recent_customers(limit)
+    by_state: dict[str, int] = {}
+    by_city: dict[str, int] = {}
+    verified = 0
+    for r in rows:
+        if r.get("verification_completed"):
+            verified += 1
+        st = (r.get("state") or "").strip() or "—"
+        by_state[st] = by_state.get(st, 0) + 1
+        city = (r.get("city") or "").strip() or "—"
+        by_city[city] = by_city.get(city, 0) + 1
+
+    def _ranked(d: dict[str, int]) -> list[dict]:
+        return [{"key": k, "count": n}
+                for k, n in sorted(d.items(), key=lambda kv: (-kv[1], kv[0]))]
+
+    total = len(rows)
+    return {"total": total, "verified": verified,
+            "unverified": total - verified,
+            "by_state": _ranked(by_state), "by_city": _ranked(by_city)}
+
+
 def _export(fmt: str, limit: int) -> dict:
     """Export customers as csv | json | txt text (NOT a file — the caller saves
     it). Keeps the worker side-effect-free; DashManager owns where it lands."""
@@ -529,6 +563,9 @@ def handle(mgr: Managers, cmd: str, args: dict) -> dict:
 
     if cmd == "customer_count":
         return {"count": _customer_count()}
+
+    if cmd == "analytics":
+        return _analytics(int(args.get("limit", 100000)))
 
     if cmd == "get_customer":
         return {"customer": _get_customer(str(_req(args, "customer_id", cmd)))}

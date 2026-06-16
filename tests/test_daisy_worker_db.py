@@ -75,6 +75,51 @@ def test_customer_count(daisy_db):
     assert w._customer_count() == 2
 
 
+def test_analytics_over_pool(daisy_db):
+    # the fixture has 2 rows, both Reno/NV, one verified.
+    a = w._analytics()
+    assert a["total"] == 2
+    assert a["verified"] == 1 and a["unverified"] == 1
+    assert a["by_state"] == [{"key": "NV", "count": 2}]
+    assert a["by_city"] == [{"key": "Reno", "count": 2}]
+
+
+def test_analytics_missing_db_is_zeros(tmp_path, monkeypatch):
+    monkeypatch.setattr(w, "_daisy_db_path", lambda: tmp_path / "nope.db")
+    a = w._analytics()
+    assert a == {"total": 0, "verified": 0, "unverified": 0,
+                 "by_state": [], "by_city": []}
+
+
+def test_analytics_ranks_and_buckets_blanks(tmp_path, monkeypatch):
+    # a hand-built DB with mixed states/cities incl. a blank one -> ranked by
+    # count desc then key asc, blank bucketed under "—".
+    root = tmp_path / "daisy"
+    (root / "data").mkdir(parents=True)
+    db_path = root / "data" / "customers.db"
+    con = sqlite3.connect(str(db_path))
+    con.executescript(_SCHEMA)
+    rows = [
+        ("c1", "NV", "Reno", 1), ("c2", "NV", "Reno", 1),
+        ("c3", "NV", "Sparks", 0), ("c4", "CA", "Reno", 0),
+        ("c5", "", "", 0),                    # blank state + city
+    ]
+    con.executemany(
+        "INSERT INTO customers (customer_id, state, city,"
+        " verification_completed) VALUES (?,?,?,?)", rows)
+    con.commit()
+    con.close()
+    monkeypatch.setattr(w, "_daisy_db_path", lambda: db_path)
+    a = w._analytics()
+    assert a["total"] == 5 and a["verified"] == 2
+    # NV(3) before CA(1) before —(1); CA and — tie on count -> key asc (CA<—).
+    assert a["by_state"] == [{"key": "NV", "count": 3},
+                             {"key": "CA", "count": 1},
+                             {"key": "—", "count": 1}]
+    # Reno(3) before Sparks(1) before —(1)
+    assert a["by_city"][0] == {"key": "Reno", "count": 3}
+
+
 def test_update_customer_whitelisted_only(daisy_db):
     row = w._update_customer("cd-1", {"city": "Sparks",
                                       "customer_id": "HACK",   # ignored
