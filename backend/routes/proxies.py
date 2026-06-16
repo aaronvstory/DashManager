@@ -62,8 +62,8 @@ async def test_all_proxies() -> dict[str, Any]:
         # Do NOT echo the raw exception: it could embed the proxy URL (creds).
         # Log it server-side; return a generic message to the client.
         logger.exception("proxy test-all failed")
-        raise HTTPException(status_code=500, detail="proxy test failed") \
-            from exc
+        err = HTTPException(status_code=500, detail="proxy test failed")
+        raise err from exc
 
 
 @router.post("/test/{proxy_id}")
@@ -83,6 +83,6 @@ async def test_one_proxy(proxy_id: str) -> dict[str, Any]:
         # could embed the proxy URL (creds) in its message. Log server-side;
         # return a generic message so the client never sees the secret.
         logger.exception("proxy test-one failed")
-        raise HTTPException(status_code=500, detail="proxy test failed") \
-            from exc
+        err = HTTPException(status_code=500, detail="proxy test failed")
+        raise err from exc
     return {"local_ip": mine or "", **result}

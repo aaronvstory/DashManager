@@ -12,8 +12,11 @@ import pytest
 
 from backend.browser import proxy_pool
 
-# The secret that must never escape in an error response.
-SECRET = "user:p@ssw0rd@gw.example.com:8080"
+# The secret that must never escape in an error response. PASSWORD is asserted
+# separately so a PARTIAL leak (just the password, without the rest of the URL)
+# is still caught — checking only the full string would miss that.
+PASSWORD = "p@ssw0rd"
+SECRET = f"user:{PASSWORD}@gw.example.com:8080"
 
 
 @pytest.fixture
@@ -69,7 +72,8 @@ async def test_test_one_500_never_leaks_creds(client, monkeypatch):
     r = await client.post("/api/proxies/test/the-id")
     assert r.status_code == 500
     assert r.json()["detail"] == "proxy test failed"
-    assert SECRET not in r.text          # the creds never escape
+    assert SECRET not in r.text          # the connection string never escapes
+    assert PASSWORD not in r.text        # nor the password alone (partial leak)
 
 
 async def test_test_all_500_never_leaks_creds(client, monkeypatch):
@@ -82,3 +86,4 @@ async def test_test_all_500_never_leaks_creds(client, monkeypatch):
     assert r.status_code == 500
     assert r.json()["detail"] == "proxy test failed"
     assert SECRET not in r.text
+    assert PASSWORD not in r.text        # nor the password alone (partial leak)
