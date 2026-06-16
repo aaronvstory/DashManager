@@ -19,7 +19,9 @@ from typing import Any
 
 from playwright.async_api import Page
 
-from backend.browser.driver import handle_cloudflare, screenshot
+from backend.browser.driver import (classify_cloudflare, handle_cloudflare,
+                                    screenshot)
+from backend.browser.driver import _page_text
 from backend.browser.signup import (
     OtpPoller,
     SUCCESS_URL_MARKERS,
@@ -248,22 +250,26 @@ async def _enter_phone(page: Page, phone10: str) -> bool:
     return False
 
 
-async def phone_login_and_capture(page: Page, phone: str,
+async def phone_login_and_capture(page: Page, email: str,
                                   poll_otp: OtpPoller, *,
                                   address: dict[str, Any] | None = None,
                                   emit: Emit | None = None,
                                   otp_total_wait_s: float = 180,
                                   resend_after_s: float = 75) -> str:
-    """Log in with PHONE NUMBER → OTP (no password needed).
+    """Log in with EMAIL → OTP (no password needed).
 
-    For accounts whose password we don't have (e.g. recovered from screenshots):
-    DoorDash's phone-login screen takes the number and texts a 6-digit code to
-    the rented api.cc number, which `poll_otp` fetches. Reuses the shared OTP
-    loop + session capture. Returns 'logged_in' | 'otp_timeout' | 'otp_failed'
-    | 'failed'.
+    For accounts whose password we don't have (e.g. recovered from screenshots).
+    DoorDash's login is email-first ("Login with email" → Continue), then for
+    these accounts it routes to a passwordless OTP screen (a code texted to the
+    account's rented api.cc number, which `poll_otp` fetches). We enter the
+    email, Continue, and run the shared OTP loop. If the account instead demands
+    a password (which we don't have), returns 'needs_password'. Returns
+    'logged_in' | 'otp_timeout' | 'otp_failed' | 'needs_password' | 'failed'.
+
+    NOTE: kept the name phone_login_and_capture for API stability — "phone" here
+    means the phone/SMS OTP that finishes the login, not phone-number entry.
     """
-    phone10 = normalize_phone(phone)
-    if not phone10:
+    if not email:
         return "failed"
     await page.goto(LOGIN_URL, wait_until="domcontentloaded")
     await handle_cloudflare(page)
@@ -272,37 +278,28 @@ async def phone_login_and_capture(page: Page, phone: str,
     if any(m in page.url for m in SUCCESS_URL_MARKERS):
         return "logged_in"  # browser already held a session
 
-    # Reach the phone field. DoorDash may land on the phone-login screen directly,
-    # OR on the email screen with a "use phone instead" link — try the link, then
-    # look for the tel field. Give the page a few beats to render each state.
-    deadline = time.monotonic() + 25
-    entered = False
-    clicked_phone_link = False
-    while time.monotonic() < deadline:
-        if await _enter_phone(page, phone10):
-            entered = True
+    # The login page fronts a Cloudflare Turnstile that handle_cloudflare's one
+    # pass may not finish (returns with the gate possibly still up). The form is
+    # BEHIND it, so block until CF actually clears (auto-solves in ~30-60s).
+    cf_deadline = time.monotonic() + 90
+    while time.monotonic() < cf_deadline:
+        if not classify_cloudflare(await _page_text(page)):
             break
-        if not clicked_phone_link:
-            try:
-                link = page.locator(USE_PHONE_LINK).first
-                if await link.is_visible():
-                    await link.click()
-                    clicked_phone_link = True
-                    await asyncio.sleep(1.5)
-                    continue
-            except Exception:
-                pass
-            clicked_phone_link = True  # don't spin on it if absent
-        await asyncio.sleep(1.0)
+        await handle_cloudflare(page)
+        await asyncio.sleep(2.0)
+    if any(m in page.url for m in SUCCESS_URL_MARKERS):
+        await _fill_address_if_present(page, address, emit=emit)
+        return "logged_in"
 
-    if not entered:
-        await screenshot(page, "phone_login_no_field")
+    # ── Email step ──
+    try:
+        em = page.locator(EMAIL_INPUT).first
+        await em.click()
+        await em.fill(email)
+    except Exception:
+        await screenshot(page, "phone_login_no_email_field")
         return "failed"
-
-    # Submit the number to trigger the SMS code.
-    for btn in CONTINUE_PHONE_BUTTONS:
-        if await _click_button_text(page, btn, timeout=4000):
-            break
+    await _click_button_text(page, CONTINUE_BUTTON)
     await asyncio.sleep(2.0)
     await handle_cloudflare(page)
 
@@ -310,6 +307,37 @@ async def phone_login_and_capture(page: Page, phone: str,
         await _fill_address_if_present(page, address, emit=emit)
         return "logged_in"
 
-    return await _run_otp_loop(page, poll_otp, address=address, emit=emit,
-                               otp_total_wait_s=otp_total_wait_s,
-                               resend_after_s=resend_after_s)
+    # Wait for the OTP screen. Distinguish the outcomes that matter:
+    #   - "incorrect email" banner  -> the account DOESN'T EXIST -> no_account
+    #   - a password field          -> account exists but wants a pw we lack
+    #   - an OTP input              -> run the OTP loop (the recoverable path)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if any(m in page.url for m in SUCCESS_URL_MARKERS):
+            await _fill_address_if_present(page, address, emit=emit)
+            return "logged_in"
+        # "We couldn't find an account with the email you entered" = no account.
+        try:
+            if await page.locator(
+                    "text=/couldn't find an account|incorrect email/i"
+                    ).first.is_visible():
+                await screenshot(page, "phone_login_no_account")
+                return "no_account"
+        except Exception:
+            pass
+        kind, _ = await _find_otp_input(page)
+        if kind is not None:
+            return await _run_otp_loop(page, poll_otp, address=address,
+                                       emit=emit,
+                                       otp_total_wait_s=otp_total_wait_s,
+                                       resend_after_s=resend_after_s)
+        try:
+            if await page.locator(PASSWORD_INPUT).first.is_visible():
+                await screenshot(page, "phone_login_wants_password")
+                return "needs_password"
+        except Exception:
+            pass
+        await asyncio.sleep(1.0)
+
+    await screenshot(page, "phone_login_no_otp")
+    return "failed"

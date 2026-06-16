@@ -174,16 +174,16 @@ async def phone_login_customer(customer_id: int,
     token, api_url, hosts = _token_fields(customer)
     if not token:
         raise ValueError("customer has no saved number token for OTP login")
-    phone = customer.get("phone") or ""
-    if not phone:
-        raise ValueError("customer has no phone number for phone login")
+    email = customer.get("email") or ""
+    if not email:
+        raise ValueError("customer has no email for OTP login")
 
     browser_cfg = await db.get_setting("browser")
     daisy_cfg = await db.get_setting("daisy")
     headless = (headless if headless is not None
                 else bool(browser_cfg.get("headless", False)))
     address = {"full_address": (customer.get("notes") or "")}
-    _emit("relogin_started", {"customer_id": customer_id, "mode": "phone"})
+    _emit("relogin_started", {"customer_id": customer_id, "mode": "otp"})
 
     async with DaisyBridge(root=daisy_cfg.get("root")) as daisy:
         async def poll_otp() -> str:
@@ -200,7 +200,7 @@ async def phone_login_customer(customer_id: int,
                     ) as ctx:
                 page = ctx.pages[0] if ctx.pages else await ctx.new_page()
                 outcome = await phone_login_and_capture(
-                    page, phone, poll_otp, address=address, emit=_emit)
+                    page, email, poll_otp, address=address, emit=_emit)
                 _emit("relogin_outcome", {"customer_id": customer_id,
                                           "outcome": outcome, "mode": "phone"})
                 if outcome == "logged_in":
