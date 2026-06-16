@@ -129,12 +129,35 @@ async def customer_profile(
             await ctx.close()
 
 
+def _storage_state_path(customer_id: int):
+    """The canonical per-customer storage_state file path."""
+    config.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    return config.SESSIONS_DIR / f"{customer_id}_storage.json"
+
+
 async def export_storage_state(ctx: BrowserContext, customer_id: int) -> str:
     """Write a portable storage_state backup for the customer; returns path."""
-    config.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-    path = config.SESSIONS_DIR / f"{customer_id}_storage.json"
+    path = _storage_state_path(customer_id)
     try:
         await ctx.storage_state(path=str(path))
+        return str(path)
+    except Exception:
+        return ""
+
+
+def write_storage_state_dict(customer_id: int, state: dict) -> str:
+    """Write a PRE-BUILT storage_state dict to the canonical path; returns path.
+
+    For drivers that already hold the cookies as a dict (the SeleniumBase CDP
+    login captures storage_state itself, outside a Playwright context). Uses the
+    same path/naming as export_storage_state so both login paths stay consistent.
+    Returns "" on failure.
+    """
+    import json
+    path = _storage_state_path(customer_id)
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f)
         return str(path)
     except Exception:
         return ""
