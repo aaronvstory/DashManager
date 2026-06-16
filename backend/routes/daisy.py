@@ -116,8 +116,14 @@ async def list_anchor_addresses() -> dict[str, Any]:
 async def add_anchor_address(body: AnchorAddress) -> dict[str, Any]:
     """Append an address to the anchor pool; returns the new full list."""
     bridge = await _bridge()
-    async with bridge as d:
-        addresses = await d.add_address(body.model_dump())
+    try:
+        async with bridge as d:
+            addresses = await d.add_address(body.model_dump())
+    except DaisyError as exc:
+        # e.g. a whitespace-only full_address passes Pydantic but the worker's
+        # _clean_address rejects it -> 400, not an unformatted 500. Also covers a
+        # corrupt my_addresses.json (the edit aborts rather than clobbering it).
+        raise _address_http_error(exc) from exc
     return {"addresses": addresses}
 
 

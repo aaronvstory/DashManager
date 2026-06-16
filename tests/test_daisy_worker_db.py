@@ -256,3 +256,29 @@ def test_write_addresses_is_atomic_no_tmp_left(tmp_path, monkeypatch):
     # the temp file used for the atomic replace must not linger
     assert not (tmp_path / "my_addresses.json.tmp").exists()
     assert (tmp_path / "my_addresses.json").exists()
+
+
+def test_edit_aborts_on_corrupt_file_no_data_loss(tmp_path, monkeypatch):
+    # A hand-edited my_addresses.json with a JSON syntax error must NOT be
+    # clobbered by an add — the edit aborts (raises), preserving the file. The
+    # forgiving _list_addresses returns [] here; the EDIT path must not.
+    monkeypatch.setattr(w, "DAISY_ROOT", tmp_path)
+    p = tmp_path / "my_addresses.json"
+    corrupt = '{"addresses": [ {"full_address": "1 Main St",, ] }'  # bad JSON
+    p.write_text(corrupt, encoding="utf-8")
+    assert w._list_addresses() == []                 # forgiving read swallows it
+    with pytest.raises(json.JSONDecodeError):
+        w._add_address({"full_address": "2 Oak Ave"})
+    assert p.read_text(encoding="utf-8") == corrupt   # file UNTOUCHED — not wiped
+
+
+def test_edit_preserves_legacy_entries(tmp_path, monkeypatch):
+    # An entry using the legacy "address" key must survive an add round-trip
+    # (it's a valid address, just a different key shape).
+    monkeypatch.setattr(w, "DAISY_ROOT", tmp_path)
+    p = tmp_path / "my_addresses.json"
+    p.write_text(json.dumps(
+        {"addresses": [{"address": "9 Legacy Rd, Reno, NV"}]}), encoding="utf-8")
+    out = w._add_address({"full_address": "2 Oak Ave"})
+    fulls = [a["full_address"] for a in out]
+    assert fulls == ["9 Legacy Rd, Reno, NV", "2 Oak Ave"]   # legacy kept

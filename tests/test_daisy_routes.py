@@ -59,6 +59,12 @@ class _FakeBridge:
 
     async def add_address(self, address):
         self.calls.append(("add_address", address))
+        from backend.daisy.bridge import DaisyError
+        if not (address.get("full_address") or "").strip():
+            # mirrors the worker: a blank full_address is rejected, surfaced as
+            # a DaisyError -> the route maps it to 400 (not an unhandled 500).
+            raise DaisyError("add_address failed: address needs a non-empty "
+                             "full_address")
         return [{"full_address": "1 Main St, Reno, NV"}, address]
 
     async def update_address(self, index, address):
@@ -273,6 +279,15 @@ async def test_add_address_requires_full_address(client, monkeypatch):
     _patch_bridge(monkeypatch, _FakeBridge([]))
     r = await client.post("/api/daisy/addresses", json={"name": "no addr"})
     assert r.status_code == 422            # full_address is required
+
+
+async def test_add_address_whitespace_is_400_not_500(client, monkeypatch):
+    # a whitespace-only full_address passes Pydantic (it's a non-empty str) but
+    # the worker rejects it -> the route maps the DaisyError to 400, never 500.
+    _patch_bridge(monkeypatch, _FakeBridge([]))
+    r = await client.post("/api/daisy/addresses", json={"full_address": "   "})
+    assert r.status_code == 400
+    assert "full_address" in r.json()["detail"]
 
 
 async def test_update_address_route(client, monkeypatch):

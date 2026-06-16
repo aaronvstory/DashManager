@@ -376,28 +376,57 @@ def _clean_address(entry: dict) -> dict:
             "city": _s(entry.get("city")), "state": _s(entry.get("state"))}
 
 
+def _addresses_for_edit() -> list[dict]:
+    """The current pool for a READ-MODIFY-WRITE edit — same normalized rows as
+    ``_list_addresses``, but it RAISES on a corrupt/unreadable file instead of
+    swallowing the error and returning [].
+
+    This is the critical difference from ``_list_addresses``: the list path is a
+    forgiving read for display, but an EDIT then writes the result BACK. If a
+    hand-edited ``my_addresses.json`` had a JSON syntax error, the forgiving read
+    would return [] and the write would CLOBBER the whole file (silent data
+    loss). Here we let the JSON/OS error propagate so the edit aborts and the
+    user's file is left untouched.
+    """
+    p = _addresses_path()
+    if not p.exists():
+        return []
+    raw = json.loads(p.read_text("utf-8"))   # raises on bad JSON — do NOT swallow
+    items = raw.get("addresses", raw) if isinstance(raw, dict) else raw
+    out: list[dict] = []
+    for x in items if isinstance(items, list) else []:
+        try:
+            out.append(_clean_address(x if isinstance(x, dict)
+                                      else {"full_address": x}))
+        except (ValueError, AttributeError):
+            continue                         # skip an individual junk entry
+    return out
+
+
 def _add_address(entry: dict) -> list[dict]:
     """Append a cleaned address to the pool; returns the new full list."""
-    addresses = _list_addresses()
-    addresses.append(_clean_address(entry))
+    cleaned = _clean_address(entry)          # validate BEFORE reading the file
+    addresses = _addresses_for_edit()
+    addresses.append(cleaned)
     _write_addresses(addresses)
     return addresses
 
 
 def _update_address(index: int, entry: dict) -> list[dict]:
     """Replace the address at ``index`` (0-based) with a cleaned one."""
-    addresses = _list_addresses()
+    cleaned = _clean_address(entry)
+    addresses = _addresses_for_edit()
     if not 0 <= index < len(addresses):
         raise IndexError(f"address index {index} out of range "
                          f"(0..{len(addresses) - 1})")
-    addresses[index] = _clean_address(entry)
+    addresses[index] = cleaned
     _write_addresses(addresses)
     return addresses
 
 
 def _delete_address(index: int) -> list[dict]:
     """Remove the address at ``index`` (0-based); returns the new full list."""
-    addresses = _list_addresses()
+    addresses = _addresses_for_edit()
     if not 0 <= index < len(addresses):
         raise IndexError(f"address index {index} out of range "
                          f"(0..{len(addresses) - 1})")
