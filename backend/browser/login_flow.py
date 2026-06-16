@@ -276,7 +276,12 @@ async def phone_login_and_capture(page: Page, email: str,
     await asyncio.sleep(1.0)
 
     if any(m in page.url for m in SUCCESS_URL_MARKERS):
-        return "logged_in"  # browser already held a session
+        # Already authenticated (browser held a session). Still set the address
+        # if one was passed — every other logged_in return does, and
+        # phone_login_customer DOES pass an address, so skipping it here would
+        # silently lose address setup on a still-valid session. (code-reviewer)
+        await _fill_address_if_present(page, address, emit=emit)
+        return "logged_in"
 
     # The login page fronts a Cloudflare Turnstile that handle_cloudflare's one
     # pass may not finish (returns with the gate possibly still up). The form is

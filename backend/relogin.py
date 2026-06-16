@@ -233,7 +233,6 @@ async def phone_login_customer_cdp(customer_id: int,
     ⚠️ os_input grabs the real cursor — hands-off while running.
     """
     import asyncio
-    import json
 
     from backend import config
     from backend.browser.cdp_login import phone_login_via_cdp
@@ -275,12 +274,12 @@ async def phone_login_customer_cdp(customer_id: int,
     _emit("relogin_outcome", {"customer_id": customer_id, "outcome": outcome,
                               "mode": "cdp_phone"})
     if outcome == "logged_in" and result.get("storage_state"):
-        config.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-        path = str(config.SESSIONS_DIR / f"session_{customer_id}.json")
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(result["storage_state"], f)
-        await db.update_customer(customer_id, session_status="active",
-                                 storage_state_path=path)
+        from backend.browser.driver import write_storage_state_dict
+        path = write_storage_state_dict(customer_id, result["storage_state"])
+        fields = {"session_status": "active"}
+        if path:
+            fields["storage_state_path"] = path
+        await db.update_customer(customer_id, **fields)
         _emit("relogin_done", {"customer_id": customer_id, "mode": "cdp_phone"})
         return {"customer_id": customer_id, "outcome": outcome,
                 "prefs": result.get("prefs")}

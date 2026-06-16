@@ -1,9 +1,21 @@
 """Relogin recovery: variant-B wipe-profile path (live finding 2026-06-12)."""
 from __future__ import annotations
 
+import json
+
 import backend.relogin as relogin
 from backend import config, db
 from backend.browser import driver
+
+
+def test_write_storage_state_dict_uses_canonical_path(tmp_path, monkeypatch):
+    # The CDP login path writes a pre-built dict; it must land on the SAME
+    # canonical path as export_storage_state so both login paths agree.
+    monkeypatch.setattr(config, "SESSIONS_DIR", tmp_path / "sessions")
+    state = {"cookies": [{"name": "a", "value": "1"}], "origins": []}
+    path = driver.write_storage_state_dict(7, state)
+    assert path.endswith("7_storage.json")
+    assert json.loads(open(path, encoding="utf-8").read()) == state
 
 
 async def test_remove_profile_deletes_dir(tmp_path, monkeypatch):
