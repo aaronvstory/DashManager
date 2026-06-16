@@ -1,8 +1,8 @@
 """Tests for the pure helpers in account_creator (no browser, no bridge)."""
 from datetime import datetime, timedelta, timezone
 
-from backend.account_creator import (_daisy_record, _extract_orphan, _notes,
-                                      _within_hours)
+from backend.account_creator import (_apply_fixed_address, _daisy_record,
+                                      _extract_orphan, _notes, _within_hours)
 
 
 def test_daisy_record_carries_identity_and_verified_flag():
@@ -133,3 +133,31 @@ def test_within_hours_unparseable_is_false():
 def test_within_hours_naive_timestamp_assumed_utc():
     naive = (_NOW - timedelta(hours=2)).replace(tzinfo=None).isoformat()
     assert _within_hours(naive, _NOW, 24.0) is True
+
+
+# ── fixed-address override (unique=False shares one anchor address) ──────────
+
+
+def test_apply_fixed_address_overrides_full_address():
+    """unique=False pins the batch to one address; the random addr's lat/lng
+    and dist-from-anchor describe the discarded pick, so they're dropped."""
+    identity = {"first_name": "Ada", "full_address": "1 Random Way, Tampa, FL",
+                "latitude": 27.9, "longitude": -82.4, "dist_from_anchor": 3.2}
+    out = _apply_fixed_address(identity, "42 Shared St, Tampa, FL")
+    assert out["full_address"] == "42 Shared St, Tampa, FL"
+    assert "latitude" not in out
+    assert "longitude" not in out
+    assert "dist_from_anchor" not in out
+
+
+def test_apply_fixed_address_noop_when_none():
+    identity = {"full_address": "1 Random Way", "latitude": 27.9}
+    out = _apply_fixed_address(identity, None)
+    assert out["full_address"] == "1 Random Way"
+    assert out["latitude"] == 27.9
+
+
+def test_apply_fixed_address_noop_when_blank():
+    identity = {"full_address": "1 Random Way"}
+    out = _apply_fixed_address(identity, "")
+    assert out["full_address"] == "1 Random Way"

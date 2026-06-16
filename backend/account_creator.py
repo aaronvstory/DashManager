@@ -29,6 +29,23 @@ def _emit(type: str, data: dict | None = None) -> None:
     bus.publish(type, data or {})
 
 
+def _apply_fixed_address(identity: dict[str, Any],
+                         fixed_address: str | None) -> dict[str, Any]:
+    """unique=False: override the generated address with one shared anchor addr.
+
+    The whole batch lands on a single resolved address (passed by the route).
+    The generated lat/lng and dist-from-anchor describe the *discarded* random
+    address, so drop them — they'd be misleading next to the override. Mutates
+    and returns identity (no-op when fixed_address is falsy).
+    """
+    if fixed_address:
+        identity["full_address"] = fixed_address
+        identity.pop("latitude", None)
+        identity.pop("longitude", None)
+        identity.pop("dist_from_anchor", None)
+    return identity
+
+
 async def _retry(coro_factory, *, attempts: int = 4, emit=None, what: str = ""):
     """Await coro_factory() with retries for transient failures (DNS/network
     blips in CustomerDaisy's mail.tm/MapQuest/api.cc calls). Re-raises the last
@@ -55,6 +72,7 @@ async def create_account(*, location_origin: str | None,
                          batch_id: str | None = None,
                          batch_label: str | None = None,
                          reuse_number: dict[str, Any] | None = None,
+                         fixed_address: str | None = None,
                          ) -> dict[str, Any]:
     """Run the full create-account flow. Returns a summary dict.
 
@@ -71,6 +89,11 @@ async def create_account(*, location_origin: str | None,
     reusing a failed-signup number just re-triggers the failure. Only pass a
     number whose signup never submitted. The skill rents fresh by default for
     this reason; this param is an escape hatch, not the norm.
+
+    `fixed_address`, when given, overrides the generated delivery address so the
+    whole batch shares ONE anchor address (the unique=False path — the route
+    pre-resolves it once and passes it to every account). When None (the
+    default), each account gets its own fresh radius-scoped address.
 
     Raises on fatal failure (caller emits account_failed); partial progress is
     reported via events.
@@ -94,6 +117,9 @@ async def create_account(*, location_origin: str | None,
         identity = await _retry(
             lambda: daisy.generate_identity(location_origin, radius_miles),
             attempts=4, emit=_emit, what="identity")
+        # unique=False: replace the random address with the batch's shared one
+        # BEFORE the identity_generated emit so the live UI shows the real addr.
+        identity = _apply_fixed_address(identity, fixed_address)
         _emit("identity_generated", {
             "first_name": identity.get("first_name"),
             "last_name": identity.get("last_name"),
@@ -228,7 +254,12 @@ async def create_account(*, location_origin: str | None,
                    "name": f"{identity.get('first_name','')} "
                            f"{identity.get('last_name','')}".strip(),
                    "email": identity.get("email"),
+                   # The create-modal results table needs these too: the email
+                   # inbox password, the delivery address, and miles-from-anchor.
+                   "email_password": identity.get("password", ""),
                    "phone": identity.get("phone_number"),
+                   "full_address": identity.get("full_address", ""),
+                   "dist_from_anchor": identity.get("dist_from_anchor"),
                    "bucket_date": bucket}
         _emit("account_created", summary)
         return summary

@@ -34,6 +34,9 @@ class CreateAccountBody(BaseModel):
     radius_miles: float | None = None
     headless: bool | None = None        # per-action override of the setting
     count: int = 1                      # batch size (normal: 4-6)
+    # True (default): each account gets its OWN fresh address within the radius.
+    # False: the whole batch shares ONE address (the route pre-resolves it once).
+    unique: bool = True
     batch_label: str | None = None      # base label; ' - claude' is appended
     # Join an EXISTING batch instead of minting a new one (add-one-to-batch):
     # when batch_id is given, the new account(s) are stamped with it (and
@@ -244,6 +247,19 @@ async def _run_create_account(body: CreateAccountBody) -> None:
         bus.publish("batch_started", {"of": count, "count": count,
                                       "batch_label": batch_label})
 
+        # unique=False: resolve ONE concrete address up front and pin every
+        # account in the batch to it. A flaky MapQuest lookup must NOT abort the
+        # run — fall back to per-account unique addresses (fixed_address=None).
+        fixed_address: str | None = None
+        if not body.unique:
+            from backend.daisy.bridge import DaisyBridge
+            try:
+                async with DaisyBridge(root=daisy_cfg.get("root")) as d:
+                    addr = await d.generate_address(origin, radius)
+                fixed_address = (addr or {}).get("full_address") or None
+            except Exception:  # noqa: BLE001 — auto-heal: don't kill the batch
+                fixed_address = None
+
         created = 0
         for i in range(count):
             bus.publish("batch_progress", {"index": i + 1, "of": count,
@@ -254,7 +270,8 @@ async def _run_create_account(body: CreateAccountBody) -> None:
                     bucket_date=body.bucket_date,
                     daisy_root=daisy_cfg.get("root"),
                     headless=body.headless,
-                    batch_id=batch_id, batch_label=batch_label)
+                    batch_id=batch_id, batch_label=batch_label,
+                    fixed_address=fixed_address)
                 created += 1
             except Exception as e:  # one account's failure never aborts a batch
                 bus.publish("account_failed", {"error": str(e),
