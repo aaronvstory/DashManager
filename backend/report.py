@@ -113,8 +113,8 @@ async def _index_model(out_dir: Path) -> dict[str, Any]:
 
 def _summarize(rows: list[dict[str, Any]]) -> dict[str, int]:
     s = {"customers": len(rows), "orders": 0, "refunded": 0,
-         "pursuing": 0, "unconfirmed": 0, "no_orders": 0, "needs_you": 0,
-         "active": 0}
+         "pursuing": 0, "unconfirmed": 0, "unchecked": 0, "no_orders": 0,
+         "needs_you": 0, "active": 0}
     for c in rows:
         if c.get("session_status") == "active":
             s["active"] += 1
@@ -130,8 +130,18 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, int]:
                 # Tracked separately AND as pursuing — it is NOT done.
                 s["unconfirmed"] += 1
                 s["pursuing"] += 1
-            elif st in ("not_refunded", "partial", "pending_claim", "remake"):
+            elif st in ("not_refunded", "partial", "pending_claim", "remake",
+                        "unknown"):
+                # `unknown` = a receipt we READ but couldn't parse — it needs a
+                # human (see _order_needs_you), so it belongs in pursuing, NOT
+                # lumped with the transient `unchecked`.
                 s["pursuing"] += 1
+            else:
+                # `unchecked` (not yet scraped) or any other unrecognized status.
+                # Count it so the breakdown is EXHAUSTIVE — refunded + pursuing +
+                # unchecked == orders — and no order is silently uncounted on a
+                # money-tracking board.
+                s["unchecked"] += 1
             if _order_needs_you(o):
                 s["needs_you"] += 1
     return s
@@ -224,6 +234,11 @@ def _summary_cards(s: dict[str, int]) -> str:
         ("Pursuing", s["pursuing"], "warn"),
         ("Needs you", s["needs_you"], "alert" if s["needs_you"] else "muted"),
     ]
+    # Only surface Unchecked when there ARE any — it means orders weren't
+    # verified this run (a partial/interrupted scrape), which shouldn't read as
+    # "all clear". Hidden on a clean board to avoid noise.
+    if s.get("unchecked", 0):
+        items.append(("Unchecked", s["unchecked"], "warn"))
     out = []
     for label, value, tone in items:
         out.append(
