@@ -321,7 +321,11 @@ def _list_addresses() -> list[dict]:
         if isinstance(x, str):
             full, name, city, state = x, "", "", ""
         elif isinstance(x, dict):
-            full = x.get("full_address") or x.get("address") or ""
+            # Prefer full_address, but fall back to the legacy "address" key when
+            # full_address is missing OR blank-after-strip (a whitespace-only
+            # full_address must not mask a real address).
+            full = (x.get("full_address") or "").strip() \
+                or (x.get("address") or "").strip()
             name, city, state = (x.get("name", ""), x.get("city", ""),
                                  x.get("state", ""))
         else:
