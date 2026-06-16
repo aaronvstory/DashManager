@@ -443,6 +443,47 @@ SKIP_SELECTORS = ('button:contains("Skip")', 'button:contains("Not now")',
                   'button:contains("Maybe later")', 'a:contains("Skip")')
 
 
+# The "$0 delivery fee" home-page modal's address box. Real attrs (from the live
+# DOM): id=HomeAddressAutocomplete, placeholder="Enter delivery address",
+# role=combobox. Key on id/placeholder, most-specific first.
+HOME_ADDR_SELECTORS = (
+    '#HomeAddressAutocomplete',
+    'input[placeholder*="delivery address" i]',
+    'input[aria-controls*="AddressSearchAutocomplete" i]',
+    'input[role="combobox"]')
+
+
+def _fill_home_address(sb: Any, full_address: str) -> bool:
+    """Type the address into the home-page modal and commit it. Returns True iff
+    the field shows the address afterward.
+
+    Uses CDP press_keys (types into the element BY SELECTOR — no OS focus needed,
+    which is why the OS-input gui_write kept landing nowhere) and verifies the
+    value landed, retrying across the selector cascade, then presses Enter to
+    accept the first autocomplete suggestion.
+    """
+    for sel in HOME_ADDR_SELECTORS:
+        try:
+            if not sb.cdp.find_element(sel):
+                continue
+        except Exception:
+            continue
+        for _ in range(3):
+            try:
+                sb.cdp.click(sel)            # focus the field (DOM click)
+                time.sleep(0.3)
+                sb.cdp.press_keys(sel, full_address)  # focus-independent type
+                time.sleep(2.0)              # let autocomplete populate
+                if _field_value(sb, sel).strip():
+                    sb.cdp.press_keys(sel, "\n")   # accept first suggestion
+                    time.sleep(2.0)
+                    return True
+            except Exception:
+                pass
+            time.sleep(0.6)
+    return False
+
+
 def _finish_account(sb: Any, identity: dict[str, Any], os_input: bool,
                     emit: Any, shot: Any) -> dict[str, Any]:
     """Post-verification: the account exists but lands on the home page with an
@@ -462,33 +503,14 @@ def _finish_account(sb: Any, identity: dict[str, Any], os_input: bool,
         # keystrokes into the already-focused field and press Enter. No element
         # lookup, no click, no suggestion handling.
         if full_address:
-            time.sleep(15)  # let the home page + modal fully render
-            try:
-                # CRITICAL: gui_write types into the OS-FOREGROUND window. After
-                # the post-OTP redirect the Chromium window often is NOT
-                # foreground (so earlier gui_writes typed into nothing). So:
-                # (1) foreground + size the window, (2) REAL-CLICK the address
-                # field to give it OS focus, (3) THEN type + Enter.
-                focus_signup_window(sb, emit=emit)
-                clicked = False
-                for sel in ADDR_SELECTORS:
-                    try:
-                        if sb.cdp.find_element(sel):
-                            sb.cdp.gui_click_element(sel)  # real click → focus
-                            clicked = True
-                            break
-                    except Exception:
-                        continue
-                time.sleep(0.6)
-                sb.cdp.gui_write(full_address)
-                time.sleep(2.0)            # let autocomplete populate
-                sb.cdp.gui_press_keys("enter")
-                emit("signup_address_filled",
-                     {"address": full_address[:60], "field_clicked": clicked})
-                shot("07_address")
-            except Exception as exc:
-                emit("signup_address_warn",
-                     {"error": f"{type(exc).__name__}: {exc}"[:120]})
+            # Wait for the "$0 delivery fee" modal (renders on /home right after
+            # OTP; ~10-15s). Then fill the address box (id=HomeAddressAutocomplete,
+            # placeholder "Enter delivery address") and press Enter.
+            time.sleep(15)
+            ok = _fill_home_address(sb, full_address)
+            emit("signup_address_filled",
+                 {"address": full_address[:60], "ok": ok})
+            shot("07_address")
         # a DashPass upsell may appear after the address step
         time.sleep(1.5)
         _skip_upsell(sb, os_input)
@@ -875,38 +897,38 @@ def signup_via_cdp(identity: dict[str, Any], *,
                     # stolen between submit and the modal appearing.
                     if os_input:
                         focus_signup_window(sb, emit=emit)
-                    # _enter_otp now also CLICKS the modal's Submit button (the
-                    # live run stalled because entering the code alone didn't
-                    # advance) and uses OS input when os_input.
-                    if _enter_otp(sb, code, os_input):
-                        # Wait GENEROUSLY for the post-OTP redirect to the home
-                        # page. This was 8x2.5s=20s, which timed out on a slow
-                        # redirect — the inner loop then fell through WITHOUT
-                        # running _finish_account, so the account was created but
-                        # its delivery address never got filled AND the run was
-                        # mislabeled otp_timeout. Now: poll ~60s, and treat
-                        # "verify modal gone" as success too (the account exists
-                        # the moment the OTP is accepted; the URL just lags).
-                        created = False
-                        post = time.time() + 60
-                        while time.time() < post:
-                            url_ok = any(m in _cdp_url(sb)
-                                         for m in SUCCESS_URL_MARKERS)
-                            modal_gone = not _page_has(sb, VERIFY_MARKERS)
-                            if url_ok or modal_gone:
-                                created = True
-                                break
-                            time.sleep(2.0)
-                        if created:
-                            result["outcome"] = "created"
-                            result["storage_state"] = _export_storage(sb)
-                            _emit("signup_created", {"url": _cdp_url(sb)[:80]})
-                            _shot("06_created")
-                            # post-verify: fill delivery address + skip the
-                            # DashPass upsell so the account is fully usable.
-                            result["profile_confirmed"] = _finish_account(
-                                sb, identity, os_input, _emit, _shot)
-                            return result
+                    # Enter the OTP (also clicks the modal Submit; OS input when
+                    # os_input). CRITICAL: do NOT gate success on its return — it
+                    # over-strictly self-checks the digits and returns False even
+                    # when the code WAS accepted and the account got created (the
+                    # live bug: account on /home but run mislabeled otp_timeout,
+                    # so the address fill never ran). Instead, enter the code,
+                    # then judge success by the REAL page state below.
+                    _enter_otp(sb, code, os_input)
+                    # Wait GENEROUSLY for the post-OTP redirect to /home. Success
+                    # = a home/consumer URL OR the verify modal is gone (the
+                    # account exists the moment the OTP is accepted; the URL just
+                    # lags). The "$0 delivery fee" address modal renders ON /home.
+                    created = False
+                    post = time.time() + 60
+                    while time.time() < post:
+                        url_ok = any(m in _cdp_url(sb)
+                                     for m in SUCCESS_URL_MARKERS)
+                        modal_gone = not _page_has(sb, VERIFY_MARKERS)
+                        if url_ok or modal_gone:
+                            created = True
+                            break
+                        time.sleep(2.0)
+                    if created:
+                        result["outcome"] = "created"
+                        result["storage_state"] = _export_storage(sb)
+                        _emit("signup_created", {"url": _cdp_url(sb)[:80]})
+                        _shot("06_created")
+                        # post-verify: fill delivery address + skip the
+                        # DashPass upsell so the account is fully usable.
+                        result["profile_confirmed"] = _finish_account(
+                            sb, identity, os_input, _emit, _shot)
+                        return result
                 time.sleep(3.0)
             result["outcome"] = "otp_timeout"
             _shot("06_otp_timeout")
