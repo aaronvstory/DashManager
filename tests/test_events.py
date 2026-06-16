@@ -87,3 +87,20 @@ async def test_full_queue_does_not_break_delivery_to_others():
         got.append((await healthy.get())["id"])   # drain healthy each time
     assert stalled.qsize() == 2           # stalled capped at its bound
     assert got == [1, 2, 3, 4, 5]         # healthy received EVERY event
+
+
+async def test_publish_from_worker_thread_is_thread_safe():
+    # publish() is called from worker THREADS too (signup_via_cdp runs under
+    # asyncio.to_thread and emits progress). asyncio.Queue isn't thread-safe, so
+    # an off-loop publish must marshal back onto the subscriber's loop via
+    # call_soon_threadsafe rather than touch the queue directly. Here we publish
+    # from a thread and confirm the event still arrives.
+    bus = EventBus()
+    q = bus.subscribe()                   # binds the bus to this loop
+
+    def emit_from_thread() -> None:
+        bus.publish("log", {"from": "thread"})
+
+    await asyncio.to_thread(emit_from_thread)   # publish on a worker thread
+    got = await asyncio.wait_for(q.get(), timeout=2)
+    assert got["type"] == "log" and got["data"] == {"from": "thread"}
