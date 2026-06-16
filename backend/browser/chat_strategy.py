@@ -361,15 +361,16 @@ class LlmStrategy(ChatStrategy):
             self, transcript: list[ChatTurn]) -> list[dict[str, str]]:
         messages: list[dict[str, str]] = [
             {"role": "system", "content": self._system_prompt}]
-        for turn in transcript:
-            # "system" turns are driver status notes (escalation/agent-reached),
-            # NOT part of the conversation — never feed them to the LLM as a
-            # user/assistant message (they'd pollute the context).
-            if turn.direction == "system":
-                continue
+        # "system" turns are driver status notes (escalation/agent-reached), NOT
+        # part of the conversation — never feed them to the LLM (they'd pollute
+        # context). Filter FIRST so the empty-opener guard below tests whether
+        # any REAL turns exist (a system-only transcript — e.g. just "Reached a
+        # human agent." before the first exchange — must still get the opener).
+        real_turns = [t for t in transcript if t.direction != "system"]
+        for turn in real_turns:
             role = "assistant" if turn.direction == "out" else "user"
             messages.append({"role": role, "content": turn.content})
-        if not transcript:
+        if not real_turns:
             messages.append({
                 "role": "user",
                 "content": ("The support chat is open but nothing has been "

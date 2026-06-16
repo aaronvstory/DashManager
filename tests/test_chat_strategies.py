@@ -219,6 +219,19 @@ async def test_llm_skips_system_turns():
     assert len(messages) == 3
 
 
+async def test_llm_system_only_transcript_still_gets_opener():
+    # A transcript of ONLY system turns (e.g. "Reached a human agent." written
+    # before the first real exchange) has no conversational content, so the
+    # synthetic opener prompt must still be injected — the empty guard tests the
+    # FILTERED turns, not the raw list.
+    strategy, fake = make_llm('{"action":"send","message":"ok"}')
+    await strategy.next_action([ChatTurn("system", "Reached a human agent.")])
+    messages = fake.calls[0]
+    assert len(messages) == 2  # system prompt + the synthetic opener
+    assert messages[1]["role"] == "user"
+    assert "nothing has been" in messages[1]["content"]
+
+
 async def test_llm_end_success():
     strategy, _ = make_llm(
         '{"action":"end","outcome":"success","reason":"refund confirmed"}')
