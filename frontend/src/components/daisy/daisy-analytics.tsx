@@ -109,9 +109,11 @@ export function DaisyAnalytics() {
             <Stat label="Unverified" value={q.data.unverified} />
           </div>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <BucketList title="By state" buckets={q.data.by_state}
+            {/* default to [] so a malformed/partial payload renders empty
+                rather than crashing on .slice */}
+            <BucketList title="By state" buckets={q.data.by_state ?? []}
                         total={q.data.total} />
-            <BucketList title="By city" buckets={q.data.by_city}
+            <BucketList title="By city" buckets={q.data.by_city ?? []}
                         total={q.data.total} />
           </div>
         </div>
