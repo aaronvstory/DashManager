@@ -135,6 +135,17 @@ def test_chat_block_empty_messages_shows_placeholder():
     assert "No messages captured." in html
 
 
+def test_chat_block_missing_or_none_content_renders_empty_bubble():
+    # a message row with no/None content must still render its bubble (empty
+    # text), not crash or drop the turn.
+    html = report._chat_block(_chat([
+        {"direction": "in"},                       # no content key
+        {"direction": "out", "content": None},     # explicit None
+    ]))
+    assert 'bubble--in' in html and 'bubble--out' in html
+    assert "No messages captured." not in html     # not the empty-thread path
+
+
 def test_chat_block_escapes_message_content():
     html = report._chat_block(_chat([{"direction": "in",
                                       "content": "<script>x</script>"}]))
