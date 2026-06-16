@@ -125,8 +125,11 @@ function EditForm({
     const original = toForm(customer)
     const patch: Record<string, string> = {}
     for (const { key } of FIELDS) {
+      // Trim BOTH sides — comparing a trimmed input against an untrimmed
+      // baseline would flag an untouched field as "changed" if the stored
+      // value had edge whitespace, sending a spurious normalizing patch.
       const next = (form[key] ?? "").trim()
-      if (next !== (original[key] ?? "")) patch[key] = next
+      if (next !== (original[key] ?? "").trim()) patch[key] = next
     }
     if (Object.keys(patch).length === 0) {
       toast.info("No changes to save")
