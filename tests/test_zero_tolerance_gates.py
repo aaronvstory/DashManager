@@ -64,6 +64,31 @@ def test_weak_read_does_not_clobber_stronger():
     assert R("pending_claim", S.not_refunded) == S.pending_claim
 
 
+def test_refunded_is_never_lost_by_any_later_read():
+    # THE money-protection invariant: a receipt-proven `refunded` order must
+    # survive EVERY later detect reading. A transient/weak re-read (or even a
+    # contradictory not_refunded) must never silently un-refund money.
+    for later in (S.not_refunded, S.partial, S.pending_claim, S.unconfirmed,
+                  S.remake, S.unknown, S.unchecked):
+        assert R("refunded", later) == S.refunded, later
+
+
+def test_garbage_current_status_defaults_to_unchecked():
+    # An unparseable / empty / missing stored status must not crash; it's
+    # treated as `unchecked` (rank 0) so a real fresh WEAK read wins cleanly.
+    # (Use weak `detected` values so the current-parsing fallback is actually
+    # exercised — a `refunded` detected would early-return before parsing.)
+    assert R("not_a_real_status", S.not_refunded) == S.not_refunded
+    assert R("", S.pending_claim) == S.pending_claim
+    assert R(None, S.not_refunded) == S.not_refunded
+
+
+def test_unconfirmed_outranks_pending_claim_on_weak_read():
+    # unconfirmed (rank 3) stored must not be clobbered by a weaker pending_claim
+    # (rank 2) read — only a `refunded` read clears unconfirmed (tested above).
+    assert R("unconfirmed", S.pending_claim) == S.unconfirmed
+
+
 # ── chat gate: agent confirmation must name the amount AND the card ──────────
 
 PHRASES = ["refund", "refunded", "processed", "issued"]
