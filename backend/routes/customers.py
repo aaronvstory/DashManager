@@ -251,10 +251,13 @@ async def _run_create_account(body: CreateAccountBody) -> None:
         # account in the batch to it. A flaky MapQuest lookup must NOT abort the
         # run — fall back to per-account unique addresses (fixed_address=None).
         fixed_address: str | None = None
-        if not body.unique:
+        # Only pre-resolve when an origin exists — generate_address with a falsy
+        # origin fails on the worker. (daisy_cfg is the default dict, never None
+        # in practice, but guard anyway.)
+        if not body.unique and origin:
             from backend.daisy.bridge import DaisyBridge
             try:
-                async with DaisyBridge(root=daisy_cfg.get("root")) as d:
+                async with DaisyBridge(root=(daisy_cfg or {}).get("root")) as d:
                     addr = await d.generate_address(origin, radius)
                 fixed_address = (addr or {}).get("full_address") or None
             except Exception:  # noqa: BLE001 — auto-heal: don't kill the batch

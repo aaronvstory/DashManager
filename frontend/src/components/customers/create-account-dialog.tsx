@@ -206,7 +206,7 @@ export function CreateAccountDialog({
   // The email-inbox password CustomerDaisy will use for each new account. It's
   // a server-side setting (not a per-request field), so this is shown read-only
   // for transparency — change it on the Settings page, not here.
-  const defaultPassword = settingsQuery.data?.daisy.default_password ?? ""
+  const defaultPassword = settingsQuery.data?.daisy?.default_password ?? ""
 
   // Default the location to the first option (Edenton) once they load.
   useEffect(() => {

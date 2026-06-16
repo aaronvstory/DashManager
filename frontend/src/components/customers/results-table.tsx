@@ -60,6 +60,7 @@ export function ResultsTable({ rows }: { rows: CreatedRow[] }) {
         <Button
           variant="outline"
           size="sm"
+          disabled={!emails}
           onClick={() => void copyText(emails, "all emails")}
         >
           <Copy data-icon="inline-start" />
@@ -68,6 +69,7 @@ export function ResultsTable({ rows }: { rows: CreatedRow[] }) {
         <Button
           variant="outline"
           size="sm"
+          disabled={!phones}
           onClick={() => void copyText(phones, "all phones")}
         >
           <Copy data-icon="inline-start" />
@@ -76,6 +78,7 @@ export function ResultsTable({ rows }: { rows: CreatedRow[] }) {
         <Button
           variant="outline"
           size="sm"
+          disabled={!combined}
           onClick={() => void copyText(combined, "all rows (tab-separated)")}
         >
           <Copy data-icon="inline-start" />
@@ -97,8 +100,13 @@ export function ResultsTable({ rows }: { rows: CreatedRow[] }) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.map((r) => (
-              <TableRow key={r.customer_id || r.email}>
+            {rows.map((r) => {
+              // customer_id is -1 when the DB id is unknown — that's truthy in
+              // JS, so guard it explicitly for both the React key and display.
+              const idText =
+                r.customer_id > 0 ? String(r.customer_id) : ""
+              return (
+              <TableRow key={idText || r.email}>
                 <TableCell>
                   <CopyValue value={r.name} label="name" />
                 </TableCell>
@@ -116,11 +124,7 @@ export function ResultsTable({ rows }: { rows: CreatedRow[] }) {
                   <CopyValue value={r.phone} label="phone" mono />
                 </TableCell>
                 <TableCell>
-                  <CopyValue
-                    value={r.customer_id ? String(r.customer_id) : ""}
-                    label="id"
-                    mono
-                  />
+                  <CopyValue value={idText} label="id" mono />
                 </TableCell>
                 <TableCell className="max-w-[16rem]">
                   <CopyValue value={r.full_address} label="address" />
@@ -131,7 +135,8 @@ export function ResultsTable({ rows }: { rows: CreatedRow[] }) {
                     : "—"}
                 </TableCell>
               </TableRow>
-            ))}
+              )
+            })}
           </TableBody>
         </Table>
       </div>
