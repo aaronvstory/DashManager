@@ -231,6 +231,8 @@ def _update_customer(customer_id: str, fields: dict) -> dict | None:
     Accepts the read-shape key `phone` as an alias for the DB column
     `primary_phone` so a caller can round-trip the same key it read.
     """
+    if not _daisy_db_path().exists():
+        return None                         # missing DB -> nothing to update
     fields = dict(fields or {})
     if "phone" in fields and "primary_phone" not in fields:
         fields["primary_phone"] = fields.pop("phone")

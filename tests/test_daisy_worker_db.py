@@ -192,3 +192,6 @@ def test_db_functions_missing_db_are_safe(tmp_path, monkeypatch):
     assert w._customer_count() == 0
     # delete on a missing DB returns False cleanly (not a FileNotFoundError)
     assert w._delete_customer("x") is False
+    # update on a missing DB returns None cleanly (its not-found signal),
+    # consistent with the other accessors — NOT a raw FileNotFoundError.
+    assert w._update_customer("x", {"city": "Reno"}) is None
