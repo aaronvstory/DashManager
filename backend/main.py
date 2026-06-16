@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -103,6 +103,14 @@ def create_app() -> FastAPI:
 
         @app.get("/{full_path:path}", include_in_schema=False)
         async def spa(full_path: str):
+            # An UNMATCHED /api/* path must 404 (JSON), NOT fall through to the
+            # SPA shell — otherwise the frontend gets index.html for a missing
+            # route, its response.json() chokes, and the UI shows a misleading
+            # "couldn't reach <thing>" instead of a clear 404. (This is exactly
+            # what a STALE backend looks like: it lacks newer /api routes, so
+            # they 404 honestly instead of masquerading as the app.)
+            if full_path == "api" or full_path.startswith("api/"):
+                raise HTTPException(status_code=404, detail="API route not found")
             candidate = (config.FRONTEND_DIST / full_path).resolve()
             # Serve a real built file only if it's inside the dist dir.
             if (
