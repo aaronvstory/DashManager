@@ -50,3 +50,40 @@ def test_ring_buffer_trim():
     # Oldest events fall off; ids keep counting monotonically.
     assert [e["id"] for e in bus.replay_after(0)] == [3, 4, 5]
     assert bus.publish("log")["id"] == 6
+
+
+async def test_subscriber_queue_is_bounded():
+    # Each subscriber gets a bounded queue so a stalled consumer can't grow it
+    # without limit.
+    bus = EventBus(sub_queue_size=4)
+    q = bus.subscribe()
+    assert q.maxsize == 4
+
+
+async def test_full_subscriber_queue_drops_without_blocking_or_raising():
+    # A subscriber that never drains overflows its bounded queue. publish() must
+    # NOT raise or block — it drops the overflow for that subscriber (the ring
+    # buffer recovers it on reconnect). And publish keeps its monotonic id.
+    bus = EventBus(sub_queue_size=2)
+    bus.subscribe()                       # never drained — will fill + overflow
+    for _ in range(10):
+        ev = bus.publish("log")           # must not raise QueueFull
+    assert ev["id"] == 10                 # all 10 still counted in the ring
+    # the dropped events are still replayable from the ring buffer.
+    assert [e["id"] for e in bus.replay_after(0)][-1] == 10
+
+
+async def test_full_queue_does_not_break_delivery_to_others():
+    # One stalled subscriber (full queue) must NOT stop a healthy subscriber
+    # from receiving events. The stalled one has a tiny bound and is never
+    # drained; the healthy one is drained after each publish so it never
+    # overflows and receives EVERY event.
+    bus = EventBus(sub_queue_size=2)
+    stalled = bus.subscribe()             # never drained -> overflows + drops
+    healthy = bus.subscribe()
+    got = []
+    for _ in range(5):
+        bus.publish("log")
+        got.append((await healthy.get())["id"])   # drain healthy each time
+    assert stalled.qsize() == 2           # stalled capped at its bound
+    assert got == [1, 2, 3, 4, 5]         # healthy received EVERY event

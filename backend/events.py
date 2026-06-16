@@ -13,10 +13,18 @@ from typing import Any
 
 
 class EventBus:
-    def __init__(self, ring_size: int = 1000) -> None:
+    def __init__(self, ring_size: int = 1000, sub_queue_size: int = 1000
+                 ) -> None:
         self._subs: set[asyncio.Queue] = set()
         self._ring: deque[dict[str, Any]] = deque(maxlen=ring_size)
         self._next_id = 1
+        # Per-subscriber queue bound. A subscriber whose SSE consumer stalls (or
+        # silently died without us noticing) must NOT make publish() grow its
+        # queue without limit (memory leak) or raise QueueFull and break delivery
+        # to OTHER subscribers. So queues are bounded and publish DROPS on a full
+        # one — the ring buffer + Last-Event-ID replay recovers the gap when that
+        # client reconnects.
+        self._sub_queue_size = sub_queue_size
 
     def publish(self, type: str, data: dict[str, Any] | None = None,
                 run_id: int | None = None) -> dict[str, Any]:
@@ -30,11 +38,17 @@ class EventBus:
         self._next_id += 1
         self._ring.append(event)
         for q in self._subs:
-            q.put_nowait(event)
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                # A stalled/dead subscriber — drop this event for it (it can
+                # replay from the ring on reconnect) rather than block, grow
+                # unbounded, or break delivery to the others.
+                pass
         return event
 
     def subscribe(self) -> asyncio.Queue:
-        q: asyncio.Queue = asyncio.Queue()
+        q: asyncio.Queue = asyncio.Queue(maxsize=self._sub_queue_size)
         self._subs.add(q)
         return q
 
