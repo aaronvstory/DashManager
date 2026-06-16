@@ -41,6 +41,12 @@ def test_fetch_otp_missing_token_descriptive():
         w.handle(NO_MGR, "fetch_otp", {})
 
 
+def test_save_customer_missing_customer_descriptive():
+    # the only other required-arg command; validates before touching mgr.db.
+    with pytest.raises(ValueError, match="save_customer needs customer"):
+        w.handle(NO_MGR, "save_customer", {})
+
+
 def test_generate_address_missing_origin_descriptive():
     with pytest.raises(ValueError, match="generate_address needs origin"):
         w.handle(NO_MGR, "generate_address", {})

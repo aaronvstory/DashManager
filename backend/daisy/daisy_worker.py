@@ -349,6 +349,10 @@ def _req(args: dict, key: str, cmd: str):
     A bare ``args[key]`` raises ``KeyError(key)``, which main() serializes back
     over the pipe as ``error: "'key'"`` — useless for diagnosing which command
     was malformed. This names both the command and the missing arg instead.
+
+    Treats absent / None / empty-string as missing. For string args
+    (customer_id, token, customer) that's exactly right; don't reuse this for a
+    numeric/boolean arg where 0/False would be wrongly rejected.
     """
     if key not in args or args[key] in (None, ""):
         raise ValueError(f"{cmd} needs {key}")
@@ -408,7 +412,8 @@ def handle(mgr: Managers, cmd: str, args: dict) -> dict:
                 "error": res.get("error")}
 
     if cmd == "save_customer":
-        cid = mgr.db.save_customer(dict(args["customer"]))
+        customer = _req(args, "customer", cmd)   # validate before touching mgr
+        cid = mgr.db.save_customer(dict(customer))
         return {"customer_id": cid}
 
     if cmd == "list_recent_customers":
