@@ -168,8 +168,11 @@ def test_summarize_unconfirmed_counts_as_pursuing_and_needs_you():
 
 
 def test_summarize_empty():
-    s = report._summarize([])
-    assert s["customers"] == 0 and s["orders"] == 0 and s["needs_you"] == 0
+    # full-dict compare so an accidental non-zero default (e.g. pursuing=1) is
+    # caught, not just the three keys we'd eyeball.
+    assert report._summarize([]) == {
+        "customers": 0, "orders": 0, "refunded": 0, "pursuing": 0,
+        "unconfirmed": 0, "no_orders": 0, "needs_you": 0, "active": 0}
 
 
 def test_resolution_method_unconfirmed_never_reads_resolved():
