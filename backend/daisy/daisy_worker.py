@@ -319,15 +319,18 @@ def _list_addresses() -> list[dict]:
     out = []
     for x in items if isinstance(items, list) else []:
         if isinstance(x, str):
-            out.append({"full_address": x})
+            full, name, city, state = x, "", "", ""
         elif isinstance(x, dict):
-            out.append({
-                "name": x.get("name", ""),
-                "full_address": x.get("full_address")
-                                or x.get("address", ""),
-                "city": x.get("city", ""),
-                "state": x.get("state", ""),
-            })
+            full = x.get("full_address") or x.get("address") or ""
+            name, city, state = (x.get("name", ""), x.get("city", ""),
+                                 x.get("state", ""))
+        else:
+            continue                       # skip non-str/non-dict junk entries
+        full = (full or "").strip()
+        if not full:
+            continue                       # an address with no address is useless
+        out.append({"name": name, "full_address": full,
+                    "city": city, "state": state})
     return out
 
 
