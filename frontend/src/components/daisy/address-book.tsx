@@ -76,6 +76,10 @@ export function AddressBook() {
 
   const rows = q.data?.addresses ?? []
   const canAdd = draft.full_address.trim().length > 0
+  // Index-based identity: while ANY mutation is in flight the list may be about
+  // to shift, so disable every mutating control to prevent acting on a stale
+  // index (the refetch on success re-renders with fresh indices).
+  const busy = add.isPending || update.isPending || del.isPending
 
   return (
     <section className="mt-10 border border-border bg-card">
@@ -123,7 +127,7 @@ export function AddressBook() {
         />
         <Button
           size="sm"
-          disabled={!canAdd || add.isPending}
+          disabled={!canAdd || busy}
           onClick={() => add.mutate(draft)}
         >
           <Plus data-icon="inline-start" />
@@ -151,6 +155,11 @@ export function AddressBook() {
                   onChange={(e) =>
                     setEditDraft({ ...editDraft, full_address: e.target.value })
                   }
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && editDraft.full_address.trim() && !busy)
+                      update.mutate({ index: i, a: editDraft })
+                    if (e.key === "Escape") setEditIndex(null)
+                  }}
                 />
                 <Input
                   value={editDraft.city}
@@ -164,7 +173,7 @@ export function AddressBook() {
                 <div className="flex gap-1">
                   <Button
                     size="icon-sm"
-                    disabled={!editDraft.full_address.trim() || update.isPending}
+                    disabled={!editDraft.full_address.trim() || busy}
                     onClick={() => update.mutate({ index: i, a: editDraft })}
                     aria-label="Save"
                   >
@@ -194,6 +203,7 @@ export function AddressBook() {
                   size="icon-sm"
                   variant="ghost"
                   aria-label="Edit"
+                  disabled={busy}
                   onClick={() => {
                     setEditIndex(i)
                     setEditDraft(a)
@@ -205,7 +215,7 @@ export function AddressBook() {
                   size="icon-sm"
                   variant="ghost"
                   aria-label="Remove"
-                  disabled={del.isPending}
+                  disabled={busy}
                   onClick={() => del.mutate(i)}
                 >
                   <Trash2 />

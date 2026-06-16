@@ -359,9 +359,16 @@ def _write_addresses(addresses: list[dict]) -> None:
     p = _addresses_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps({"addresses": addresses}, indent=2),
-                   encoding="utf-8")
-    tmp.replace(p)                          # atomic on the same filesystem
+    try:
+        tmp.write_text(json.dumps({"addresses": addresses}, indent=2),
+                       encoding="utf-8")
+        tmp.replace(p)                      # atomic on the same filesystem
+    except OSError:
+        # disk full / locked / permission — don't leave a half-written .tmp
+        # littering the user's CustomerDaisy dir; the original file is untouched
+        # (replace is atomic, so on failure p is either old-or-new, never torn).
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _clean_address(entry: dict) -> dict:
