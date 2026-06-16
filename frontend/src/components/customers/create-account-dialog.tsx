@@ -167,6 +167,12 @@ export function CreateAccountDialog({
   /** Ignore SSE events that predate this creation attempt. */
   const baselineEventId = useRef(-1)
 
+  /** The batch index of the account currently being created — captured from
+      batch_progress so the account_created log line shows the right [n/N], even
+      if the NEXT account's batch_progress lands in the same React render batch
+      (reading batchInfo.index there would be one ahead). */
+  const currentBatchIdx = useRef(0)
+
   // Pull Daisy locations + balance when the dialog opens (subprocess: ~1-3s).
   const locationsQuery = useQuery({
     queryKey: ["daisy-locations"],
@@ -227,6 +233,10 @@ export function CreateAccountDialog({
         setBatchInfo({ index: 0, of: num(d.of) ?? num(d.count) ?? 1, created: 0 })
         break
       case "batch_progress":
+        // Pin the index for the account about to be created; account_created
+        // reads this ref (not batchInfo) so a fast next-account batch_progress
+        // can't make the log line read one ahead.
+        currentBatchIdx.current = num(d.index) ?? 0
         setBatchInfo({
           index: num(d.index) ?? 0,
           of: num(d.of) ?? 1,
@@ -300,7 +310,7 @@ export function CreateAccountDialog({
         // Append (never overwrite) so a batch accumulates every account.
         setResults((rs) => [...rs, row])
         const nOf = batchInfo && batchInfo.of > 1
-          ? `[${batchInfo.index}/${batchInfo.of}] `
+          ? `[${currentBatchIdx.current}/${batchInfo.of}] `
           : ""
         setLiveLines((ls) => [
           ...ls,
@@ -389,6 +399,7 @@ export function CreateAccountDialog({
     resetProgress()
     setPhase("starting")
     baselineEventId.current = useRunStore.getState().lastEvent?.id ?? -1
+    currentBatchIdx.current = 0
     setBatchInfo(null)
     const radiusMiles = Number(radius)
     const n = Math.max(1, Math.floor(Number(count) || 1))
