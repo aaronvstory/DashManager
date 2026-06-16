@@ -48,7 +48,8 @@ def test_save_customer_missing_customer_descriptive():
 
 
 def test_generate_address_missing_origin_descriptive():
-    with pytest.raises(ValueError, match="generate_address needs origin"):
+    with pytest.raises(ValueError,
+                       match=r"generate_address needs origin_address"):
         w.handle(NO_MGR, "generate_address", {})
 
 
