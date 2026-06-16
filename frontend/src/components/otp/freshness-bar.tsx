@@ -32,7 +32,9 @@ export function FreshnessBar({
     setNow(Date.now())
   }, [fetchedAt])
 
-  const base = fetchedAt ? new Date(fetchedAt).getTime() : now
+  // Guard a malformed timestamp (getTime() → NaN) so width/label never render NaN.
+  const parsed = fetchedAt ? new Date(fetchedAt).getTime() : now
+  const base = Number.isFinite(parsed) ? parsed : now
   const elapsed = Math.max(0, now - base)
   const pct = Math.max(0, Math.min(1, 1 - elapsed / OTP_CODE_TTL_MS))
   const stale = pct <= 0

@@ -21,8 +21,12 @@ export default function App() {
           <Route path="/database" element={<DatabasePage />} />
           <Route path="/run" element={<RunPage />} />
           <Route path="/otp" element={<OtpPage />} />
-          {/* Live OTP + Batch OTP merged into one page; keep the old path alive. */}
-          <Route path="/batch-otp" element={<Navigate to="/otp" replace />} />
+          {/* Live OTP + Batch OTP merged into one page; keep the old batch
+              path alive AND in batch mode so bookmarks still land right. */}
+          <Route
+            path="/batch-otp"
+            element={<Navigate to="/otp?mode=batch" replace />}
+          />
           <Route path="/history" element={<HistoryPage />} />
           <Route path="/reports" element={<ReportsPage />} />
           <Route path="/proxies" element={<ProxiesPage />} />

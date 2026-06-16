@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useMemo, useState } from "react"
+import { useSearchParams } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import { format, parseISO } from "date-fns"
 import { Layers, RadioTower, RefreshCw, Smartphone, UserPlus } from "lucide-react"
@@ -52,7 +53,11 @@ function prettyDate(date: string): string {
 }
 
 export default function OtpPage() {
-  const [mode, setMode] = useState<Mode>("bucket")
+  // ?mode=batch (e.g. the legacy /batch-otp redirect) opens the batch view.
+  const [searchParams] = useSearchParams()
+  const [mode, setMode] = useState<Mode>(
+    searchParams.get("mode") === "batch" ? "batch" : "bucket",
+  )
   const [paused, setPaused] = useState(false)
 
   // Switching mode mounts a fresh sub-view with new queries — resume live so it
@@ -152,6 +157,22 @@ function BucketOtp({ paused }: { paused: boolean }) {
   })
 
   if (customersQ.isPending) return <Skeleton className="h-64 w-full" />
+  if (customersQ.isError) {
+    return (
+      <div className="flex flex-col items-center gap-3 border border-border bg-card px-8 py-16 text-center">
+        <p className="text-sm text-muted-foreground">
+          Couldn't load customers. Is the backend running?
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void customersQ.refetch()}
+        >
+          Try again
+        </Button>
+      </div>
+    )
+  }
   if (buckets.length === 0) {
     return (
       <EmptyState
@@ -186,6 +207,7 @@ function BucketOtp({ paused }: { paused: boolean }) {
         rows={otpQ.data?.rows ?? []}
         fetchedAt={otpQ.data?.fetched_at ?? null}
         loading={otpQ.isPending}
+        errored={otpQ.isError}
         paused={paused}
         emptyText="No customers with a rented number in this bucket."
       />
