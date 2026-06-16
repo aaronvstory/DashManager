@@ -24,7 +24,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from backend import db
 from backend.daisy.bridge import DaisyError
@@ -165,13 +165,27 @@ async def get_daisy_customer(customer_id: str) -> dict[str, Any]:
 
 
 class AnchorAddress(BaseModel):
-    # An anchor-pool entry. full_address is the only required field; the worker
-    # also validates it's non-empty. extra=forbid so a typo'd key fails loud.
+    # An anchor-pool entry. extra=forbid so a typo'd key fails loud at the edge.
     model_config = {"extra": "forbid"}
     full_address: str
     name: str = ""
     city: str = ""
     state: str = ""
+
+    @field_validator("full_address", "name", "city", "state")
+    @classmethod
+    def _strip(cls, v: str) -> str:
+        return v.strip()
+
+    @field_validator("full_address")
+    @classmethod
+    def _full_address_not_blank(cls, v: str) -> str:
+        # Reject a blank/whitespace full_address HERE (422) rather than letting
+        # it round-trip to the worker and bounce back as a generic 400 — the
+        # worker still validates as a backstop, but the edge should fail fast.
+        if not v:
+            raise ValueError("full_address must not be blank")
+        return v
 
 
 class DaisyPatch(BaseModel):
