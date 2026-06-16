@@ -9,16 +9,15 @@ the same non-blocking single-pass model as otp_fetch (api.cc codes expire ~30s).
 """
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
 from backend.daisy.bridge import DaisyBridge, DaisyError
+from backend.daisy.sharded import sharded_gather
 
-# OTPs are fetched concurrently across a SMALL pool of bridges — one bridge
-# serializes its calls behind a lock, so a sequential loop over a 6-10 account
-# batch is ~Σ(per-account api.cc poll) and far too slow for the ~5s live poll.
-POOL_SIZE = 4
+# OTPs are fetched concurrently across a SMALL pool of bridges (see
+# backend.daisy.sharded) — one bridge serializes its calls behind a lock, so a
+# sequential loop over a 6-10 account batch is far too slow for the ~5s poll.
 
 
 def _rec_batch(rec: dict[str, Any]) -> tuple[str, str]:
@@ -112,31 +111,20 @@ async def _fetch_members(members: list[dict[str, Any]],
                          daisy_root: str | None) -> list[dict[str, Any]]:
     """Fetch the latest OTP for each member, CONCURRENTLY, order preserved.
 
-    Shards the members across POOL_SIZE bridges (each its own subprocess; a
-    single bridge serializes its calls behind a lock). One member's failure —
-    or a whole shard's bridge failing to start — never aborts the batch.
+    Delegates the shard/gather/reassemble mechanics to the shared
+    ``sharded_gather`` helper (also used by ``otp_fetch``); this module just
+    supplies the per-shard worker and the whole-shard-failure error row.
     """
-    if not members:
-        return []
-    pool = min(POOL_SIZE, len(members))
-    shards: list[list[tuple[int, dict[str, Any]]]] = [[] for _ in range(pool)]
-    for i, rec in enumerate(members):
-        shards[i % pool].append((i, rec))
+    def _on_shard_error(rec: dict[str, Any],
+                        exc: BaseException) -> dict[str, Any]:
+        row = _member_row(rec)
+        row["error"] = f"bridge failed: {exc}"
+        return row
 
-    results = await asyncio.gather(
-        *(_fetch_shard(shard, daisy_root) for shard in shards),
-        return_exceptions=True)
-
-    by_idx: dict[int, dict[str, Any]] = {}
-    for shard, result in zip(shards, results):
-        if isinstance(result, BaseException):
-            for idx, rec in shard:
-                row = _member_row(rec)
-                row["error"] = f"bridge failed: {result}"
-                by_idx[idx] = row
-        else:
-            by_idx.update(result)
-    return [by_idx[i] for i in range(len(members))]
+    return await sharded_gather(
+        members,
+        lambda shard: _fetch_shard(shard, daisy_root),
+        _on_shard_error)
 
 
 async def _fetch_shard(shard: list[tuple[int, dict[str, Any]]],

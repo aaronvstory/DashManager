@@ -22,6 +22,7 @@ from typing import Any
 
 from backend import db
 from backend.daisy.bridge import DaisyBridge, DaisyError
+from backend.daisy.sharded import sharded_gather
 
 
 async def fetch_bucket_otps(bucket_date: str | None = None,
@@ -45,38 +46,13 @@ async def fetch_bucket_otps(bucket_date: str | None = None,
     if not customers:
         return []
 
-    # A single DaisyBridge serializes its calls behind an internal lock (one
-    # subprocess, one pipe), so a sequential loop over a full bucket takes
-    # ~Σ(per-customer api.cc poll) — measured ~28s for 8 customers, far too slow
-    # for the live-table's ~5s poll. Shard the customers across a SMALL pool of
-    # bridges (each its own subprocess) and run them concurrently, so wall-time
-    # is ~ceil(N/pool)·per-poll instead of N·per-poll. Pool is capped so we
-    # don't spawn a CustomerDaisy subprocess per customer.
-    pool = min(POOL_SIZE, len(customers))
-    shards: list[list[dict[str, Any]]] = [[] for _ in range(pool)]
-    for i, c in enumerate(customers):
-        shards[i % pool].append(c)
-
-    # return_exceptions=True so one shard whose BRIDGE fails to start (the
-    # per-customer errors are already caught inside _fetch_shard) doesn't take
-    # down the whole batch — that shard's customers degrade to error rows
-    # instead of bubbling a 500 to the 5s poller. Every customer ALWAYS gets a
-    # row, so the output length matches the input (no silent drops).
-    results = await asyncio.gather(
-        *(_fetch_shard(shard) for shard in shards),
-        return_exceptions=True)
-
-    by_id: dict[Any, dict[str, Any]] = {}
-    for shard, result in zip(shards, results):
-        if isinstance(result, BaseException):
-            for c in shard:
-                by_id[c["id"]] = _error_row(c, f"bridge failed: {result}")
-        else:
-            for r in result:
-                by_id[r["id"]] = r
-
-    # Re-interleave so the output order matches the input order.
-    return [by_id[c["id"]] for c in customers]
+    # Fetch concurrently across a pool of bridges (a single bridge serializes
+    # its calls behind a lock — ~28s sequential for 8 customers, far too slow
+    # for the live-table's ~5s poll). The shard/gather/order-preserve mechanics
+    # live in the shared backend.daisy.sharded helper.
+    return await sharded_gather(
+        customers, _fetch_shard,
+        lambda c, exc: _error_row(c, f"bridge failed: {exc}"))
 
 
 def _error_row(c: dict[str, Any], error: str) -> dict[str, Any]:
@@ -85,28 +61,21 @@ def _error_row(c: dict[str, Any], error: str) -> dict[str, Any]:
             "phone": c.get("phone") or "—", "code": "", "error": error}
 
 
-POOL_SIZE = 4
-
-
-async def _fetch_shard(customers: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Fetch OTPs for one shard of customers through a single bridge.
-
-    One bridge per shard (a subprocess); calls within a shard are sequential
-    (the bridge serializes them anyway). Returns row dicts; one customer's
-    failure never aborts the shard.
-    """
-    rows: list[dict[str, Any]] = []
-    if not customers:
-        return rows
+async def _fetch_shard(shard: list[tuple[int, dict[str, Any]]]
+                       ) -> dict[int, dict[str, Any]]:
+    """Fetch OTPs for one shard of (index, customer) pairs through a single
+    bridge. Returns {original_index: row}; one customer's failure never aborts
+    the shard."""
+    out: dict[int, dict[str, Any]] = {}
+    if not shard:
+        return out
     async with DaisyBridge() as daisy:
-        for c in customers:
-            name = f"{c.get('first_name', '')} {c.get('last_name', '')}".strip()
-            row = {"id": c["id"], "name": name or "(unnamed)",
-                   "phone": c.get("phone") or "—", "code": "", "error": ""}
+        for idx, c in shard:
+            row = _error_row(c, "")
             token = c.get("number_token") or ""
             if not token:
                 row["error"] = "no rented number on file"
-                rows.append(row)
+                out[idx] = row
                 continue
             try:
                 hosts = _loads_list(c.get("mirror_hosts"))
@@ -118,8 +87,8 @@ async def _fetch_shard(customers: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 row["error"] = f"fetch failed: {exc}"
             except Exception as exc:  # never let one customer abort the batch
                 row["error"] = f"{type(exc).__name__}: {exc}"
-            rows.append(row)
-    return rows
+            out[idx] = row
+    return out
 
 
 def _loads_list(v: Any) -> list[str]:

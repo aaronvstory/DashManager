@@ -35,8 +35,9 @@ async def test_fetch_members_preserves_order(monkeypatch):
             out[idx] = row
         return out
 
+    from backend.daisy import sharded
     monkeypatch.setattr(B, "_fetch_shard", fake_shard)
-    monkeypatch.setattr(B, "POOL_SIZE", 3)
+    monkeypatch.setattr(sharded, "POOL_SIZE", 3)  # POOL_SIZE moved to shared
     rows = await B._fetch_members(members, None)
     assert [r["code"] for r in rows] == [str(i) for i in range(7)]  # in order
     assert [r["email"] for r in rows] == [f"c{i}@x.net" for i in range(7)]
@@ -53,8 +54,9 @@ async def test_fetch_members_degrades_failed_shard(monkeypatch):
             raise RuntimeError("bridge down")
         return {idx: B._member_row(rec) for idx, rec in shard}
 
+    from backend.daisy import sharded
     monkeypatch.setattr(B, "_fetch_shard", flaky_shard)
-    monkeypatch.setattr(B, "POOL_SIZE", 2)
+    monkeypatch.setattr(sharded, "POOL_SIZE", 2)  # POOL_SIZE moved to shared
     rows = await B._fetch_members(members, None)
     assert len(rows) == 6                       # every member still gets a row
     assert any("bridge failed" in r["error"] for r in rows)
