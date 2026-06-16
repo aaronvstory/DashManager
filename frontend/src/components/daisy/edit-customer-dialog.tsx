@@ -68,6 +68,16 @@ export function EditCustomerDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
+  // Retain the last non-null record so the form stays mounted with real data
+  // through the close animation. The parent sets `customer` to null the instant
+  // the dialog closes; without this, EditForm would unmount mid-fade and the
+  // content would collapse. (Adjusting state during render on a changed prop is
+  // React's sanctioned pattern — NOT the setState-in-effect the lint forbids.)
+  const [lastCustomer, setLastCustomer] =
+    useState<EditableDaisyCustomer | null>(null)
+  if (customer && customer !== lastCustomer) setLastCustomer(customer)
+  const active = customer ?? lastCustomer
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg">
@@ -81,11 +91,12 @@ export function EditCustomerDialog({
         {/* Key the form on the record + open so React remounts it with a fresh
             useState seed per customer — no effect-driven reseed (which the
             no-setState-in-effect rule rightly flags), and reopening the same
-            row after a cancel discards the abandoned edits. */}
-        {customer && (
+            row after a cancel discards the abandoned edits. `active` retains the
+            last record so the form survives the close animation. */}
+        {active && (
           <EditForm
-            key={`${customer.customer_id}:${String(open)}`}
-            customer={customer}
+            key={`${active.customer_id}:${String(open)}`}
+            customer={active}
             onOpenChange={onOpenChange}
           />
         )}
