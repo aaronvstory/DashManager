@@ -29,6 +29,7 @@ from backend.browser.signup import (
     _notify,
     _resend,
     Emit,
+    normalize_phone,
 )
 
 # Forces the logged-out password prompt even within a browser that may hold a
@@ -46,9 +47,16 @@ CONTINUE_BUTTON = "Continue to Sign In"
 SIGNIN_BUTTON = "Sign In"
 # Some accounts route to a "Login with phone number" screen (enter phone -> get
 # a 6-digit code) instead of email->password (verified live 2026-06-13). It has
-# a "Use password instead" link back to the known password branch — click it.
+# a "Use password instead" link back to the known password branch.
 USE_PASSWORD_LINK = "text=/use password instead/i"
+# The reverse link — from the email/password screen TO the phone-login screen.
+# Phone-OTP login (no password) clicks THIS, enters the number, gets the code.
+USE_PHONE_LINK = "text=/use phone number instead|sign in with phone|log in with phone/i"
 PHONE_LOGIN_MARKER = "login with phone number"
+# The phone field on the phone-login screen (tel input; +1 preselected).
+PHONE_INPUT_SELECTORS = ("input[type='tel']", "input[autocomplete='tel']",
+                         "input[name*='phone' i]", "input[id*='phone' i]")
+CONTINUE_PHONE_BUTTONS = ("Continue", "Continue to Sign In", "Next", "Sign In")
 
 
 async def _click_button_text(page: Page, text: str, timeout: float = 8000
@@ -176,7 +184,22 @@ async def login_and_capture(page: Page, email: str, password: str,
         await screenshot(page, "login_no_branch")
         return "failed"
     # branch == "otp": passwordless flow, OTP input already present.
+    return await _run_otp_loop(page, poll_otp, address=address, emit=emit,
+                               otp_total_wait_s=otp_total_wait_s,
+                               resend_after_s=resend_after_s)
 
+
+async def _run_otp_loop(page: Page, poll_otp: OtpPoller, *,
+                        address: dict[str, Any] | None = None,
+                        emit: Emit | None = None,
+                        otp_total_wait_s: float = 180,
+                        resend_after_s: float = 75) -> str:
+    """Poll the api.cc number, enter each fresh code, confirm we reached /home.
+
+    Shared by the email→OTP and phone→OTP login paths — the OTP modal is the
+    SAME widget once you're on it. Returns 'logged_in' | 'otp_failed' |
+    'otp_timeout'.
+    """
     _notify(emit, "otp_waiting", {})
     started = time.monotonic()
     tried: set[str] = set()
@@ -208,3 +231,85 @@ async def login_and_capture(page: Page, email: str, password: str,
                 tried.clear()  # a fresh code may reuse the digits
         await asyncio.sleep(3.0)
     return "otp_timeout"
+
+
+async def _enter_phone(page: Page, phone10: str) -> bool:
+    """Type the 10-digit phone into the phone-login field. Returns True if a
+    field was found + filled."""
+    for sel in PHONE_INPUT_SELECTORS:
+        try:
+            loc = page.locator(sel).first
+            if await loc.is_visible():
+                await loc.click()
+                await loc.fill(phone10)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+async def phone_login_and_capture(page: Page, phone: str,
+                                  poll_otp: OtpPoller, *,
+                                  address: dict[str, Any] | None = None,
+                                  emit: Emit | None = None,
+                                  otp_total_wait_s: float = 180,
+                                  resend_after_s: float = 75) -> str:
+    """Log in with PHONE NUMBER → OTP (no password needed).
+
+    For accounts whose password we don't have (e.g. recovered from screenshots):
+    DoorDash's phone-login screen takes the number and texts a 6-digit code to
+    the rented api.cc number, which `poll_otp` fetches. Reuses the shared OTP
+    loop + session capture. Returns 'logged_in' | 'otp_timeout' | 'otp_failed'
+    | 'failed'.
+    """
+    phone10 = normalize_phone(phone)
+    if not phone10:
+        return "failed"
+    await page.goto(LOGIN_URL, wait_until="domcontentloaded")
+    await handle_cloudflare(page)
+    await asyncio.sleep(1.0)
+
+    if any(m in page.url for m in SUCCESS_URL_MARKERS):
+        return "logged_in"  # browser already held a session
+
+    # Reach the phone field. DoorDash may land on the phone-login screen directly,
+    # OR on the email screen with a "use phone instead" link — try the link, then
+    # look for the tel field. Give the page a few beats to render each state.
+    deadline = time.monotonic() + 25
+    entered = False
+    clicked_phone_link = False
+    while time.monotonic() < deadline:
+        if await _enter_phone(page, phone10):
+            entered = True
+            break
+        if not clicked_phone_link:
+            try:
+                link = page.locator(USE_PHONE_LINK).first
+                if await link.is_visible():
+                    await link.click()
+                    clicked_phone_link = True
+                    await asyncio.sleep(1.5)
+                    continue
+            except Exception:
+                pass
+            clicked_phone_link = True  # don't spin on it if absent
+        await asyncio.sleep(1.0)
+
+    if not entered:
+        await screenshot(page, "phone_login_no_field")
+        return "failed"
+
+    # Submit the number to trigger the SMS code.
+    for btn in CONTINUE_PHONE_BUTTONS:
+        if await _click_button_text(page, btn, timeout=4000):
+            break
+    await asyncio.sleep(2.0)
+    await handle_cloudflare(page)
+
+    if any(m in page.url for m in SUCCESS_URL_MARKERS):
+        await _fill_address_if_present(page, address, emit=emit)
+        return "logged_in"
+
+    return await _run_otp_loop(page, poll_otp, address=address, emit=emit,
+                               otp_total_wait_s=otp_total_wait_s,
+                               resend_after_s=resend_after_s)

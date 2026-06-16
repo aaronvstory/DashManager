@@ -152,3 +152,67 @@ async def relogin_customer(customer_id: int,
         raise RuntimeError(f"login failed (outcome={outcome})")
     _emit("relogin_done", {"customer_id": customer_id})
     return {"customer_id": customer_id, "outcome": outcome}
+
+
+async def phone_login_customer(customer_id: int,
+                               headless: bool | None = None) -> dict[str, Any]:
+    """Log a customer in via PHONE NUMBER → OTP (no password) + capture session.
+
+    For accounts whose DoorDash password we don't have (e.g. recovered from a
+    failed signup). Uses the customer's stored phone + api.cc number: DoorDash
+    texts a code to the number, which we poll. Mirrors relogin_customer but
+    drives phone_login_and_capture.
+    """
+    from playwright.async_api import async_playwright
+
+    from backend.browser.driver import customer_profile, export_storage_state
+    from backend.browser.login_flow import phone_login_and_capture
+
+    customer = await db.get_customer(customer_id)
+    if customer is None:
+        raise ValueError("customer not found")
+    token, api_url, hosts = _token_fields(customer)
+    if not token:
+        raise ValueError("customer has no saved number token for OTP login")
+    phone = customer.get("phone") or ""
+    if not phone:
+        raise ValueError("customer has no phone number for phone login")
+
+    browser_cfg = await db.get_setting("browser")
+    daisy_cfg = await db.get_setting("daisy")
+    headless = (headless if headless is not None
+                else bool(browser_cfg.get("headless", False)))
+    address = {"full_address": (customer.get("notes") or "")}
+    _emit("relogin_started", {"customer_id": customer_id, "mode": "phone"})
+
+    async with DaisyBridge(root=daisy_cfg.get("root")) as daisy:
+        async def poll_otp() -> str:
+            res = await daisy.fetch_otp(token, api_url, hosts)
+            return res.get("code") or ""
+
+        async with async_playwright() as p:
+            outcome = "failed"
+            async with customer_profile(
+                    p, customer_id, headless,
+                    seed_storage_state=customer.get("storage_state_path")
+                    or None,
+                    viewport=tuple(browser_cfg.get("viewport", [1400, 900]))
+                    ) as ctx:
+                page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+                outcome = await phone_login_and_capture(
+                    page, phone, poll_otp, address=address, emit=_emit)
+                _emit("relogin_outcome", {"customer_id": customer_id,
+                                          "outcome": outcome, "mode": "phone"})
+                if outcome == "logged_in":
+                    storage = await export_storage_state(ctx, customer_id)
+                    fields = {"session_status": "active"}
+                    if storage:
+                        fields["storage_state_path"] = storage
+                    await db.update_customer(customer_id, **fields)
+
+    if outcome != "logged_in":
+        _emit("relogin_failed", {"customer_id": customer_id,
+                                 "outcome": outcome, "mode": "phone"})
+        raise RuntimeError(f"phone login failed (outcome={outcome})")
+    _emit("relogin_done", {"customer_id": customer_id, "mode": "phone"})
+    return {"customer_id": customer_id, "outcome": outcome}
