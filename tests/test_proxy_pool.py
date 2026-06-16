@@ -151,3 +151,27 @@ def test_classify_geo_non_string_ip_does_not_raise():
     assert geo["exit_ip"] == "12345"
     geo2 = pp._classify_geo({"ip": None, "query": None})
     assert geo2["exit_ip"] == ""
+
+
+def test_classify_geo_country_falls_back_to_geo_subdict():
+    # No top-level country/country_code, but the geo sub-dict carries one —
+    # the `if not country: country = geo.get("country")...` fallback path.
+    geo = pp._classify_geo({"ip": "1.2.3.4",
+                            "geo": {"country": "GB", "city": "London"}})
+    assert geo["country"] == "GB"
+    assert geo["city"] == "London"
+
+
+def test_classify_geo_handles_non_dict_geo_value():
+    # A malformed echo where "geo" isn't a dict (a string/None) must not raise —
+    # geo defaults to {} and the top-level country still resolves.
+    geo = pp._classify_geo({"ip": "1.2.3.4", "geo": "not-a-dict",
+                            "country": "FR"})
+    assert geo["country"] == "FR"
+    assert geo["city"] == "" and geo["region"] == ""
+
+
+def test_classify_geo_country_code_alias():
+    # Some echoes use country_code instead of country.
+    geo = pp._classify_geo({"country_code": "DE"})
+    assert geo["country"] == "DE"
