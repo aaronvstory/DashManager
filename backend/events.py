@@ -39,7 +39,12 @@ class EventBus:
 
     def _deliver(self, event: dict[str, Any]) -> None:
         """Fan an event out to the subscriber queues. Runs ON the loop thread."""
-        for q in self._subs:
+        # Snapshot first: a subscriber's SSE generator unsubscribes from its
+        # `finally` (on client disconnect), and that `discard` can land while
+        # we're mid-iteration here — "set changed size during iteration". The
+        # list() copy is a single atomic-under-GIL call; a just-discarded queue
+        # gets one harmless extra put_nowait on the way out (nobody reads it).
+        for q in list(self._subs):
             try:
                 q.put_nowait(event)
             except asyncio.QueueFull:

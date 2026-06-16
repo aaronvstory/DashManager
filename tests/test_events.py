@@ -5,6 +5,7 @@ Uses fresh EventBus instances, never the shared global ``bus``.
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 from backend.events import EventBus
 
@@ -87,6 +88,28 @@ async def test_full_queue_does_not_break_delivery_to_others():
         got.append((await healthy.get())["id"])   # drain healthy each time
     assert stalled.qsize() == 2           # stalled capped at its bound
     assert got == [1, 2, 3, 4, 5]         # healthy received EVERY event
+
+
+async def test_unsubscribe_during_delivery_does_not_raise():
+    # The SSE generator unsubscribes from its `finally` (on client disconnect),
+    # which can fire while _deliver is mid-iteration over the subscriber set. If
+    # _deliver iterated the live set, that discard would raise "set changed size
+    # during iteration". A subscriber whose queue-put unsubscribes a SECOND
+    # subscriber forces exactly that interleaving — it must NOT raise.
+    bus = EventBus()
+
+    class UnsubscribingQueue(asyncio.Queue):
+        def put_nowait(self, item):
+            # On first delivery, yank the other subscriber out from under the
+            # in-progress iteration, the way a disconnect's `finally` would.
+            if victim["q"] is not None:
+                bus.unsubscribe(victim["q"])
+                victim["q"] = None
+            super().put_nowait(item)
+
+    victim: dict[str, Any] = {"q": bus.subscribe()}  # discarded mid-fan-out
+    bus._subs.add(UnsubscribingQueue())  # triggers the discard during delivery
+    bus.publish("log")                  # must not raise
 
 
 async def test_publish_from_worker_thread_is_thread_safe():
