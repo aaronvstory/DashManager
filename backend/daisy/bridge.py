@@ -226,8 +226,9 @@ class DaisyBridge:
     async def customer_count(self) -> int:
         return int((await self._call("customer_count"))["count"])
 
-    async def analytics(self, limit: int = 100000) -> dict[str, Any]:
-        """Coverage analytics over the pool: totals + by-state/by-city counts."""
+    async def analytics(self, limit: int = -1) -> dict[str, Any]:
+        """Coverage analytics over the pool: totals + by-state/by-city counts.
+        ``limit=-1`` (default) covers the whole pool (SQLite no-limit)."""
         return await self._call("analytics", {"limit": limit})
 
     async def get_customer(self, customer_id: str) -> dict[str, Any] | None:

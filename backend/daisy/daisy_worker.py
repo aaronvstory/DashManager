@@ -281,11 +281,16 @@ def _customer_count() -> int:
         con.close()
 
 
-def _analytics(limit: int = 100000) -> dict:
+def _analytics(limit: int = -1) -> dict:
     """Coverage/analytics over CustomerDaisy's pool — counts by state, by city,
     and verified-vs-not. Pure aggregation over the SAME normalized rows the rest
     of the surface reads (no extra DB shape), so it's missing-DB safe (-> zeros)
     and unit-testable without CustomerDaisy live.
+
+    ``limit`` defaults to ``-1`` (SQLite's "no limit") — a coverage report wants
+    the WHOLE pool, not an arbitrary cap. At this tool's scale (hundreds–low
+    thousands of accounts) the single LIMIT-less ``SELECT`` + O(n) aggregation is
+    instant; a caller can still pass a positive cap.
 
     Returns ``{total, verified, unverified, by_state, by_city}`` where by_state
     /by_city are ``[{key, count}]`` lists sorted by count desc then key asc (a
@@ -565,7 +570,7 @@ def handle(mgr: Managers, cmd: str, args: dict) -> dict:
         return {"count": _customer_count()}
 
     if cmd == "analytics":
-        return _analytics(int(args.get("limit", 100000)))
+        return _analytics(int(args.get("limit", -1)))
 
     if cmd == "get_customer":
         return {"customer": _get_customer(str(_req(args, "customer_id", cmd)))}
