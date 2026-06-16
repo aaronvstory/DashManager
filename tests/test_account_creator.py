@@ -1,7 +1,8 @@
 """Tests for the pure helpers in account_creator (no browser, no bridge)."""
 from datetime import datetime, timedelta, timezone
 
-from backend.account_creator import (_apply_fixed_address, _daisy_record,
+from backend.account_creator import (_apply_default_password,
+                                      _apply_fixed_address, _daisy_record,
                                       _extract_orphan, _notes, _within_hours)
 
 
@@ -161,3 +162,17 @@ def test_apply_fixed_address_noop_when_blank():
     identity = {"full_address": "1 Random Way"}
     out = _apply_fixed_address(identity, "")
     assert out["full_address"] == "1 Random Way"
+
+
+def test_apply_default_password_overrides_random_pw():
+    # generate_identity RETURNS a random pw but CustomerDaisy STORES the default;
+    # signup must use the default so the account stays reloginable.
+    idn = {"email": "a@b.net", "password": "g2ZBD3O+)OVd"}
+    out = _apply_default_password(idn, {"default_password": "Slaypap3!@"})
+    assert out["password"] == "Slaypap3!@"
+
+
+def test_apply_default_password_noop_when_no_default():
+    # No default configured -> keep the generated password (don't blank it).
+    assert _apply_default_password({"password": "r"}, {})["password"] == "r"
+    assert _apply_default_password({"password": "r"}, None)["password"] == "r"

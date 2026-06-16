@@ -46,6 +46,25 @@ def _apply_fixed_address(identity: dict[str, Any],
     return identity
 
 
+def _apply_default_password(identity: dict[str, Any],
+                            daisy_cfg: Any) -> dict[str, Any]:
+    """Force the DoorDash password to the configured ``default_password``.
+
+    generate_identity returns a RANDOM per-identity password but persists the
+    DEFAULT (e.g. 'Slaypap3!@') into CustomerDaisy. If the signup uses the
+    random one, CustomerDaisy + relogin think the password is the default and
+    can never log back in — the account is unrecoverable the moment the save is
+    interrupted. So every account signs up with the one stable default, matching
+    what CustomerDaisy stores. No-op (keep the generated pw) only when no default
+    is configured. Mutates and returns identity.
+    """
+    default_pw = (daisy_cfg.get("default_password")
+                  if isinstance(daisy_cfg, dict) else "") or ""
+    if default_pw:
+        identity["password"] = default_pw
+    return identity
+
+
 async def _retry(coro_factory, *, attempts: int = 4, emit=None, what: str = ""):
     """Await coro_factory() with retries for transient failures (DNS/network
     blips in CustomerDaisy's mail.tm/MapQuest/api.cc calls). Re-raises the last
@@ -120,6 +139,12 @@ async def create_account(*, location_origin: str | None,
         # unique=False: replace the random address with the batch's shared one
         # BEFORE the identity_generated emit so the live UI shows the real addr.
         identity = _apply_fixed_address(identity, fixed_address)
+        # Force the DoorDash password to the configured DEFAULT (see
+        # _apply_default_password): generate_identity RETURNS a random per-identity
+        # password but PERSISTS the default in CustomerDaisy, so without this the
+        # signup uses a random pw while CustomerDaisy + relogin believe it's the
+        # default — an unrecoverable account if the save is ever interrupted.
+        identity = _apply_default_password(identity, await db.get_setting("daisy"))
         _emit("identity_generated", {
             "first_name": identity.get("first_name"),
             "last_name": identity.get("last_name"),
