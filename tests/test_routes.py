@@ -357,6 +357,11 @@ async def test_unknown_api_subpath_also_404s(client):
 async def test_non_api_path_still_serves_spa_shell(client):
     # A client-route hard-refresh (/reports, /database, …) must STILL fall back
     # to index.html so client-side routing works — only /api/* is excluded.
+    # The SPA catch-all is only mounted when the built frontend exists, so skip
+    # cleanly in a backend-only checkout (e.g. CI before `npm run build`).
+    from backend import config
+    if not config.FRONTEND_DIST.exists():
+        pytest.skip("frontend not built (FRONTEND_DIST absent) — no SPA shell")
     r = await client.get("/reports")
     assert r.status_code == 200
     assert "<!doctype html" in r.text.lower()
