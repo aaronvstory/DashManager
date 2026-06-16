@@ -216,3 +216,75 @@ async def phone_login_customer(customer_id: int,
         raise RuntimeError(f"phone login failed (outcome={outcome})")
     _emit("relogin_done", {"customer_id": customer_id, "mode": "phone"})
     return {"customer_id": customer_id, "outcome": outcome}
+
+
+async def phone_login_customer_cdp(customer_id: int,
+                                   headless: bool = False,
+                                   set_address: str | None = None,
+                                   instruction: str | None = None
+                                   ) -> dict[str, Any]:
+    """Phone-number→OTP login via SeleniumBase CDP (beats the login CF gate).
+
+    The plain-Playwright phone_login_customer can't clear the login Cloudflare
+    Turnstile. This drives the CDP path (cdp_login.phone_login_via_cdp, os_input)
+    which clicks the Turnstile + enters the number with real input, then saves
+    the captured storage_state as the customer's session.
+
+    ⚠️ os_input grabs the real cursor — hands-off while running.
+    """
+    import asyncio
+    import json
+
+    from backend import config
+    from backend.browser.cdp_login import phone_login_via_cdp
+
+    customer = await db.get_customer(customer_id)
+    if customer is None:
+        raise ValueError("customer not found")
+    token, api_url, hosts = _token_fields(customer)
+    if not token:
+        raise ValueError("customer has no saved number token for OTP login")
+    phone = customer.get("phone") or ""
+    phone10 = "".join(ch for ch in phone if ch.isdigit())[-10:]
+    if len(phone10) != 10:
+        raise ValueError("customer has no valid phone number")
+
+    daisy_cfg = await db.get_setting("daisy")
+    loop = asyncio.get_running_loop()
+    _emit("relogin_started", {"customer_id": customer_id, "mode": "cdp_phone"})
+
+    async with DaisyBridge(root=daisy_cfg.get("root")) as daisy:
+        def _poll_otp_sync() -> str:
+            fut = asyncio.run_coroutine_threadsafe(
+                daisy.fetch_otp(token, api_url, hosts), loop)
+            try:
+                return (fut.result(timeout=60.0).get("code") or "")
+            except Exception:
+                return ""
+
+        shot_dir = None
+        if hasattr(config, "SCREENSHOTS_DIR"):
+            shot_dir = str(config.SCREENSHOTS_DIR / "login" / f"cust{customer_id}")
+        result = await asyncio.to_thread(
+            phone_login_via_cdp, phone10, poll_otp=_poll_otp_sync,
+            proxy=None, headless=headless, os_input=True,
+            set_address=set_address, instruction=instruction,
+            emit=_emit, screenshot_dir=shot_dir)
+
+    outcome = result.get("outcome", "failed")
+    _emit("relogin_outcome", {"customer_id": customer_id, "outcome": outcome,
+                              "mode": "cdp_phone"})
+    if outcome == "logged_in" and result.get("storage_state"):
+        config.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        path = str(config.SESSIONS_DIR / f"session_{customer_id}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(result["storage_state"], f)
+        await db.update_customer(customer_id, session_status="active",
+                                 storage_state_path=path)
+        _emit("relogin_done", {"customer_id": customer_id, "mode": "cdp_phone"})
+        return {"customer_id": customer_id, "outcome": outcome,
+                "prefs": result.get("prefs")}
+
+    _emit("relogin_failed", {"customer_id": customer_id, "outcome": outcome,
+                             "mode": "cdp_phone"})
+    raise RuntimeError(f"cdp phone login failed (outcome={outcome})")
