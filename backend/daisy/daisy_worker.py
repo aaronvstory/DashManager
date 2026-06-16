@@ -28,6 +28,9 @@ Commands:
   delete_customer {customer_id}         -> {deleted: bool}
   export {format, limit}                -> {format, text}       (csv|json|txt)
   list_addresses                        -> {addresses: [...]}   (anchor pool)
+  add_address {address}                 -> {addresses: [...]}   (append + persist)
+  update_address {index, address}       -> {addresses: [...]}   (replace at index)
+  delete_address {index}                -> {addresses: [...]}   (remove at index)
   generate_address {origin, radius}     -> {address: {...}|null}
 
 stdout is JSON-only; CustomerDaisy's Rich console noise is redirected to stderr
@@ -345,6 +348,100 @@ def _list_addresses() -> list[dict]:
     return out
 
 
+def _addresses_path():
+    return DAISY_ROOT / "my_addresses.json"
+
+
+def _write_addresses(addresses: list[dict]) -> None:
+    """Persist the anchor pool back to my_addresses.json in the canonical
+    ``{"addresses": [...]}`` shape, atomically (write a temp file + replace) so a
+    crash mid-write can't truncate the user's address book."""
+    p = _addresses_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".json.tmp")
+    try:
+        tmp.write_text(json.dumps({"addresses": addresses}, indent=2),
+                       encoding="utf-8")
+        tmp.replace(p)                      # atomic on the same filesystem
+    except OSError:
+        # disk full / locked / permission — don't leave a half-written .tmp
+        # littering the user's CustomerDaisy dir; the original file is untouched
+        # (replace is atomic, so on failure p is either old-or-new, never torn).
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def _clean_address(entry: dict) -> dict:
+    """Normalize one address dict to the stored shape; full_address required."""
+    def _s(v: object) -> str:
+        return v.strip() if isinstance(v, str) else ""
+
+    full = _s(entry.get("full_address")) or _s(entry.get("address"))
+    if not full:
+        raise ValueError("address needs a non-empty full_address")
+    return {"name": _s(entry.get("name")), "full_address": full,
+            "city": _s(entry.get("city")), "state": _s(entry.get("state"))}
+
+
+def _addresses_for_edit() -> list[dict]:
+    """The current pool for a READ-MODIFY-WRITE edit — same normalized rows as
+    ``_list_addresses``, but it RAISES on a corrupt/unreadable file instead of
+    swallowing the error and returning [].
+
+    This is the critical difference from ``_list_addresses``: the list path is a
+    forgiving read for display, but an EDIT then writes the result BACK. If a
+    hand-edited ``my_addresses.json`` had a JSON syntax error, the forgiving read
+    would return [] and the write would CLOBBER the whole file (silent data
+    loss). Here we let the JSON/OS error propagate so the edit aborts and the
+    user's file is left untouched.
+    """
+    p = _addresses_path()
+    if not p.exists():
+        return []
+    raw = json.loads(p.read_text("utf-8"))   # raises on bad JSON — do NOT swallow
+    items = raw.get("addresses", raw) if isinstance(raw, dict) else raw
+    out: list[dict] = []
+    for x in items if isinstance(items, list) else []:
+        try:
+            out.append(_clean_address(x if isinstance(x, dict)
+                                      else {"full_address": x}))
+        except (ValueError, AttributeError):
+            continue                         # skip an individual junk entry
+    return out
+
+
+def _add_address(entry: dict) -> list[dict]:
+    """Append a cleaned address to the pool; returns the new full list."""
+    cleaned = _clean_address(entry)          # validate BEFORE reading the file
+    addresses = _addresses_for_edit()
+    addresses.append(cleaned)
+    _write_addresses(addresses)
+    return addresses
+
+
+def _update_address(index: int, entry: dict) -> list[dict]:
+    """Replace the address at ``index`` (0-based) with a cleaned one."""
+    cleaned = _clean_address(entry)
+    addresses = _addresses_for_edit()
+    if not 0 <= index < len(addresses):
+        raise IndexError(f"address index {index} out of range "
+                         f"(0..{len(addresses) - 1})")
+    addresses[index] = cleaned
+    _write_addresses(addresses)
+    return addresses
+
+
+def _delete_address(index: int) -> list[dict]:
+    """Remove the address at ``index`` (0-based); returns the new full list."""
+    addresses = _addresses_for_edit()
+    if not 0 <= index < len(addresses):
+        raise IndexError(f"address index {index} out of range "
+                         f"(0..{len(addresses) - 1})")
+    addresses.pop(index)
+    _write_addresses(addresses)
+    return addresses
+
+
 def _req(args: dict, key: str, cmd: str):
     """Fetch a required command arg, or raise a descriptive ValueError.
 
@@ -449,6 +546,16 @@ def handle(mgr: Managers, cmd: str, args: dict) -> dict:
 
     if cmd == "list_addresses":
         return {"addresses": _list_addresses()}
+
+    if cmd == "add_address":
+        return {"addresses": _add_address(dict(_req(args, "address", cmd)))}
+
+    if cmd == "update_address":
+        return {"addresses": _update_address(
+            int(_req(args, "index", cmd)), dict(_req(args, "address", cmd)))}
+
+    if cmd == "delete_address":
+        return {"addresses": _delete_address(int(_req(args, "index", cmd)))}
 
     if cmd == "generate_address":
         # A radius-scoped real address near an origin (no customer created).

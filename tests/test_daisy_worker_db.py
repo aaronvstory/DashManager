@@ -195,3 +195,90 @@ def test_db_functions_missing_db_are_safe(tmp_path, monkeypatch):
     # update on a missing DB returns None cleanly (its not-found signal),
     # consistent with the other accessors — NOT a raw FileNotFoundError.
     assert w._update_customer("x", {"city": "Reno"}) is None
+
+
+# ── anchor address-book write operations (my_addresses.json) ──
+
+def test_add_address_creates_file_and_appends(tmp_path, monkeypatch):
+    monkeypatch.setattr(w, "DAISY_ROOT", tmp_path)
+    # no file yet -> add creates it
+    out = w._add_address({"name": "Home", "full_address": "1 Main St, Reno, NV",
+                          "city": "Reno", "state": "NV"})
+    assert out == [{"name": "Home", "full_address": "1 Main St, Reno, NV",
+                    "city": "Reno", "state": "NV"}]
+    # persisted in the canonical {"addresses": [...]} shape, readable back
+    assert w._list_addresses()[0]["full_address"] == "1 Main St, Reno, NV"
+    # a second add appends
+    out2 = w._add_address({"full_address": "2 Oak Ave, Reno, NV"})
+    assert [a["full_address"] for a in out2] == [
+        "1 Main St, Reno, NV", "2 Oak Ave, Reno, NV"]
+
+
+def test_add_address_requires_full_address(tmp_path, monkeypatch):
+    monkeypatch.setattr(w, "DAISY_ROOT", tmp_path)
+    with pytest.raises(ValueError, match="needs a non-empty full_address"):
+        w._add_address({"name": "Blank", "full_address": "   "})
+
+
+def test_update_address_replaces_at_index(tmp_path, monkeypatch):
+    monkeypatch.setattr(w, "DAISY_ROOT", tmp_path)
+    w._add_address({"full_address": "1 Main St"})
+    w._add_address({"full_address": "2 Oak Ave"})
+    out = w._update_address(0, {"full_address": "1 Main St, UPDATED",
+                                "name": "HQ"})
+    assert out[0] == {"name": "HQ", "full_address": "1 Main St, UPDATED",
+                      "city": "", "state": ""}
+    assert out[1]["full_address"] == "2 Oak Ave"   # untouched
+
+
+def test_delete_address_removes_at_index(tmp_path, monkeypatch):
+    monkeypatch.setattr(w, "DAISY_ROOT", tmp_path)
+    w._add_address({"full_address": "1 Main St"})
+    w._add_address({"full_address": "2 Oak Ave"})
+    out = w._delete_address(0)
+    assert [a["full_address"] for a in out] == ["2 Oak Ave"]
+
+
+@pytest.mark.parametrize("op", ["update", "delete"])
+def test_address_index_out_of_range_raises(tmp_path, monkeypatch, op):
+    monkeypatch.setattr(w, "DAISY_ROOT", tmp_path)
+    w._add_address({"full_address": "1 Main St"})
+    with pytest.raises(IndexError, match="out of range"):
+        if op == "update":
+            w._update_address(5, {"full_address": "x"})
+        else:
+            w._delete_address(5)
+
+
+def test_write_addresses_is_atomic_no_tmp_left(tmp_path, monkeypatch):
+    monkeypatch.setattr(w, "DAISY_ROOT", tmp_path)
+    w._add_address({"full_address": "1 Main St"})
+    # the temp file used for the atomic replace must not linger
+    assert not (tmp_path / "my_addresses.json.tmp").exists()
+    assert (tmp_path / "my_addresses.json").exists()
+
+
+def test_edit_aborts_on_corrupt_file_no_data_loss(tmp_path, monkeypatch):
+    # A hand-edited my_addresses.json with a JSON syntax error must NOT be
+    # clobbered by an add — the edit aborts (raises), preserving the file. The
+    # forgiving _list_addresses returns [] here; the EDIT path must not.
+    monkeypatch.setattr(w, "DAISY_ROOT", tmp_path)
+    p = tmp_path / "my_addresses.json"
+    corrupt = '{"addresses": [ {"full_address": "1 Main St",, ] }'  # bad JSON
+    p.write_text(corrupt, encoding="utf-8")
+    assert w._list_addresses() == []                 # forgiving read swallows it
+    with pytest.raises(json.JSONDecodeError):
+        w._add_address({"full_address": "2 Oak Ave"})
+    assert p.read_text(encoding="utf-8") == corrupt   # file UNTOUCHED — not wiped
+
+
+def test_edit_preserves_legacy_entries(tmp_path, monkeypatch):
+    # An entry using the legacy "address" key must survive an add round-trip
+    # (it's a valid address, just a different key shape).
+    monkeypatch.setattr(w, "DAISY_ROOT", tmp_path)
+    p = tmp_path / "my_addresses.json"
+    p.write_text(json.dumps(
+        {"addresses": [{"address": "9 Legacy Rd, Reno, NV"}]}), encoding="utf-8")
+    out = w._add_address({"full_address": "2 Oak Ave"})
+    fulls = [a["full_address"] for a in out]
+    assert fulls == ["9 Legacy Rd, Reno, NV", "2 Oak Ave"]   # legacy kept

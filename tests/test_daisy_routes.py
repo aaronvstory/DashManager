@@ -57,6 +57,32 @@ class _FakeBridge:
         self.calls.append(("list_addresses",))
         return [{"name": "Home", "full_address": "1 Main St, Reno, NV"}]
 
+    async def add_address(self, address):
+        self.calls.append(("add_address", address))
+        from backend.daisy.bridge import DaisyError
+        if not (address.get("full_address") or "").strip():
+            # mirrors the worker: a blank full_address is rejected, surfaced as
+            # a DaisyError -> the route maps it to 400 (not an unhandled 500).
+            raise DaisyError("add_address failed: address needs a non-empty "
+                             "full_address")
+        return [{"full_address": "1 Main St, Reno, NV"}, address]
+
+    async def update_address(self, index, address):
+        self.calls.append(("update_address", index, address))
+        from backend.daisy.bridge import DaisyError
+        if index != 0:
+            raise DaisyError(f"update_address failed: address index {index} "
+                             "out of range (0..0)")
+        return [address]
+
+    async def delete_address(self, index):
+        self.calls.append(("delete_address", index))
+        from backend.daisy.bridge import DaisyError
+        if index != 0:
+            raise DaisyError(f"delete_address failed: address index {index} "
+                             "out of range (0..0)")
+        return []
+
 
 @pytest.fixture
 async def client():
@@ -226,3 +252,69 @@ async def test_addresses_route(client, monkeypatch):
     # it hit list_addresses, not get_customer("addresses")
     assert any(c[0] == "list_addresses" for c in b.calls)
     assert not any(c[0] == "get_customer" for c in b.calls)
+
+
+async def test_add_address_route(client, monkeypatch):
+    b = _patch_bridge(monkeypatch, _FakeBridge([]))
+    r = await client.post("/api/daisy/addresses",
+                          json={"full_address": "2 Oak Ave, Reno, NV",
+                                "name": "Work"})
+    assert r.status_code == 200
+    fulls = [a["full_address"] for a in r.json()["addresses"]]
+    assert "2 Oak Ave, Reno, NV" in fulls
+    # the body was normalized to the full {full_address,name,city,state} shape
+    assert b.calls[-1] == ("add_address",
+                           {"full_address": "2 Oak Ave, Reno, NV",
+                            "name": "Work", "city": "", "state": ""})
+
+
+async def test_add_address_rejects_unknown_field(client, monkeypatch):
+    _patch_bridge(monkeypatch, _FakeBridge([]))
+    r = await client.post("/api/daisy/addresses",
+                          json={"full_address": "x", "bogus": "y"})
+    assert r.status_code == 422            # extra=forbid
+
+
+async def test_add_address_requires_full_address(client, monkeypatch):
+    _patch_bridge(monkeypatch, _FakeBridge([]))
+    r = await client.post("/api/daisy/addresses", json={"name": "no addr"})
+    assert r.status_code == 422            # full_address is required
+
+
+async def test_add_address_whitespace_is_400_not_500(client, monkeypatch):
+    # a whitespace-only full_address passes Pydantic (it's a non-empty str) but
+    # the worker rejects it -> the route maps the DaisyError to 400, never 500.
+    _patch_bridge(monkeypatch, _FakeBridge([]))
+    r = await client.post("/api/daisy/addresses", json={"full_address": "   "})
+    assert r.status_code == 400
+    assert "full_address" in r.json()["detail"]
+
+
+async def test_update_address_route(client, monkeypatch):
+    _patch_bridge(monkeypatch, _FakeBridge([]))
+    r = await client.patch("/api/daisy/addresses/0",
+                         json={"full_address": "1 Main UPDATED"})
+    assert r.status_code == 200
+    assert r.json()["addresses"][0]["full_address"] == "1 Main UPDATED"
+
+
+async def test_update_address_out_of_range_is_404(client, monkeypatch):
+    _patch_bridge(monkeypatch, _FakeBridge([]))
+    r = await client.patch("/api/daisy/addresses/9",
+                         json={"full_address": "x"})
+    assert r.status_code == 404
+    assert "out of range" in r.json()["detail"]
+
+
+async def test_delete_address_route(client, monkeypatch):
+    b = _patch_bridge(monkeypatch, _FakeBridge([]))
+    r = await client.delete("/api/daisy/addresses/0")
+    assert r.status_code == 200
+    assert r.json()["addresses"] == []
+    assert b.calls[-1] == ("delete_address", 0)
+
+
+async def test_delete_address_out_of_range_is_404(client, monkeypatch):
+    _patch_bridge(monkeypatch, _FakeBridge([]))
+    r = await client.delete("/api/daisy/addresses/9")
+    assert r.status_code == 404

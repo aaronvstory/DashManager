@@ -24,6 +24,10 @@ def bridge(monkeypatch):
             "delete_customer": {"deleted": True},
             "export": {"format": "csv", "text": "a,b\n1,2\n"},
             "list_addresses": {"addresses": [{"full_address": "1 Main St"}]},
+            "add_address": {"addresses": [{"full_address": "1 Main St"},
+                                          {"full_address": "2 Oak Ave"}]},
+            "update_address": {"addresses": [{"full_address": "1 Main UPDATED"}]},
+            "delete_address": {"addresses": []},
             "generate_address": {"address": {"full_address": "9 Oak Ave"}},
         }[cmd]
 
@@ -70,6 +74,27 @@ async def test_list_addresses(bridge):
     out = await bridge.list_addresses()
     assert out == [{"full_address": "1 Main St"}]
     assert bridge._calls[-1][0] == "list_addresses"
+
+
+async def test_add_address(bridge):
+    out = await bridge.add_address({"full_address": "2 Oak Ave"})
+    assert [a["full_address"] for a in out] == ["1 Main St", "2 Oak Ave"]
+    assert bridge._calls[-1] == (
+        "add_address", {"address": {"full_address": "2 Oak Ave"}})
+
+
+async def test_update_address(bridge):
+    out = await bridge.update_address(0, {"full_address": "1 Main UPDATED"})
+    assert out == [{"full_address": "1 Main UPDATED"}]
+    assert bridge._calls[-1] == (
+        "update_address",
+        {"index": 0, "address": {"full_address": "1 Main UPDATED"}})
+
+
+async def test_delete_address(bridge):
+    out = await bridge.delete_address(0)
+    assert out == []
+    assert bridge._calls[-1] == ("delete_address", {"index": 0})
 
 
 async def test_generate_address(bridge):

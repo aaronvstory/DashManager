@@ -16,6 +16,7 @@ import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Check, Database, Download, Pencil, RefreshCw, Trash2 } from "lucide-react"
 import { toast } from "sonner"
+import { AddressBook } from "@/components/daisy/address-book"
 import { EmptyState } from "@/components/empty-state"
 import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
@@ -206,6 +207,10 @@ export default function DaisyPage() {
           </div>
         </div>
       )}
+
+      {/* The anchor address book is independent of the customer pool — always
+          available to read/add/edit/delete, even when there are no customers. */}
+      <AddressBook />
     </>
   )
 }
