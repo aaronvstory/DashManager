@@ -74,7 +74,15 @@ async def test_one_proxy(proxy_id: str) -> dict[str, Any]:
         (px for px in proxies if proxy_pool.proxy_id(px) == proxy_id), None)
     if target is None:
         raise HTTPException(status_code=404, detail="proxy not found")
-    mine = await asyncio.to_thread(proxy_pool.local_ip)
-    result = await asyncio.to_thread(
-        proxy_pool.check_proxy, target, local_ip=mine)
+    try:
+        mine = await asyncio.to_thread(proxy_pool.local_ip)
+        result = await asyncio.to_thread(
+            proxy_pool.check_proxy, target, local_ip=mine)
+    except Exception as exc:  # noqa: BLE001 — a probe must never 500
+        # Mirror test_all_proxies: an unexpected raise from local_ip/check_proxy
+        # could embed the proxy URL (creds) in its message. Log server-side;
+        # return a generic message so the client never sees the secret.
+        logger.exception("proxy test-one failed")
+        raise HTTPException(status_code=500, detail="proxy test failed") \
+            from exc
     return {"local_ip": mine or "", **result}
