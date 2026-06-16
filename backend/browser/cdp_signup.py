@@ -82,37 +82,20 @@ IOS_UA = ("Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) "
 IOS_METRICS = "390,844,3"
 
 
-def resolve_proxy() -> str | None:
+def resolve_proxy(path: "str | None" = None) -> str | None:
     """Best-effort residential proxy as ``user:pass@host:port`` (or None).
 
-    Prefers the PR-A ``proxy_pool`` module (liveness-checked) when present; if
-    that branch isn't merged yet, falls back to a direct parse of the gitignored
-    ``working-proxies.txt`` so signup still gets a residential exit IP. Returns
-    None only when no proxy line is configured (signup then runs direct — a
+    Reads the gitignored ``working-proxies.txt`` via the shared ``proxy_pool``
+    parser (which handles the colon-in-password edge case and is liveness-aware)
+    and returns the first proxy in SeleniumBase inline-auth form. Returns None
+    only when no proxy line is configured (signup then runs direct — a
     diagnostics-only path that WILL hit the bot gate).
     """
-    # Prefer proxy_pool (liveness-aware) if it's on this branch.
     try:
-        from backend.browser import proxy_pool as pp  # type: ignore
-        px = pp.dedup_proxies(pp.load_proxies())
+        from backend.browser import proxy_pool as pp
+        px = pp.dedup_proxies(pp.load_proxies(path))
         if px:
             return pp.format_sb_proxy(px[0])
-    except Exception:
-        pass
-    # Fallback: parse working-proxies.txt directly.
-    try:
-        from pathlib import Path
-        root = Path(__file__).resolve().parents[2]
-        f = root / "working-proxies.txt"
-        if f.exists():
-            for ln in f.read_text(encoding="utf-8").splitlines():
-                ln = ln.strip()
-                if ln and not ln.startswith("#"):
-                    raw = ln.split("://", 1)[-1]
-                    parts = raw.split(":", 3)
-                    if len(parts) == 4:
-                        host, port, user, pwd = parts
-                        return f"{user}:{pwd}@{host}:{port}"
     except Exception:
         pass
     return None

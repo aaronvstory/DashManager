@@ -125,3 +125,18 @@ def test_resolve_proxy_returns_none_or_user_pass_form():
     # machine working-proxies.txt exists, so it returns the gateway string.)
     out = c.resolve_proxy()
     assert out is None or ("@" in out and ":" in out.split("@", 1)[0])
+
+
+def test_resolve_proxy_uses_proxy_pool_parser(tmp_path):
+    # Goes through proxy_pool.load_proxies/format_sb_proxy (path arg), so it
+    # handles a colon-in-password line the old hand-parser would have split
+    # wrong. Returns the SB inline-auth form (no scheme prefix).
+    f = tmp_path / "working-proxies.txt"
+    f.write_text("http://host.example:8080:user-flags:pa:ss:word\n",
+                 encoding="utf-8")
+    out = c.resolve_proxy(str(f))
+    assert out == "user-flags:pa:ss:word@host.example:8080"
+
+
+def test_resolve_proxy_missing_file_is_none(tmp_path):
+    assert c.resolve_proxy(str(tmp_path / "nope.txt")) is None
