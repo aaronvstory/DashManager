@@ -61,8 +61,11 @@ def _sample_model() -> dict:
                 ],
             },
         ],
+        # keep this in sync with _summarize's output shape (the render-path
+        # integration tests pass this dict straight to _summary_cards).
         "summary": {"customers": 3, "orders": 3, "refunded": 1, "pursuing": 2,
-                    "no_orders": 1, "needs_you": 0},
+                    "unconfirmed": 0, "unchecked": 0, "no_orders": 1,
+                    "needs_you": 2, "active": 2},
     }
 
 
