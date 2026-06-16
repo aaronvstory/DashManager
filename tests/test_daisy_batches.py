@@ -59,3 +59,20 @@ async def test_fetch_members_degrades_failed_shard(monkeypatch):
     assert len(rows) == 6                       # every member still gets a row
     assert any("bridge failed" in r["error"] for r in rows)
     assert all("code" in r for r in rows)
+
+
+def test_rec_token_decodes_json_string_mirror_hosts():
+    # mirror_hosts persisted as a JSON STRING must be decoded, not dropped
+    # (regression vs the old isinstance-guard which fell back to []).
+    rec = {"metadata": {"apicc_number_token": "tok",
+                        "apicc_api_url": "https://api.cc/x",
+                        "apicc_mirror_hosts": '["h1.example.com","h2.example.com"]'}}
+    token, api_url, hosts = B._rec_token(rec)
+    assert token == "tok" and api_url == "https://api.cc/x"
+    assert hosts == ["h1.example.com", "h2.example.com"]
+
+
+def test_rec_token_accepts_real_list_and_handles_missing():
+    assert B._rec_token({"metadata": {"apicc_mirror_hosts": ["a"]}})[2] == ["a"]
+    assert B._rec_token({})[2] == []          # absent -> []
+    assert B._rec_token({"mirror_hosts": "garbage"})[2] == []  # bad json -> []

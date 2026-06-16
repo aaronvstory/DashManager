@@ -32,12 +32,17 @@ def _rec_batch(rec: dict[str, Any]) -> tuple[str, str]:
 
 def _rec_token(rec: dict[str, Any]) -> tuple[str, str, list[str]]:
     """(number_token, api_url, mirror_hosts) from a CustomerDaisy record."""
+    # mirror_hosts may be a real list OR a JSON-stringified list (the actual
+    # persistence format) — reuse otp_fetch._loads_list so a JSON string is
+    # DECODED, not silently dropped (matches the proven otp_fetch path; an
+    # earlier isinstance-guard discarded the hosts → fetch_otp fell back to the
+    # default api.cc endpoint).
+    from backend.otp_fetch import _loads_list
+
     meta = rec.get("metadata") or {}
     token = (meta.get("apicc_number_token") or rec.get("number_token") or "")
     api_url = (meta.get("apicc_api_url") or rec.get("api_url") or "")
-    hosts = meta.get("apicc_mirror_hosts") or rec.get("mirror_hosts") or []
-    if not isinstance(hosts, list):
-        hosts = []
+    hosts = _loads_list(meta.get("apicc_mirror_hosts") or rec.get("mirror_hosts"))
     return token, api_url, hosts
 
 
