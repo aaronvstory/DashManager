@@ -15,13 +15,32 @@ async def test_empty():
 async def test_preserves_order_across_shards(monkeypatch):
     monkeypatch.setattr(sharded, "POOL_SIZE", 3)
     items = list(range(10))
+    shard_calls = {"n": 0}
 
     async def worker(shard):
+        shard_calls["n"] += 1
         # echo each item's value, keyed by its original index
         return {idx: f"r{item}" for idx, item in shard}
 
     out = await sharded.sharded_gather(items, worker, lambda i, e: "ERR")
     assert out == [f"r{i}" for i in range(10)]   # exact input order
+    # the patched POOL_SIZE=3 is HONORED at call time (10 items → 3 shards) —
+    # guards the default-arg-binding trap where the patch would be a no-op.
+    assert shard_calls["n"] == 3
+
+
+async def test_explicit_pool_size_overrides_module_default():
+    items = list(range(8))
+    shard_calls = {"n": 0}
+
+    async def worker(shard):
+        shard_calls["n"] += 1
+        return {idx: item for idx, item in shard}
+
+    out = await sharded.sharded_gather(items, worker, lambda i, e: 0,
+                                       pool_size=2)
+    assert out == list(range(8))
+    assert shard_calls["n"] == 2
 
 
 async def test_failed_shard_degrades_only_its_items(monkeypatch):

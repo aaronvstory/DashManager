@@ -38,16 +38,20 @@ ShardErrorFactory = Callable[[T, BaseException], R]
 
 async def sharded_gather(items: list[T], worker: ShardWorker,
                          on_shard_error: ShardErrorFactory, *,
-                         pool_size: int = POOL_SIZE) -> list[R]:
+                         pool_size: int | None = None) -> list[R]:
     """Run ``worker`` over ``items`` sharded across ``pool_size`` bridges.
 
     Returns a list of results in the SAME ORDER as ``items`` — every item gets
     a result (a real one, or ``on_shard_error(item, exc)`` if its shard's bridge
     failed). Never raises for one shard's sake.
+
+    ``pool_size`` defaults to None → the module ``POOL_SIZE`` read AT CALL TIME
+    (a literal default would bind ``POOL_SIZE``'s value at import, making a
+    later monkeypatch of it a silent no-op).
     """
     if not items:
         return []
-    pool = min(pool_size, len(items))
+    pool = min(POOL_SIZE if pool_size is None else pool_size, len(items))
     shards: list[list[tuple[int, T]]] = [[] for _ in range(pool)]
     for i, item in enumerate(items):
         shards[i % pool].append((i, item))
