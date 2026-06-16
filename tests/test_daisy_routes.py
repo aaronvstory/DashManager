@@ -37,7 +37,8 @@ class _FakeBridge:
     async def customer_count(self):
         return len(self._rows)
 
-    async def analytics(self, limit=100000):
+    async def analytics(self, limit=-1):
+        # default matches DaisyBridge.analytics (limit=-1 -> whole pool).
         self.calls.append(("analytics", limit))
         return {"total": 2, "verified": 1, "unverified": 1,
                 "by_state": [{"key": "NV", "count": 2}],
@@ -142,8 +143,8 @@ async def test_analytics_route(client, monkeypatch):
     body = r.json()
     assert body["total"] == 2 and body["verified"] == 1
     assert body["by_state"][0] == {"key": "NV", "count": 2}
-    # it hit analytics, not get_customer("analytics")
-    assert any(c[0] == "analytics" for c in b.calls)
+    # it hit analytics (with the whole-pool default), not get_customer
+    assert ("analytics", -1) in b.calls
     assert not any(c[0] == "get_customer" for c in b.calls)
 
 

@@ -23,7 +23,8 @@ Commands:
   list_recent_customers {limit}         -> {customers: [...]}
   list_customers {limit}                -> {customers: [...]}   (full list)
   customer_count                        -> {count: int}
-  analytics {limit?}                    -> {total, verified, by_state, by_city}
+  analytics {limit?}                    -> {total, verified, unverified,
+                                            by_state, by_city}
   get_customer {customer_id}            -> {customer: {...}|null}
   update_customer {customer_id, fields} -> {customer, updated}
   delete_customer {customer_id}         -> {deleted: bool}

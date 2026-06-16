@@ -52,7 +52,7 @@ async def test_customer_count(bridge):
 
 async def test_analytics(bridge):
     a = await bridge.analytics()
-    assert a["total"] == 7 and a["verified"] == 4
+    assert a["total"] == 7 and a["verified"] == 4 and a["unverified"] == 3
     assert a["by_state"][0] == {"key": "NV", "count": 7}
     assert bridge._calls[-1] == ("analytics", {"limit": -1})
 
