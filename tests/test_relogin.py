@@ -97,3 +97,33 @@ async def test_relogin_wipe_profile_calls_remove_first(tmp_path, monkeypatch):
     # The wipe must have happened, and BEFORE the profile was opened/login ran.
     assert "wiped" in order
     assert order.index("wiped") < order.index("login")
+
+
+# ── _token_fields: extract the api.cc OTP-fetch creds from a customer row ──
+
+def test_token_fields_parses_json_string_mirror_hosts():
+    c = {"number_token": "tok", "api_url": "https://api.test",
+         "mirror_hosts": '["h1", "h2"]'}
+    token, api_url, hosts = relogin._token_fields(c)
+    assert token == "tok" and api_url == "https://api.test"
+    assert hosts == ["h1", "h2"]
+
+
+def test_token_fields_accepts_list_shaped_mirror_hosts():
+    # a row handed to us BEFORE serialization (already a list) must NOT be
+    # silently dropped — the old json.loads(list) raised TypeError -> [].
+    c = {"number_token": "t", "mirror_hosts": ["h1", "h2"]}
+    _t, _a, hosts = relogin._token_fields(c)
+    assert hosts == ["h1", "h2"]
+
+
+def test_token_fields_empty_and_garbage_mirror_hosts():
+    assert relogin._token_fields({"mirror_hosts": ""})[2] == []
+    assert relogin._token_fields({"mirror_hosts": None})[2] == []
+    assert relogin._token_fields({"mirror_hosts": "not json"})[2] == []
+    assert relogin._token_fields({})[2] == []           # missing key
+
+
+def test_token_fields_defaults_token_and_url_to_empty():
+    token, api_url, hosts = relogin._token_fields({})
+    assert token == "" and api_url == "" and hosts == []

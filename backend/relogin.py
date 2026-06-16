@@ -10,7 +10,6 @@ default (CustomerDaisy uses one shared password for all accounts).
 """
 from __future__ import annotations
 
-import json
 import time
 from typing import Any
 
@@ -27,13 +26,14 @@ async def _resolve_password(customer: dict[str, Any]) -> str:
 
 
 def _token_fields(customer: dict[str, Any]) -> tuple[str, str, list[str]]:
+    # mirror_hosts is a JSON-string TEXT column, but a caller may hand us the
+    # row before it's serialized (already a list). Reuse the shared loader so a
+    # list-shaped value isn't silently dropped to [] (which would lose the api.cc
+    # mirror hosts the OTP poll needs).
+    from backend.otp_fetch import _loads_list
     token = customer.get("number_token") or ""
     api_url = customer.get("api_url") or ""
-    try:
-        hosts = json.loads(customer.get("mirror_hosts") or "[]")
-    except (json.JSONDecodeError, TypeError):
-        hosts = []
-    return token, api_url, hosts
+    return token, api_url, _loads_list(customer.get("mirror_hosts"))
 
 
 async def fetch_otp_for_customer(customer_id: int, *,
