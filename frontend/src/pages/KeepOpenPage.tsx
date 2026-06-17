@@ -124,20 +124,26 @@ export default function KeepOpenPage() {
         </span>
       </div>
 
-      {customersQ.isLoading ? (
+      {/* Wait for BOTH the customer list and the authoritative open-state:
+          rendering rows before statusQ resolves would briefly show every
+          customer as closed and invite redundant Open clicks. */}
+      {customersQ.isLoading || statusQ.isLoading ? (
         <div className="space-y-3">
           <Skeleton className="h-24 w-full" />
           <Skeleton className="h-24 w-full" />
         </div>
-      ) : customersQ.isError ? (
+      ) : customersQ.isError || statusQ.isError ? (
         <div className="flex flex-col items-center gap-3 border border-border bg-card px-8 py-16 text-center">
           <p className="text-sm text-muted-foreground">
-            Couldn't load customers. Is the backend running?
+            Couldn't load keep-open state. Is the backend running?
           </p>
           <Button
             variant="outline"
             size="sm"
-            onClick={() => void customersQ.refetch()}
+            onClick={() => {
+              void customersQ.refetch()
+              void statusQ.refetch()
+            }}
           >
             Try again
           </Button>
