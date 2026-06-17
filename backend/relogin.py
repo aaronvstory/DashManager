@@ -243,10 +243,9 @@ async def phone_login_customer_cdp(customer_id: int,
     token, api_url, hosts = _token_fields(customer)
     if not token:
         raise ValueError("customer has no saved number token for OTP login")
-    phone = customer.get("phone") or ""
-    phone10 = "".join(ch for ch in phone if ch.isdigit())[-10:]
-    if len(phone10) != 10:
-        raise ValueError("customer has no valid phone number")
+    email = customer.get("email") or ""
+    if not email:
+        raise ValueError("customer has no email for OTP login")
 
     daisy_cfg = await db.get_setting("daisy")
     loop = asyncio.get_running_loop()
@@ -265,7 +264,7 @@ async def phone_login_customer_cdp(customer_id: int,
         if hasattr(config, "SCREENSHOTS_DIR"):
             shot_dir = str(config.SCREENSHOTS_DIR / "login" / f"cust{customer_id}")
         result = await asyncio.to_thread(
-            phone_login_via_cdp, phone10, poll_otp=_poll_otp_sync,
+            phone_login_via_cdp, email, poll_otp=_poll_otp_sync,
             proxy=None, headless=headless, os_input=True,
             set_address=set_address, instruction=instruction,
             emit=_emit, screenshot_dir=shot_dir)
