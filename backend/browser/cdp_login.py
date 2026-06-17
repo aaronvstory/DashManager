@@ -113,7 +113,10 @@ def _is_logged_in(sb: Any) -> bool:
     # logged-in home (the "$0 delivery fee" address modal). That URL lacks the
     # markers above, so also accept a doordash page whose content is the home
     # address-entry modal (only rendered when logged in) — verified live.
-    src = _cdp_source(sb)
+    # _cdp_source already lower-cases; the explicit .lower() here keeps the
+    # case-insensitive contract local + robust if that ever changes (the
+    # negative "continue to sign in" guard must reliably suppress the login page).
+    src = _cdp_source(sb).lower()
     return ("enter delivery address" in src
             and "delivery fee" in src
             and "continue to sign in" not in src)
