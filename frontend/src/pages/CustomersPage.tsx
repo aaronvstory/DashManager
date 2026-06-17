@@ -198,13 +198,16 @@ export default function CustomersPage() {
               <Download data-icon="inline-start" />
               Import from CustomerDaisy
             </Button>
-            <Button variant="outline" onClick={() => setCreateOpen(true)}>
-              <Sparkles data-icon="inline-start" />
-              Create account
-            </Button>
-            <Button onClick={() => setAddOpen(true)}>
+            <Button variant="outline" onClick={() => setAddOpen(true)}>
               <Plus data-icon="inline-start" />
               Add customer
+            </Button>
+            {/* Primary action: batch-create N new accounts (the dialog has a
+                "how many" field). Labelled plural so it's clearly the way to
+                make a batch, not a single account. */}
+            <Button onClick={() => setCreateOpen(true)}>
+              <Sparkles data-icon="inline-start" />
+              Create accounts
             </Button>
           </div>
         }

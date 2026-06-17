@@ -201,9 +201,10 @@ export function BucketCard({
             size="sm"
             disabled={runDisabled}
             onClick={() => onRunBucket(date)}
+            title="Start a refund-check run on this bucket: scrape every order, detect missing refunds, and pursue them"
           >
             <Play data-icon="inline-start" className="text-primary" />
-            Run bucket
+            Check refunds
           </Button>
         </CardAction>
       </CardHeader>
