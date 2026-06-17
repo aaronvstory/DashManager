@@ -6,7 +6,7 @@
  * running we poll so the audit trail fills in live.
  */
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import type { ReactNode } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { format } from "date-fns"
@@ -206,12 +206,16 @@ export function RunDetailSheet({
   onClose: () => void
 }) {
   // Keep the last selected run around so the close animation doesn't flash empty.
-  // Held in state (synced via effect) rather than written to a ref during render
-  // — a render-phase ref write is unsafe under concurrent/double-invoked render.
+  // React's "adjust state during render" pattern: store the prop and, when it
+  // changes to a non-null run, update synchronously in THIS render (no ref write,
+  // no effect lag). `shown` is therefore in lockstep with `run` on open — so the
+  // detailQuery below never sees `shown === null` while `open` is true.
   const [shown, setShown] = useState<Run | null>(run)
-  useEffect(() => {
+  const [prevRun, setPrevRun] = useState<Run | null>(run)
+  if (run !== prevRun) {
+    setPrevRun(run)
     if (run) setShown(run)
-  }, [run])
+  }
   const open = run !== null
 
   const detailQuery = useQuery({
