@@ -310,6 +310,8 @@ export type EventType =
   | "keep_open_closed"
   | "keep_open_skipped"
   | "keep_open_status"
+  | "keep_open_login_started"
+  | "keep_open_login_done"
   | "log"
   | "heartbeat"
 
@@ -362,6 +364,8 @@ export const EVENT_TYPES: readonly EventType[] = [
   "keep_open_closed",
   "keep_open_skipped",
   "keep_open_status",
+  "keep_open_login_started",
+  "keep_open_login_done",
   "log",
   "heartbeat",
 ]

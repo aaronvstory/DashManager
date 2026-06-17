@@ -95,10 +95,52 @@ async def test_open_navigates_to_orders_not_blank(_isolate):
     assert _isolate[0].page.goto_url == "https://www.doordash.com/orders"
 
 
+async def test_ensure_login_skips_when_already_logged_in(monkeypatch):
+    """ensure_login: a window already logged in is reported, NOT re-logged-in."""
+    from backend import relogin
+    monkeypatch.setattr(relogin, "is_logged_in", lambda page: _async_true())
+    called = {"login": 0}
+
+    async def fake_login(cid, page):  # must NOT be called
+        called["login"] += 1
+        return "logged_in"
+
+    monkeypatch.setattr(relogin, "login_open_page", fake_login)
+    m = KeepOpenManager()
+    res = await m.open([1], ensure_login=True)
+    assert res["logged_in"] == [1]
+    assert called["login"] == 0
+
+
+async def test_ensure_login_relogs_in_when_stale(monkeypatch):
+    """ensure_login: a logged-OUT window gets login_open_page driven in place."""
+    from backend import relogin
+    monkeypatch.setattr(relogin, "is_logged_in", lambda page: _async_false())
+    seen = {"ids": []}
+
+    async def fake_login(cid, page):
+        seen["ids"].append(cid)
+        return "logged_in"
+
+    monkeypatch.setattr(relogin, "login_open_page", fake_login)
+    m = KeepOpenManager()
+    res = await m.open([1], ensure_login=True)
+    assert seen["ids"] == [1]
+    assert res["logged_in"] == [1]
+
+
+async def _async_true() -> bool:
+    return True
+
+
+async def _async_false() -> bool:
+    return False
+
+
 async def test_open_then_status_lists_open_ids():
     m = KeepOpenManager()
     res = await m.open([1, 2])
-    assert res == {"opened": [1, 2], "skipped": []}
+    assert res == {"opened": [1, 2], "skipped": [], "logged_in": []}
     assert m.status()["open_ids"] == [1, 2]
     # Durable state recorded too.
     assert profiles_live.read_open_ids() == [1, 2]

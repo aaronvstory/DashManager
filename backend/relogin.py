@@ -286,3 +286,59 @@ async def phone_login_customer_cdp(customer_id: int,
     _emit("relogin_failed", {"customer_id": customer_id, "outcome": outcome,
                              "mode": "cdp_phone"})
     raise RuntimeError(f"cdp phone login failed (outcome={outcome})")
+
+
+async def is_logged_in(page: Any) -> bool:
+    """True if `page` is on a logged-in DoorDash surface (not a login screen).
+
+    Keep-open navigates a kept window to /orders; a valid session stays there,
+    an expired one redirects to identity.doordash.com/auth (login). Cheap URL
+    check — good enough to decide "open logged-in vs needs login".
+    """
+    from backend.browser.signup import SUCCESS_URL_MARKERS
+    url = (page.url or "").lower()
+    if "identity.doordash.com" in url or "/consumer/login" in url:
+        return False
+    return any(m in url for m in SUCCESS_URL_MARKERS)
+
+
+async def login_open_page(customer_id: int, page: Any) -> str:
+    """Drive a login on an ALREADY-OPEN page (the keep-open window) and capture.
+
+    Unlike `relogin_customer` (which opens its own context), this logs in INSIDE
+    the page the keep-open manager already holds — so the same window the user is
+    watching ends up logged in, no close/reopen. Picks the email+password flow
+    when a password is known, else phone-OTP. Returns the login outcome string.
+    """
+    from backend.browser.login_flow import (login_and_capture,
+                                             phone_login_and_capture)
+
+    customer = await db.get_customer(customer_id)
+    if customer is None:
+        raise ValueError("customer not found")
+    token, api_url, hosts = _token_fields(customer)
+    if not token:
+        raise ValueError("no saved number token for OTP login")
+    password = await _resolve_password(customer)
+    daisy_cfg = await db.get_setting("daisy")
+
+    _emit("relogin_started", {"customer_id": customer_id, "mode": "keep_open"})
+    async with DaisyBridge(root=daisy_cfg.get("root")) as daisy:
+        async def poll_otp() -> str:
+            res = await daisy.fetch_otp(token, api_url, hosts)
+            return res.get("code") or ""
+
+        if password:
+            outcome = await login_and_capture(
+                page, customer["email"], password, poll_otp,
+                address={"full_address": (customer.get("notes") or "")},
+                emit=_emit)
+        else:
+            outcome = await phone_login_and_capture(
+                page, customer["email"], poll_otp, emit=_emit)
+
+    _emit("relogin_outcome", {"customer_id": customer_id, "outcome": outcome,
+                              "mode": "keep_open"})
+    if outcome == "logged_in":
+        await db.update_customer(customer_id, session_status="active")
+    return outcome
