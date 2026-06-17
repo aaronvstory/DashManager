@@ -27,6 +27,20 @@
     --color-chart-3: var(--chart-3);
     --color-chart-2: var(--chart-2);
     --color-chart-1: var(--chart-1);
+    /* Semantic status tokens — the single source of truth for status meaning
+       across every badge/pill/bar. `-fg` is the readable text color (flips
+       light/dark); the base is the 500-level used with opacity for border/bg.
+       Compose in status-tone.ts: border-status-X/25 bg-status-X/10
+       text-status-X-fg. Seeded from Tailwind emerald/amber/red/sky so the
+       migration is a pure refactor — pixels don't move. */
+    --color-status-success: var(--status-success);
+    --color-status-success-fg: var(--status-success-fg);
+    --color-status-warning: var(--status-warning);
+    --color-status-warning-fg: var(--status-warning-fg);
+    --color-status-critical: var(--status-critical);
+    --color-status-critical-fg: var(--status-critical-fg);
+    --color-status-info: var(--status-info);
+    --color-status-info-fg: var(--status-info-fg);
     --color-ring: var(--ring);
     --color-input: var(--input);
     --color-border: var(--border);
@@ -85,6 +99,15 @@
     --chart-3: #15803d;
     --chart-4: #0d9488;
     --chart-5: #4f46e5;
+    /* Status (light): base = Tailwind 500, fg = 600 (the old text-*-600). */
+    --status-success: #10b981;
+    --status-success-fg: #059669;
+    --status-warning: #f59e0b;
+    --status-warning-fg: #d97706;
+    --status-critical: #ef4444;
+    --status-critical-fg: #dc2626;
+    --status-info: #0ea5e9;
+    --status-info-fg: #0284c7;
     --radius: 0px;
     --sidebar: #f7f7f8;
     --sidebar-foreground: #3f3f46;
@@ -125,6 +148,15 @@
     --chart-3: #34c759;
     --chart-4: #2dd4bf;
     --chart-5: #8a8aff;
+    /* Status (dark): base = Tailwind 500, fg = 400 (the old dark:text-*-400). */
+    --status-success: #10b981;
+    --status-success-fg: #34d399;
+    --status-warning: #f59e0b;
+    --status-warning-fg: #fbbf24;
+    --status-critical: #ef4444;
+    --status-critical-fg: #f87171;
+    --status-info: #0ea5e9;
+    --status-info-fg: #38bdf8;
     --sidebar: #0a0a0a;
     --sidebar-foreground: #c8c8c4;
     --sidebar-primary: #ff2d16;
