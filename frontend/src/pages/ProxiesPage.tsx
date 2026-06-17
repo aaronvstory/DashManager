@@ -115,6 +115,7 @@ function SchemeBadge({ scheme }: { scheme: string }) {
 export default function ProxiesPage() {
   const qc = useQueryClient()
   const [addOpen, setAddOpen] = useState(false)
+  const [confirmDeadOpen, setConfirmDeadOpen] = useState(false)
 
   const list = useQuery({
     queryKey: ["proxies"],
@@ -137,6 +138,7 @@ export default function ProxiesPage() {
       const res = await testAll.mutateAsync()
       setLocalIp(res.local_ip)
       setResults(new Map(res.proxies.map((r) => [r.id, r])))
+      toast.success(`${res.alive_count}/${res.count} proxies alive`)
     } catch {
       toast.error("Test failed — see backend logs")
     }
@@ -178,6 +180,7 @@ export default function ProxiesPage() {
   }
 
   async function deleteDead() {
+    setConfirmDeadOpen(false)
     const dead = proxies.filter((p) => {
       const r = results.get(p.id)
       return r && !r.alive
@@ -218,7 +221,11 @@ export default function ProxiesPage() {
         actions={
           <div className="flex items-center gap-2">
             {deadCount > 0 ? (
-              <Button variant="outline" size="sm" onClick={() => void deleteDead()}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setConfirmDeadOpen(true)}
+              >
                 <Trash2 data-icon="inline-start" />
                 Delete dead ({deadCount})
               </Button>
@@ -311,6 +318,27 @@ export default function ProxiesPage() {
         onOpenChange={setAddOpen}
         onAdded={() => void qc.invalidateQueries({ queryKey: ["proxies"] })}
       />
+
+      {/* Confirm before bulk-deleting dead proxies — irreversible (must be
+          re-added by hand), so it gets a dialog like other destructive actions. */}
+      <Dialog open={confirmDeadOpen} onOpenChange={setConfirmDeadOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete {deadCount} dead prox{deadCount === 1 ? "y" : "ies"}?</DialogTitle>
+            <DialogDescription>
+              Removes the proxies that failed their last test from
+              working-proxies.txt. This can't be undone — you'd re-add them by hand.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+            <Button variant="destructive" onClick={() => void deleteDead()}>
+              <Trash2 data-icon="inline-start" />
+              Delete dead
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }

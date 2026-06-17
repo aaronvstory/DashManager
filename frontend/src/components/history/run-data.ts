@@ -9,7 +9,7 @@
  * order_status). Amount columns are optional — rendered when present.
  */
 
-import { formatDistanceStrict } from "date-fns"
+import { format as formatFns, formatDistanceStrict } from "date-fns"
 import type {
   Chat,
   ChatMessage,
@@ -104,6 +104,16 @@ export function groupByOrder(detail: RunDetailResponse): {
 export function parseDbDate(value: string): Date {
   const iso = value.includes("T") ? value : value.replace(" ", "T")
   return new Date(/(?:[zZ]|[+-]\d{2}:?\d{2})$/.test(iso) ? iso : `${iso}Z`)
+}
+
+/** Format a DB timestamp, tolerating a null/garbled value (an interrupted write
+ *  could leave one) — date-fns `format` THROWS on an Invalid Date, which would
+ *  crash the whole table. Returns a dash instead. */
+export function formatDbDate(value: string | null | undefined,
+                             fmt: string): string {
+  if (!value) return "—"
+  const d = parseDbDate(value)
+  return Number.isNaN(d.getTime()) ? "—" : formatFns(d, fmt)
 }
 
 const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })

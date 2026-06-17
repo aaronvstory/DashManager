@@ -7,7 +7,6 @@
 import { useState } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
-import { format } from "date-fns"
 import { AlertCircle, ChevronRight, History, Play, RefreshCw } from "lucide-react"
 import { EmptyState } from "@/components/empty-state"
 import { PageHeader } from "@/components/page-header"
@@ -24,7 +23,7 @@ import {
 } from "@/components/ui/table"
 import { RunStatusBadge, StatChips, StrategyLabel } from "@/components/history/badges"
 import { RunDetailSheet } from "@/components/history/run-detail-sheet"
-import { parseDbDate, scopeSummary } from "@/components/history/run-data"
+import { formatDbDate, scopeSummary } from "@/components/history/run-data"
 import type { RunsResponse } from "@/components/history/run-data"
 import { api } from "@/lib/api"
 import { cn } from "@/lib/utils"
@@ -148,7 +147,7 @@ export default function HistoryPage() {
                     #{run.id}
                   </TableCell>
                   <TableCell className="text-muted-foreground tabular-nums">
-                    {format(parseDbDate(run.started_at), "MMM d, yyyy · h:mm a")}
+                    {formatDbDate(run.started_at, "MMM d, yyyy · h:mm a")}
                   </TableCell>
                   <TableCell>{scopeSummary(run.scope)}</TableCell>
                   <TableCell>
