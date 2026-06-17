@@ -13,12 +13,13 @@
 
 import { useEffect, useMemo } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { format, parseISO } from "date-fns"
+import { format } from "date-fns"
 import { Info, MonitorPlay, MonitorX, PanelsTopLeft } from "lucide-react"
 import { toast } from "sonner"
 import { EmptyState } from "@/components/empty-state"
 import { PageHeader } from "@/components/page-header"
 import { SessionStatusBadge } from "@/components/customers/session-status-badge"
+import { parseBucketDate } from "@/components/customers/helpers"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { api } from "@/lib/api"
@@ -32,12 +33,11 @@ interface KeepOpenStatus {
   open_ids: number[]
 }
 
-function prettyDate(iso: string): string {
-  try {
-    return format(parseISO(iso), "EEE, MMM d")
-  } catch {
-    return iso
-  }
+// parseBucketDate tolerates non-date suffixes like "2026-06-17-failed" (it
+// reads only the leading y-m-d), so failed-signup buckets still get a real
+// label instead of the raw string.
+function prettyDate(bucket: string): string {
+  return format(parseBucketDate(bucket), "EEE, MMM d")
 }
 
 export default function KeepOpenPage() {

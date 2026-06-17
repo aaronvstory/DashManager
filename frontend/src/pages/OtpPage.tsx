@@ -11,9 +11,10 @@
 import { useEffect, useMemo, useState } from "react"
 import { useNavigate, useSearchParams } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
-import { format, parseISO } from "date-fns"
+import { format } from "date-fns"
 import { Layers, MonitorPlay, RadioTower, RefreshCw, Smartphone, UserPlus } from "lucide-react"
 import { CreateAccountDialog } from "@/components/customers/create-account-dialog"
+import { parseBucketDate } from "@/components/customers/helpers"
 import { EmptyState } from "@/components/empty-state"
 import { OtpTable, type OtpRow } from "@/components/otp/otp-table"
 import { OTP_POLL_MS } from "@/components/otp/freshness-bar"
@@ -44,9 +45,11 @@ interface Batch {
   accounts: BatchAccount[]
 }
 
+// parseBucketDate tolerates non-date suffixes like "2026-06-17-failed" (reads
+// only the leading y-m-d), so failed-signup buckets get a real label.
 function prettyDate(date: string): string {
   try {
-    return format(parseISO(date), "EEE, MMM d")
+    return format(parseBucketDate(date), "EEE, MMM d")
   } catch {
     return date
   }
