@@ -175,3 +175,61 @@ def test_classify_geo_country_code_alias():
     # Some echoes use country_code instead of country.
     geo = pp._classify_geo({"country_code": "DE"})
     assert geo["country"] == "DE"
+
+
+# ── persistence helpers (add / delete / serialize) ──────────────────────────
+
+
+def test_serialize_round_trips(tmp_path):
+    line = "socks5://host.x:1080:user:pass:with:colons"
+    px = pp.parse_proxy_line(line)
+    assert px is not None
+    # serialize -> parse -> same dict
+    again = pp.parse_proxy_line(pp.serialize_proxy_line(px))
+    assert again == px
+
+
+def test_add_proxies_skips_exact_dupes(tmp_path):
+    f = tmp_path / "p.txt"
+    px = pp.parse_proxy_line("http://h:8080:u:p")
+    assert pp.add_proxies([px], path=f) == 1
+    assert pp.add_proxies([px], path=f) == 0   # dupe -> no-op
+    assert len(pp.load_proxies(f)) == 1
+
+
+def test_delete_proxy_by_id(tmp_path):
+    f = tmp_path / "p.txt"
+    a = pp.parse_proxy_line("http://h1:8080:u1:p1")
+    b = pp.parse_proxy_line("http://h2:9090:u2:p2")
+    pp.add_proxies([a, b], path=f)
+    removed = pp.delete_proxy(pp.proxy_id(a), path=f)
+    assert removed == 1
+    remaining = pp.load_proxies(f)
+    assert [pp.proxy_id(p) for p in remaining] == [pp.proxy_id(b)]
+
+
+def test_delete_missing_id_returns_zero(tmp_path):
+    f = tmp_path / "p.txt"
+    pp.add_proxies([pp.parse_proxy_line("http://h:8080:u:p")], path=f)
+    assert pp.delete_proxy("no:0~x", path=f) == 0
+
+
+def test_concurrent_adds_dont_lose_data(tmp_path):
+    """Two threads adding distinct proxies at once: _FILE_LOCK must serialize the
+    read-modify-write so neither clobbers the other (both end up in the file)."""
+    import threading
+    f = tmp_path / "p.txt"
+    a = pp.parse_proxy_line("http://h1:8080:u1:p1")
+    b = pp.parse_proxy_line("http://h2:9090:u2:p2")
+    barrier = threading.Barrier(2)
+
+    def add(px):
+        barrier.wait()  # maximize overlap
+        pp.add_proxies([px], path=f)
+
+    t1 = threading.Thread(target=add, args=(a,))
+    t2 = threading.Thread(target=add, args=(b,))
+    t1.start(); t2.start(); t1.join(); t2.join()
+
+    ids = {pp.proxy_id(p) for p in pp.load_proxies(f)}
+    assert ids == {pp.proxy_id(a), pp.proxy_id(b)}  # both survived

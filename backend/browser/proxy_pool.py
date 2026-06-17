@@ -30,9 +30,16 @@ exit IP + geo + latency, never the username/password.
 """
 from __future__ import annotations
 
+import os
+import threading
 import time
 from pathlib import Path
 from typing import Any, Iterable
+
+# Serializes the file read-modify-write cycle. add/delete run via
+# asyncio.to_thread (real OS threads, parallel file I/O), so without this two
+# concurrent mutations could each read the old file and clobber each other.
+_FILE_LOCK = threading.Lock()
 
 # Repo root (…/backend/browser/proxy_pool.py -> parents[2]).
 DEFAULT_PROXY_FILE = Path(__file__).resolve().parents[2] / "working-proxies.txt"
@@ -166,6 +173,79 @@ def dedup_proxies(proxies: Iterable[dict[str, str]]) -> list[dict[str, str]]:
         seen.add(key)
         out.append(px)
     return out
+
+
+def serialize_proxy_line(proxy: dict[str, str]) -> str:
+    """A proxy dict back to a canonical file line: scheme://host:port:user:pass.
+
+    Round-trips through ``parse_proxy_line``. Auth is omitted when absent.
+    """
+    scheme = proxy.get("scheme") or "http"
+    host, port = proxy["host"], proxy["port"]
+    user, pwd = proxy.get("username", ""), proxy.get("password", "")
+    if user or pwd:
+        return f"{scheme}://{host}:{port}:{user}:{pwd}"
+    return f"{scheme}://{host}:{port}"
+
+
+def _write_proxies(proxies: list[dict[str, str]],
+                   path: str | Path | None = None) -> None:
+    """Atomically overwrite the proxy file (one line per proxy).
+
+    Writes a sibling .tmp then os.replace()s it over the target so a crash
+    mid-write can't leave a truncated/half-written file (replace is atomic on
+    POSIX and near-atomic on NTFS).
+    """
+    p = Path(path) if path else DEFAULT_PROXY_FILE
+    body = "\n".join(serialize_proxy_line(px) for px in proxies)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(body + ("\n" if body else ""), encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def add_proxies(new: Iterable[dict[str, str]],
+                path: str | Path | None = None) -> int:
+    """Append proxies to the file, skipping exact duplicates. Returns # added.
+
+    Dedup key is (host, port, username, password) — same as ``dedup_proxies`` —
+    so re-pasting the same lines is a no-op rather than piling up repeats. The
+    whole read-modify-write runs under _FILE_LOCK so a concurrent add/delete
+    can't clobber it (both run on real OS threads via to_thread).
+    """
+    new = list(new)
+    with _FILE_LOCK:
+        existing = load_proxies(path)
+        seen = {(p["host"], p["port"], p.get("username"), p.get("password"))
+                for p in existing}
+        added = 0
+        for px in new:
+            key = (px["host"], px["port"], px.get("username"),
+                   px.get("password"))
+            if key in seen:
+                continue
+            seen.add(key)
+            existing.append(px)
+            added += 1
+        if added:
+            _write_proxies(existing, path)
+    return added
+
+
+def delete_proxy(target_id: str, path: str | Path | None = None) -> int:
+    """Remove every proxy whose ``proxy_id`` matches. Returns # removed.
+
+    Matches by id (host:port~username), so all repeats of one gateway line go
+    together — which is what "delete this proxy" means to the user. Under
+    _FILE_LOCK for the same read-modify-write safety as add_proxies.
+    """
+    with _FILE_LOCK:
+        existing = load_proxies(path)
+        kept = [px for px in existing if proxy_id(px) != target_id]
+        removed = len(existing) - len(kept)
+        if removed:
+            _write_proxies(kept, path)
+    return removed
 
 
 def _classify_geo(payload: dict[str, Any]) -> dict[str, str]:

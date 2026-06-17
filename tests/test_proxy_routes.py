@@ -87,3 +87,55 @@ async def test_test_all_500_never_leaks_creds(client, monkeypatch):
     assert r.json()["detail"] == "proxy test failed"
     assert SECRET not in r.text
     assert PASSWORD not in r.text        # nor the password alone (partial leak)
+
+
+# ── add / bulk / delete / copy-line (the overhaul) ──────────────────────────
+
+
+async def test_add_parses_and_appends(client, monkeypatch):
+    captured: list = []
+    monkeypatch.setattr(proxy_pool, "add_proxies",
+                        lambda parsed, *a, **k: (captured.extend(parsed)
+                                                 or len(parsed)))
+    r = await client.post("/api/proxies", json={
+        "text": "http://h1:8080:u1:p1\nh2:9090:u2:p2\nsocks5://h3:1080:u:p"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["added"] == 3 and body["parsed"] == 3 and body["errors"] == []
+    # scheme detection: explicit prefixes honored, bare defaults http
+    assert [p["scheme"] for p in captured] == ["http", "http", "socks5"]
+
+
+async def test_add_reports_unparseable_lines(client, monkeypatch):
+    monkeypatch.setattr(proxy_pool, "add_proxies", lambda parsed, *a, **k: len(parsed))
+    r = await client.post("/api/proxies", json={
+        "text": "http://good:8080:u:p\nnot-a-proxy\n# comment\n"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["parsed"] == 1
+    assert body["errors"] == [{"line": "not-a-proxy", "error": "unparseable"}]
+
+
+async def test_delete_removes_and_404s_when_absent(client, monkeypatch):
+    monkeypatch.setattr(proxy_pool, "delete_proxy",
+                        lambda pid, *a, **k: 2 if pid == "the-id" else 0)
+    r = await client.delete("/api/proxies/the-id")
+    assert r.status_code == 200 and r.json()["removed"] == 2
+    r = await client.delete("/api/proxies/missing")
+    assert r.status_code == 404
+
+
+async def test_line_returns_full_proxy_for_copy(client, monkeypatch):
+    _one_proxy(monkeypatch)
+    r = await client.get("/api/proxies/the-id/line")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["host"] == "gw.example.com" and body["username"] == "user"
+    assert body["password"] == "p@ssw0rd"   # explicit per-proxy reveal for copy
+    assert body["line"].startswith("http://gw.example.com:8080:")
+
+
+async def test_line_404_when_unknown(client, monkeypatch):
+    _one_proxy(monkeypatch)
+    r = await client.get("/api/proxies/nope/line")
+    assert r.status_code == 404
