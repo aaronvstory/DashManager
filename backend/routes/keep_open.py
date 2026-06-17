@@ -45,9 +45,10 @@ async def open_keep_open(body: OpenBody) -> dict:
     resolved = await _resolve_ids(body.ids, body.bucket_date)
     if not resolved:
         raise HTTPException(400, "need ids or a bucket_date with customers")
-    # Only forward landing_url when the caller set one, so the manager's default
-    # (the logged-in orders page) applies instead of a blank window.
-    kw = {"landing_url": body.landing_url} if body.landing_url else {}
+    # Forward landing_url only when the caller actually set the field, so the
+    # manager's default (the logged-in orders page) applies on omit. `is not
+    # None` (not truthiness) so a caller CAN pass "" to deliberately stay blank.
+    kw = {"landing_url": body.landing_url} if body.landing_url is not None else {}
     result = await manager.open(resolved, headless=body.headless, **kw)
     return result
 
