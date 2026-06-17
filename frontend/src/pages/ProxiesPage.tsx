@@ -159,13 +159,18 @@ export default function ProxiesPage() {
 
   async function deleteOne(id: string) {
     try {
-      await api.del(`/proxies/${encodeURIComponent(id)}`)
+      const r = await api.del<{ removed: number }>(
+        `/proxies/${encodeURIComponent(id)}`,
+      )
       setResults((m) => {
         const n = new Map(m)
         n.delete(id)
         return n
       })
-      toast.success("Proxy deleted")
+      // A gateway line can repeat N times; removed says how many lines went.
+      toast.success(
+        r.removed > 1 ? `Deleted ${r.removed} lines for this proxy` : "Proxy deleted",
+      )
       void qc.invalidateQueries({ queryKey: ["proxies"] })
     } catch {
       toast.error("Could not delete proxy")
@@ -182,15 +187,21 @@ export default function ProxiesPage() {
       return
     }
     let removed = 0
+    let failed = 0
     for (const p of dead) {
       try {
         await api.del(`/proxies/${encodeURIComponent(p.id)}`)
         removed += 1
       } catch {
-        // skip; report what we managed
+        failed += 1
       }
     }
-    toast.success(`Deleted ${removed} dead prox${removed === 1 ? "y" : "ies"}`)
+    if (removed > 0) {
+      toast.success(`Deleted ${removed} dead prox${removed === 1 ? "y" : "ies"}`)
+    }
+    if (failed > 0) {
+      toast.error(`${failed} could not be deleted — see backend`)
+    }
     void qc.invalidateQueries({ queryKey: ["proxies"] })
   }
 
