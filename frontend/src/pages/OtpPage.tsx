@@ -209,11 +209,10 @@ function BucketOtp({ paused }: { paused: boolean }) {
           size="sm"
           disabled={!bucket}
           onClick={() => {
-            if (bucket) {
-              void api
-                .post("/keep-open", { bucket_date: bucket })
-                .catch(() => {})
-            }
+            if (!bucket) return
+            void api
+              .post("/keep-open", { bucket_date: bucket })
+              .catch(() => {})
             navigate("/keep-open")
           }}
         >

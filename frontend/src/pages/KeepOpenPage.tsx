@@ -15,6 +15,7 @@ import { useEffect, useMemo } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { format, parseISO } from "date-fns"
 import { Info, MonitorPlay, MonitorX, PanelsTopLeft } from "lucide-react"
+import { toast } from "sonner"
 import { EmptyState } from "@/components/empty-state"
 import { PageHeader } from "@/components/page-header"
 import { SessionStatusBadge } from "@/components/customers/session-status-badge"
@@ -27,8 +28,8 @@ import { cn } from "@/lib/utils"
 import type { Customer } from "@/lib/types"
 
 interface KeepOpenStatus {
+  /** Windows this server process is holding open right now. */
   open_ids: number[]
-  recorded_ids: number[]
 }
 
 function prettyDate(iso: string): string {
@@ -79,13 +80,21 @@ export default function KeepOpenPage() {
 
   async function openIdsReq(ids: number[]) {
     if (ids.length === 0) return
-    await api.post("/keep-open", { ids })
-    void queryClient.invalidateQueries({ queryKey: ["keep-open"] })
+    try {
+      await api.post("/keep-open", { ids })
+      void queryClient.invalidateQueries({ queryKey: ["keep-open"] })
+    } catch {
+      toast.error("Couldn't open the browser window(s) — is the backend up?")
+    }
   }
   async function closeIdsReq(ids: number[]) {
     if (ids.length === 0) return
-    await api.post("/keep-open/close", { ids })
-    void queryClient.invalidateQueries({ queryKey: ["keep-open"] })
+    try {
+      await api.post("/keep-open/close", { ids })
+      void queryClient.invalidateQueries({ queryKey: ["keep-open"] })
+    } catch {
+      toast.error("Couldn't close the browser window(s) — is the backend up?")
+    }
   }
 
   return (
@@ -119,6 +128,19 @@ export default function KeepOpenPage() {
         <div className="space-y-3">
           <Skeleton className="h-24 w-full" />
           <Skeleton className="h-24 w-full" />
+        </div>
+      ) : customersQ.isError ? (
+        <div className="flex flex-col items-center gap-3 border border-border bg-card px-8 py-16 text-center">
+          <p className="text-sm text-muted-foreground">
+            Couldn't load customers. Is the backend running?
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void customersQ.refetch()}
+          >
+            Try again
+          </Button>
         </div>
       ) : buckets.length === 0 ? (
         <EmptyState
