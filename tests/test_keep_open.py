@@ -3,6 +3,8 @@
 `open_customer_profile` and `profile_dir` are monkeypatched so nothing launches
 Chromium. The point is the lock/skip/reconcile logic, not Playwright itself.
 """
+from pathlib import Path
+
 import httpx
 import pytest
 
@@ -45,6 +47,11 @@ def _isolate(tmp_path, monkeypatch):
     def fake_profile_dir(cid: int):
         d = tmp_path / "profiles" / str(cid)
         d.mkdir(parents=True, exist_ok=True)
+        # Write a marker so the dir is NON-empty — these tests exercise the
+        # "already has a profile" path (a prior login/run), which the manager
+        # detects via any(dir.iterdir()). The empty-dir + seed-from-cookies
+        # path (fresh signup) is covered separately below.
+        (d / "Default").mkdir(exist_ok=True)
         return d
 
     monkeypatch.setattr("backend.keep_open_manager.profile_dir", fake_profile_dir)
@@ -156,6 +163,63 @@ async def test_failed_launch_releases_lock(monkeypatch):
     assert res["opened"] == [] and 9 in res["skipped"]
     # A failed launch must not strand the asyncio lock.
     assert driver.profile_lock(9).locked() is False
+
+
+async def test_open_seeds_fresh_signup_from_storage_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A just-signed-up account has captured cookies but NO profile dir yet.
+    Keep-open must still open it, seeded from its storage_state, so the window
+    comes up already logged in (the create→keep-open gap)."""
+    # Empty profile dir (fresh signup — no prior login wrote into it).
+    def empty_profile_dir(cid: int) -> Path:
+        d = tmp_path / "profiles" / str(cid)
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    monkeypatch.setattr("backend.keep_open_manager.profile_dir",
+                        empty_profile_dir)
+
+    # A storage_state file on disk + a customer row pointing at it.
+    storage = tmp_path / "5_storage.json"
+    storage.write_text('{"cookies": []}', encoding="utf-8")
+    cid = await db.create_customer(
+        "2026-06-17", first_name="Fresh", email="f@x.net",
+        storage_state_path=str(storage), session_status="active")
+
+    seeds: list[str | None] = []
+
+    async def capture_open(pw: object, c: int, headless: bool, *,
+                           viewport: tuple[int, int] = (1200, 720),
+                           seed_storage_state: str | None = None) -> _FakeCtx:
+        seeds.append(seed_storage_state)
+        return _FakeCtx()
+
+    monkeypatch.setattr("backend.keep_open_manager.open_customer_profile",
+                        capture_open)
+
+    m = KeepOpenManager()
+    res = await m.open([cid])
+    assert res["opened"] == [cid]          # opened despite no profile dir
+    assert seeds == [str(storage)]         # seeded from the captured cookies
+
+
+async def test_open_skips_when_no_profile_and_no_seed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No profile dir AND no storage_state → nothing to open from; skip."""
+    def empty_profile_dir(cid: int) -> Path:
+        d = tmp_path / "profiles" / str(cid)
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    monkeypatch.setattr("backend.keep_open_manager.profile_dir",
+                        empty_profile_dir)
+    cid = await db.create_customer("2026-06-17", first_name="NoSess")
+
+    m = KeepOpenManager()
+    res = await m.open([cid])
+    assert res["opened"] == [] and cid in res["skipped"]
 
 
 # ── routes ──────────────────────────────────────────────────────────────────
