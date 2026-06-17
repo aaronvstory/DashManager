@@ -125,7 +125,7 @@ _WIN_X, _WIN_Y, _WIN_W, _WIN_H = 40, 40, 1200, 1000
 
 def focus_signup_window(sb: Any, *,
                         emit: Callable[[str, dict], None] | None = None) -> bool:
-    """Foreground + restore the browser to a known 1200x720 rect BEFORE OS input.
+    """Foreground + restore the browser to a known 1200x1000 rect BEFORE OS input.
 
     os_input (PyAutoGUI) types into whatever window has OS focus, and
     gui_click_element moves the REAL mouse to the element's SCREEN coordinates —
@@ -161,10 +161,14 @@ def focus_signup_window(sb: Any, *,
     # 2. OS-level backstop: a Chromium window can be at the right rect yet not be
     # the FOREGROUND window (CDP front != Win32 SetForegroundWindow). pygetwindow
     # activates it so real keystrokes land in it, not whatever was focused.
+    # Match "DoorDash" FIRST (the signup tab title) and only fall back to a
+    # generic Chromium title if none — a bare "Chrom" match is too broad and
+    # could activate the USER's own personal Chrome window, stealing their focus.
     try:
         import pygetwindow as gw  # available (verified); guard anyway
-        wins = [w for w in gw.getAllWindows()
-                if w.title and ("DoorDash" in w.title or "Chrom" in w.title)]
+        all_wins = [w for w in gw.getAllWindows() if w.title]
+        wins = [w for w in all_wins if "DoorDash" in w.title] or \
+            [w for w in all_wins if "Chrom" in w.title]
         if wins:
             w = wins[0]
             try:
@@ -201,6 +205,17 @@ def _cdp_url(sb: Any) -> str:
 def _page_has(sb: Any, markers: tuple[str, ...]) -> bool:
     src = _cdp_source(sb)
     return any(m in src for m in markers)
+
+
+def _modal_gone_from_source(src: str) -> bool:
+    """Pure: did the verify modal disappear, given the page source?
+
+    True ONLY when the source is non-empty AND carries no verify markers. An
+    EMPTY source (a transient CDP read failure / mid-navigation) returns False —
+    otherwise "no verify markers" is vacuously true and a post-OTP success check
+    would falsely flag the account created on a blank read (Gemini critical).
+    """
+    return bool(src) and not any(m in src for m in VERIFY_MARKERS)
 
 
 def clear_captcha_ladder(sb: Any, *, emit: Callable[[str, dict], None] | None,
@@ -942,7 +957,11 @@ def signup_via_cdp(identity: dict[str, Any], *,
                             break
                         if _page_has(sb, BOT_BLOCK_MARKERS):
                             break  # not created — bot-blocked after OTP
-                        modal_gone = not _page_has(sb, VERIFY_MARKERS)
+                        # modal_gone needs a REAL page read (see
+                        # _modal_gone_from_source): an empty source must NOT count
+                        # as "modal gone", else a transient CDP read failure
+                        # falsely flags success.
+                        modal_gone = _modal_gone_from_source(_cdp_source(sb))
                         left_auth = not any(s in url.lower()
                                             for s in ("verify", "/auth",
                                                       "login"))

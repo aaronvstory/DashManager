@@ -23,13 +23,13 @@ from typing import Any, Callable
 
 from backend.browser.cdp_signup import (
     SUCCESS_URL_MARKERS,
-    VERIFY_MARKERS,
+    _cdp_source,
     _cdp_url,
     _enter_otp,
     _export_storage,
     _fill_home_address,
     _gui_click_in_view,
-    _page_has,
+    _modal_gone_from_source,
     clear_captcha_ladder,
     focus_signup_window,
 )
@@ -311,12 +311,14 @@ def phone_login_via_cdp(phone10: str, *,
                         if _is_logged_in(sb):
                             return _finalize(sb)
                         # modal-gone only counts if we LEFT the verify/auth step
-                        # and stayed on doordash (not a blank/error page).
+                        # and stayed on doordash (not a blank/error page). The
+                        # shared helper rejects an empty source so a transient
+                        # CDP read can't falsely flag success.
+                        modal_gone = _modal_gone_from_source(_cdp_source(sb))
                         left_auth = not any(
                             s in url.lower()
                             for s in ("verify", "/auth", "login"))
-                        if (not _page_has(sb, VERIFY_MARKERS) and left_auth
-                                and "doordash.com" in url):
+                        if modal_gone and left_auth and "doordash.com" in url:
                             return _finalize(sb)
                         time.sleep(2.0)
                 time.sleep(3.0)
