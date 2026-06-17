@@ -38,6 +38,11 @@ from backend.events import bus
 # kept open looks identical whether the run or keep-open owns it.
 _VIEWPORT = (1200, 720)
 
+# Where a kept-open window lands by default. The whole point is to eyeball /
+# log into the account, so open straight to the logged-in orders page — NOT
+# about:blank (a blank window is useless). Callers can override per request.
+_DEFAULT_LANDING_URL = "https://www.doordash.com/orders"
+
 
 class KeepOpenManager:
     """Holds customer Chromium windows open between runs (singleton)."""
@@ -81,7 +86,7 @@ class KeepOpenManager:
         ids: list[int],
         *,
         headless: bool = False,
-        landing_url: str | None = None,
+        landing_url: str | None = _DEFAULT_LANDING_URL,
     ) -> dict[str, list[int]]:
         """Open a window per id and hold it. Returns {opened, skipped}.
 
