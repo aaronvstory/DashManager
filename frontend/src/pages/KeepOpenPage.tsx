@@ -93,9 +93,11 @@ export default function KeepOpenPage() {
         "/keep-open",
         { ids, ensure_login: ensureLogin },
       )
-      if (ensureLogin && res.opened.length > 0) {
+      if (res.opened.length > 0) {
         toast.success(
-          `Opened ${res.opened.length}; ${res.logged_in.length} logged in`,
+          ensureLogin
+            ? `Opened ${res.opened.length}; ${res.logged_in.length} logged in`
+            : `Opened ${res.opened.length} window(s)`,
         )
       }
       void queryClient.invalidateQueries({ queryKey: ["keep-open"] })

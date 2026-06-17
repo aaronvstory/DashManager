@@ -299,7 +299,8 @@ async def is_logged_in(page: Any) -> bool:
     url = (page.url or "").lower()
     if "identity.doordash.com" in url or "/consumer/login" in url:
         return False
-    return any(m in url for m in SUCCESS_URL_MARKERS)
+    # Lowercase the markers too — a future uppercase marker would otherwise miss.
+    return any(m.lower() in url for m in SUCCESS_URL_MARKERS)
 
 
 async def login_open_page(customer_id: int, page: Any) -> str:
@@ -340,5 +341,15 @@ async def login_open_page(customer_id: int, page: Any) -> str:
     _emit("relogin_outcome", {"customer_id": customer_id, "outcome": outcome,
                               "mode": "keep_open"})
     if outcome == "logged_in":
-        await db.update_customer(customer_id, session_status="active")
+        # Refresh the backup storage_state too (like relogin_customer) — else the
+        # on-disk profile is logged in but the portable backup stays stale.
+        from backend.browser.driver import export_storage_state
+        fields: dict[str, Any] = {"session_status": "active"}
+        try:
+            storage = await export_storage_state(page.context, customer_id)
+            if storage:
+                fields["storage_state_path"] = storage
+        except Exception:
+            pass  # the live profile is the real session; backup is best-effort
+        await db.update_customer(customer_id, **fields)
     return outcome
