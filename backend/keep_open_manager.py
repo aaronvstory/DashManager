@@ -22,10 +22,11 @@ shutdown handler calls ``close_all`` for a clean teardown.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from playwright.async_api import BrowserContext, Playwright, async_playwright
 
-from backend import profiles_live
+from backend import db, profiles_live
 from backend.browser.driver import (
     open_customer_profile,
     profile_dir,
@@ -63,6 +64,18 @@ class KeepOpenManager:
 
     # ── open / close ──────────────────────────────────────────────────────
 
+    async def _seed_for(self, cid: int) -> str | None:
+        """A storage_state file to seed a fresh profile for a customer that has
+        no profile dir yet (a just-signed-up account). Returns the path if the
+        customer has a captured storage_state on disk, else None."""
+        row = await db.get_customer(cid)
+        if not row:
+            return None
+        path = (row.get("storage_state_path") or "").strip()
+        if path and Path(path).exists():
+            return path
+        return None
+
     async def open(
         self,
         ids: list[int],
@@ -85,8 +98,16 @@ class KeepOpenManager:
                 if cid in self._contexts:
                     skipped.append(cid)  # already ours, nothing to do
                     continue
-                if not profile_dir(cid).exists():
-                    skipped.append(cid)  # no profile on disk yet
+                # A profile dir means a prior interactive login/run; open it
+                # directly. A freshly SIGNED-UP account has no profile dir yet —
+                # only captured cookies (storage_state_path) — so seed a fresh
+                # profile from those so it opens already logged in. Skip only
+                # when there's neither.
+                d = profile_dir(cid)
+                has_profile = d.exists() and any(d.iterdir())
+                seed = None if has_profile else await self._seed_for(cid)
+                if not has_profile and seed is None:
+                    skipped.append(cid)  # nothing to open it from yet
                     continue
                 lock = profile_lock(cid)
                 # Don't block — a held lock means a run/manual op owns this
@@ -97,7 +118,8 @@ class KeepOpenManager:
                 await lock.acquire()
                 try:
                     ctx = await open_customer_profile(
-                        pw, cid, headless, viewport=_VIEWPORT)
+                        pw, cid, headless, viewport=_VIEWPORT,
+                        seed_storage_state=seed)
                 except Exception:
                     # Launch failed (e.g. a stale OS-level dir lock). Release
                     # the asyncio lock so we don't strand the profile.
