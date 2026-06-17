@@ -27,6 +27,7 @@ import { StartRunCard } from "@/components/run/start-run-card"
 import { StatCards } from "@/components/run/stat-cards"
 import { api } from "@/lib/api"
 import type { Run, StrategyName } from "@/lib/types"
+import { TONE } from "@/lib/status-tone"
 import { useRunStore } from "@/store/runStore"
 import { cn } from "@/lib/utils"
 
@@ -91,10 +92,10 @@ function ActiveRunView() {
         description={runId !== null ? `Run #${runId} — events streaming live.` : undefined}
         actions={
           <>
-            <Badge variant="outline" className="gap-1.5 border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+            <Badge variant="outline" className={cn("gap-1.5", TONE.success)}>
               <span className="relative flex size-1.5">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500/70" />
-                <span className="relative inline-flex size-1.5 rounded-full bg-emerald-500" />
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-status-success/70" />
+                <span className="relative inline-flex size-1.5 rounded-full bg-status-success" />
               </span>
               {scopeSummary(scope)}
             </Badge>
@@ -172,17 +173,17 @@ function FinishedRunSummary() {
     {
       label: "Missing refund",
       value: stats.not_refunded ?? 0,
-      className: "text-red-600 dark:text-red-400",
+      className: "text-status-critical-fg",
     },
     {
       label: "Chats won",
       value: stats.chats_won ?? 0,
-      className: "text-emerald-600 dark:text-emerald-400",
+      className: "text-status-success-fg",
     },
     {
       label: "Blocked",
       value: stats.blocked ?? 0,
-      className: "text-amber-600 dark:text-amber-400",
+      className: "text-status-warning-fg",
     },
     { label: "Errors", value: stats.errors ?? 0 },
   ]

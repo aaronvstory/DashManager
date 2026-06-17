@@ -183,7 +183,7 @@ export function ImportDaisyDialog({
                         </p>
                       ) : null}
                       {noToken ? (
-                        <p className="flex items-center gap-1 text-xs text-amber-500">
+                        <p className="flex items-center gap-1 text-xs text-status-warning-fg">
                           <CircleAlert className="size-3" />
                           No saved number — can't fetch OTP or log in later
                         </p>

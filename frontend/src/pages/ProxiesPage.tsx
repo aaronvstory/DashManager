@@ -54,8 +54,8 @@ interface TestAllResponse {
 
 function latencyTone(ms: number | null): string {
   if (ms === null) return "text-muted-foreground"
-  if (ms < 800) return "text-emerald-500"
-  if (ms < 2000) return "text-amber-500"
+  if (ms < 800) return "text-status-success-fg"
+  if (ms < 2000) return "text-status-warning-fg"
   return "text-primary"
 }
 
@@ -122,7 +122,7 @@ export default function ProxiesPage() {
                   ? `${testAll.data.alive_count} / ${testAll.data.count}`
                   : "—"
               }
-              tone={testAll.data && testAll.data.alive_count > 0 ? "text-emerald-500" : undefined}
+              tone={testAll.data && testAll.data.alive_count > 0 ? "text-status-success-fg" : undefined}
             />
             <Stat label="This PC's IP" value={localIp || "—"} mono />
             {testAll.isError ? (
@@ -198,8 +198,8 @@ function ProxyCard({
         tested
           ? alive
             ? samePc
-              ? "border-amber-500/60"
-              : "border-emerald-500/50"
+              ? "border-status-warning/60"
+              : "border-status-success/50"
             : "border-primary/50"
           : "border-border",
       )}
@@ -238,11 +238,11 @@ function ProxyCard({
             </span>
           </Field>
           {samePc ? (
-            <div className="mt-1 border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[0.7rem] font-medium text-amber-600 dark:text-amber-400">
+            <div className="mt-1 border border-status-warning/40 bg-status-warning/10 px-2 py-1 text-[0.7rem] font-medium text-status-warning-fg">
               ⚠ Exit IP equals this PC's IP ({localIp}) — proxy may not be routing.
             </div>
           ) : routesElsewhere ? (
-            <div className="mt-1 text-[0.7rem] text-emerald-600 dark:text-emerald-400">
+            <div className="mt-1 text-[0.7rem] text-status-success-fg">
               ✓ Routes through a different IP than this PC.
             </div>
           ) : (
@@ -274,10 +274,10 @@ function StatusDot({
 }) {
   const tone = !tested
     ? pending
-      ? "bg-amber-500 animate-pulse"
-      : "bg-zinc-500"
+      ? "bg-status-warning animate-pulse"
+      : "bg-muted-foreground/50"
     : alive
-      ? "bg-emerald-500"
+      ? "bg-status-success"
       : "bg-primary"
   return (
     <span className="mt-1 flex size-2.5 shrink-0">

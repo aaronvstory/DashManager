@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { DOT } from "@/lib/status-tone"
 import { cn } from "@/lib/utils"
 
 /** api.cc codes expire ~30s after they arrive. */
@@ -45,7 +46,7 @@ export function FreshnessBar({
         <div
           className={cn(
             "h-full transition-[width] duration-500 ease-linear",
-            stale ? "bg-zinc-500" : pct < 0.34 ? "bg-amber-500" : "bg-emerald-500",
+            stale ? DOT.neutral : pct < 0.34 ? DOT.warning : DOT.success,
           )}
           style={{ width: `${pct * 100}%` }}
         />

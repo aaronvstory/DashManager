@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react"
+import { Link } from "react-router-dom"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { format } from "date-fns"
 import {
@@ -8,14 +9,17 @@ import {
   CircleCheck,
   LoaderCircle,
   MapPin,
+  MousePointerClick,
   Phone,
   RefreshCw,
+  Smartphone,
   Sparkles,
 } from "lucide-react"
 import { toast } from "sonner"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Calendar } from "@/components/ui/calendar"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogClose,
@@ -144,6 +148,9 @@ export function CreateAccountDialog({
   const [unique, setUnique] = useState<boolean>(true)
   const [batchLabel, setBatchLabel] = useState<string>("")
   const [batchInfo, setBatchInfo] = useState<{ index: number; of: number; created: number } | null>(null)
+  // Acknowledgement of the mouse/keyboard takeover, required before a HEADED
+  // run can proceed (a headed run drives the real shared cursor via os_input).
+  const [ackHijack, setAckHijack] = useState(false)
   const { headless, setHeadless } = useHeadlessOverride()
 
   // Live progress, built up from SSE events.
@@ -358,6 +365,7 @@ export function CreateAccountDialog({
     setOtpCode(null)
     setOtpResent(false)
     setError(null)
+    setAckHijack(false)
     // Per-account resets (mid-batch) preserve batch context AND the accumulated
     // results/log — clearing them on keepBatch would leave only the last
     // account in the table. A full reset (close/idle) clears everything.
@@ -429,6 +437,14 @@ export function CreateAccountDialog({
 
   const busy = phase === "starting" || phase === "running"
   const lowBalance = balance !== null && balance < 0.5
+  // Headed (not headless) means os_input drives the real shared cursor — null
+  // resolves to headed, the safe default. Only headed runs hijack input.
+  const headed = headless !== true
+  // Rough estimate: signup + SMS wait runs ~2 min/account. Just to set
+  // expectations on how long the PC is unavailable.
+  const acctCount = Math.max(1, Math.floor(Number(count) || 1))
+  const estMinutes =
+    acctCount <= 1 ? "2 minutes" : `${acctCount * 2}–${acctCount * 3} minutes`
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -646,7 +662,7 @@ export function CreateAccountDialog({
                 <p
                   className={cn(
                     "text-xs",
-                    lowBalance ? "text-amber-500" : "text-muted-foreground",
+                    lowBalance ? "text-status-warning-fg" : "text-muted-foreground",
                   )}
                 >
                   api.cc balance: ${balance.toFixed(2)}
@@ -660,7 +676,7 @@ export function CreateAccountDialog({
                   A Chrome window opens and signs up fresh DoorDash account(s)
                   with a generated identity, email, phone, and address near the
                   chosen location; the SMS code is entered automatically.
-                  <strong className="mt-1 block text-amber-500">
+                  <strong className="mt-1 block text-status-warning-fg">
                     Uses real mouse/keyboard to pass bot detection — don’t touch
                     the PC while it runs.
                   </strong>
@@ -720,11 +736,35 @@ export function CreateAccountDialog({
                 <p
                   className={cn(
                     "text-xs",
-                    lowBalance ? "text-amber-500" : "text-muted-foreground",
+                    lowBalance ? "text-status-warning-fg" : "text-muted-foreground",
                   )}
                 >
                   api.cc balance: ${balance.toFixed(2)}
                 </p>
+              ) : null}
+
+              {/* Headed runs drive the REAL shared mouse/keyboard (os_input,
+                  to beat bot detection) — so the user must not touch the PC
+                  while it runs. Make that loud and require an explicit ack.
+                  A headless run can't hijack the cursor, so skip the gate. */}
+              {headed ? (
+                <Alert variant="destructive">
+                  <MousePointerClick />
+                  <AlertTitle>This takes over your mouse &amp; keyboard</AlertTitle>
+                  <AlertDescription>
+                    A real Chrome window opens and DashManager drives your
+                    actual cursor and keyboard for about{" "}
+                    <strong>{estMinutes}</strong> — don&apos;t touch the PC
+                    until it finishes.
+                    <label className="mt-2 flex items-center gap-2 font-medium text-foreground">
+                      <Checkbox
+                        checked={ackHijack}
+                        onCheckedChange={(v) => setAckHijack(v === true)}
+                      />
+                      I understand — leave the PC alone while it runs.
+                    </label>
+                  </AlertDescription>
+                </Alert>
               ) : null}
             </div>
             <DialogFooter>
@@ -732,7 +772,10 @@ export function CreateAccountDialog({
                 <ChevronLeft data-icon="inline-start" />
                 Back
               </Button>
-              <Button onClick={() => void start()}>
+              <Button
+                onClick={() => void start()}
+                disabled={headed && !ackHijack}
+              >
                 <Sparkles data-icon="inline-start" />
                 Looks good — proceed
               </Button>
@@ -748,7 +791,7 @@ export function CreateAccountDialog({
                   Account <span className="num">{batchInfo.index}</span> of{" "}
                   <span className="num">{batchInfo.of}</span>
                 </span>
-                <span className="num text-xs text-emerald-500">
+                <span className="num text-xs text-status-success-fg">
                   {batchInfo.created} created
                 </span>
               </div>
@@ -781,7 +824,7 @@ export function CreateAccountDialog({
 
         {phase === "created" ? (
           <>
-            <div className="flex items-center gap-2 py-1 text-sm font-medium text-emerald-500">
+            <div className="flex items-center gap-2 py-1 text-sm font-medium text-status-success-fg">
               <CircleCheck className="size-5" />
               {results.length === 1
                 ? "Account created"
@@ -792,6 +835,19 @@ export function CreateAccountDialog({
               <Button variant="outline" onClick={resetToIdle}>
                 Create another
               </Button>
+              {/* Next step in the workflow: grab the SMS codes. A multi-account
+                  batch lands in batch mode (newest batch auto-selected); a
+                  single account uses the bucket view. Navigating unmounts the
+                  launching page, which closes the dialog. */}
+              <Button
+                variant="outline"
+                render={
+                  <Link to={results.length > 1 ? "/otp?mode=batch" : "/otp"}>
+                    <Smartphone data-icon="inline-start" />
+                    Watch OTPs
+                  </Link>
+                }
+              />
               <DialogClose render={<Button />}>Done</DialogClose>
             </DialogFooter>
           </>
@@ -862,7 +918,7 @@ function StepList({
                 aria-hidden
                 className={cn(
                   "absolute top-7 left-[1.0625rem] h-[calc(100%-1rem)] w-px",
-                  status === "done" ? "bg-emerald-500/40" : "bg-border",
+                  status === "done" ? "bg-status-success/40" : "bg-border",
                 )}
               />
             ) : null}
@@ -874,7 +930,7 @@ function StepList({
             >
               <span className="mt-0.5 flex size-[1.375rem] shrink-0 items-center justify-center">
                 {status === "done" ? (
-                  <CircleCheck className="size-[1.375rem] text-emerald-500" />
+                  <CircleCheck className="size-[1.375rem] text-status-success-fg" />
                 ) : status === "active" ? (
                   <LoaderCircle className="size-[1.375rem] animate-spin text-primary" />
                 ) : (
@@ -924,7 +980,7 @@ function StepList({
                 ) : null}
 
                 {step.key === "otp" && otpResent && !otpCode ? (
-                  <p className="text-xs text-amber-500">code resent</p>
+                  <p className="text-xs text-status-warning-fg">code resent</p>
                 ) : null}
 
                 {step.key === "otp" && otpCode ? (

@@ -8,6 +8,7 @@ import type { LucideIcon } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import type { ChatOutcome, RefundStatus, RunStatus, StrategyName } from "@/lib/types"
+import { TONE } from "@/lib/status-tone"
 import { statNum } from "./run-data"
 
 // ---------------------------------------------------------------------------
@@ -19,19 +20,9 @@ const RUN_STATUS: Record<RunStatus, { label: string; className: string }> = {
     label: "Running",
     className: "animate-pulse border-primary/30 bg-primary/10 text-primary",
   },
-  completed: {
-    label: "Completed",
-    className:
-      "border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-  },
-  stopped: {
-    label: "Stopped",
-    className: "border-zinc-500/25 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400",
-  },
-  error: {
-    label: "Error",
-    className: "border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400",
-  },
+  completed: { label: "Completed", className: TONE.success },
+  stopped: { label: "Stopped", className: TONE.neutral },
+  error: { label: "Error", className: TONE.critical },
 }
 
 export function RunStatusBadge({ status }: { status: RunStatus }) {
@@ -51,35 +42,13 @@ export function RunStatusBadge({ status }: { status: RunStatus }) {
 // ---------------------------------------------------------------------------
 
 const REFUND_STATUS: Record<RefundStatus, { label: string; className: string }> = {
-  refunded: {
-    label: "Refunded",
-    className:
-      "border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-  },
-  partial: {
-    label: "Partial",
-    className: "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400",
-  },
-  pending_claim: {
-    label: "Self-claim",
-    className: "border-sky-500/30 bg-sky-500/10 text-sky-600 dark:text-sky-400",
-  },
-  not_refunded: {
-    label: "Not refunded",
-    className: "border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400",
-  },
-  remake: {
-    label: "Remake",
-    className: "border-orange-500/30 bg-orange-500/10 text-orange-600 dark:text-orange-400",
-  },
-  unconfirmed: {
-    label: "⚠ Unconfirmed",
-    className: "border-amber-500/40 bg-amber-500/15 font-semibold text-amber-600 dark:text-amber-400",
-  },
-  unknown: {
-    label: "Unknown",
-    className: "border-zinc-500/25 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400",
-  },
+  refunded: { label: "Refunded", className: TONE.success },
+  partial: { label: "Partial", className: TONE.warning },
+  pending_claim: { label: "Self-claim", className: TONE.info },
+  not_refunded: { label: "Not refunded", className: TONE.critical },
+  remake: { label: "Remake", className: TONE.warning },
+  unconfirmed: { label: "⚠ Unconfirmed", className: TONE["warning-strong"] },
+  unknown: { label: "Unknown", className: TONE.neutral },
   unchecked: {
     label: "Unchecked",
     className: "border-border bg-transparent text-muted-foreground",
@@ -101,37 +70,17 @@ export function RefundStatusBadge({ status }: { status: RefundStatus | null }) {
 // ---------------------------------------------------------------------------
 
 const OUTCOME: Record<ChatOutcome, { label: string; className: string }> = {
-  success: {
-    label: "Refund won",
-    className:
-      "border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-  },
-  failed: {
-    label: "Failed",
-    className: "border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400",
-  },
-  blocked: {
-    label: "Blocked",
-    className: "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400",
-  },
-  review_blocked: {
-    label: "Review blocked",
-    className: "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400",
-  },
-  manual_flag: {
-    label: "Manual follow-up",
-    className:
-      "border-violet-500/30 bg-violet-500/10 text-violet-600 dark:text-violet-400",
-  },
+  success: { label: "Refund won", className: TONE.success },
+  failed: { label: "Failed", className: TONE.critical },
+  blocked: { label: "Blocked", className: TONE.warning },
+  review_blocked: { label: "Review blocked", className: TONE.warning },
+  manual_flag: { label: "Manual follow-up", className: TONE.info },
 }
 
 export function ChatOutcomeBadge({ outcome }: { outcome: ChatOutcome | null }) {
   if (!outcome) {
     return (
-      <Badge
-        variant="outline"
-        className="border-zinc-500/25 bg-zinc-500/10 text-zinc-600 dark:text-zinc-400"
-      >
+      <Badge variant="outline" className={TONE.neutral}>
         No outcome
       </Badge>
     )
@@ -149,23 +98,10 @@ export function ChatOutcomeBadge({ outcome }: { outcome: ChatOutcome | null }) {
 // ---------------------------------------------------------------------------
 
 const CLAIM_OUTCOME: Record<string, { label: string; className: string }> = {
-  success: {
-    label: "Claimed to card",
-    className:
-      "border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-  },
-  wrong_method: {
-    label: "Wrong method",
-    className: "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400",
-  },
-  failed: {
-    label: "Claim failed",
-    className: "border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400",
-  },
-  error: {
-    label: "Claim error",
-    className: "border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400",
-  },
+  success: { label: "Claimed to card", className: TONE.success },
+  wrong_method: { label: "Wrong method", className: TONE.warning },
+  failed: { label: "Claim failed", className: TONE.critical },
+  error: { label: "Claim error", className: TONE.critical },
 }
 
 export function ClaimOutcomeBadge({ outcome }: { outcome: string }) {
@@ -196,28 +132,10 @@ const CHIP_DEFS: {
     className: "border-border/60 bg-muted/40 text-muted-foreground",
     always: true,
   },
-  {
-    key: "not_refunded",
-    label: "missing",
-    className: "border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400",
-  },
-  {
-    key: "chats_won",
-    label: "won",
-    className:
-      "border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-  },
-  {
-    key: "blocked",
-    label: "blocked",
-    className: "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400",
-  },
-  {
-    key: "manual",
-    label: "manual",
-    className:
-      "border-violet-500/30 bg-violet-500/10 text-violet-600 dark:text-violet-400",
-  },
+  { key: "not_refunded", label: "missing", className: TONE.critical },
+  { key: "chats_won", label: "won", className: TONE.success },
+  { key: "blocked", label: "blocked", className: TONE.warning },
+  { key: "manual", label: "manual", className: TONE.info },
 ]
 
 export function StatChips({ stats }: { stats: Record<string, unknown> }) {

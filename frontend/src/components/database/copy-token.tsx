@@ -52,7 +52,7 @@ export function CopyToken({
         aria-label={`Copy ${label}`}
       >
         {copied ? (
-          <Check className="size-3 text-emerald-500" />
+          <Check className="size-3 text-status-success-fg" />
         ) : (
           <Copy className="size-3" />
         )}

@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useLocation } from "react-router-dom"
-import { Database, FileText, Flower2, History, Network, Play, Settings, Smartphone, Users } from "lucide-react"
+import { Database, FileText, Flower2, History, Network, Play, Settings, Smartphone, UserPlus, Users } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Logo } from "@/components/logo"
@@ -15,19 +15,24 @@ interface NavItem {
   end?: boolean
 }
 
-// Each item has ONE clear job. "Customers" = the bucket board (manage who's in
-// each date bucket). "Customer Data" = the live per-customer database (sessions,
-// every scraped order, raw audit). "Reports" = the frozen daily refund worklog
-// (proof + transcripts). "Refund Run" = launch/monitor a refund-check run. "OTP"
-// = live SMS codes (by bucket or by batch).
+// Ordered to follow the operational pipeline top-to-bottom — create → capture
+// OTPs → (keep browsers open / log in) → refund-audit → inspect → report — so
+// the nav itself reads as the workflow. Each item has ONE clear job: "Create" =
+// make/adopt accounts; "Customers" = the bucket board (who's in each date
+// bucket); "OTP" = live SMS codes (by bucket or batch); "Refund Run" =
+// launch/monitor a refund-check run; "Customer Data" = the live per-customer
+// database (sessions, every scraped order, raw audit); "Reports" = the frozen
+// daily refund worklog (proof + transcripts). (The "Keep Open" item slots in
+// after "OTP" once its page lands.)
 const NAV: NavItem[] = [
+  { to: "/create", label: "Create", icon: UserPlus },
   { to: "/", label: "Customers", icon: Users, end: true },
-  { to: "/daisy", label: "CustomerDaisy", icon: Flower2 },
-  { to: "/database", label: "Customer Data", icon: Database },
-  { to: "/run", label: "Refund Run", icon: Play },
   { to: "/otp", label: "OTP", icon: Smartphone },
-  { to: "/history", label: "History", icon: History },
+  { to: "/run", label: "Refund Run", icon: Play },
+  { to: "/database", label: "Customer Data", icon: Database },
   { to: "/reports", label: "Reports", icon: FileText },
+  { to: "/history", label: "History", icon: History },
+  { to: "/daisy", label: "CustomerDaisy", icon: Flower2 },
   { to: "/proxies", label: "Proxies", icon: Network },
   { to: "/settings", label: "Settings", icon: Settings },
 ]
@@ -38,12 +43,12 @@ function ConnectionStatus() {
     <div className="flex items-center gap-2 px-3 text-xs text-sidebar-foreground/60">
       <span className="relative flex size-2">
         {connected ? (
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500/60" />
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-status-success/60" />
         ) : null}
         <span
           className={cn(
             "relative inline-flex size-2 rounded-full",
-            connected ? "bg-emerald-500" : "bg-zinc-500",
+            connected ? "bg-status-success" : "bg-muted-foreground/50",
           )}
         />
       </span>

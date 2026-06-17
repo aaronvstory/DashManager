@@ -41,9 +41,9 @@ export function CustomerProgressStrip() {
                 className={cn(
                   "flex shrink-0 items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors",
                   c.sessionInvalid
-                    ? "border-red-500/30 bg-red-500/5"
+                    ? "border-status-critical/30 bg-status-critical/5"
                     : c.done
-                      ? "border-emerald-500/25 bg-emerald-500/5"
+                      ? "border-status-success/25 bg-status-success/5"
                       : current
                         ? "border-primary/30 bg-primary/5"
                         : "border-border bg-card",
@@ -55,14 +55,14 @@ export function CustomerProgressStrip() {
                 <span className="max-w-40 truncate font-medium">{c.name}</span>
                 {c.sessionInvalid ? (
                   <span
-                    className="inline-flex items-center gap-1 text-xs text-red-600 dark:text-red-400"
+                    className="inline-flex items-center gap-1 text-xs text-status-critical-fg"
                     title="Session expired — customer skipped"
                   >
                     <TriangleAlert className="size-3.5" />
                     session
                   </span>
                 ) : c.done ? (
-                  <CheckCircle2 className="size-4 text-emerald-600 dark:text-emerald-400" />
+                  <CheckCircle2 className="size-4 text-status-success-fg" />
                 ) : current ? (
                   <span className="relative flex size-2">
                     <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/70" />

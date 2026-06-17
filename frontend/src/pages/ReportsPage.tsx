@@ -136,9 +136,9 @@ export default function ReportsPage() {
                   <div className="text-sm font-bold tracking-tight">{prettyDate(r.date)}</div>
                   <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
                     <span className="num">{r.customers}c · {r.orders}o</span>
-                    <span className="text-emerald-500">{r.refunded} refunded</span>
+                    <span className="text-status-success-fg">{r.refunded} refunded</span>
                     {r.unconfirmed > 0 ? (
-                      <span className="font-semibold text-amber-500">⚠ {r.unconfirmed}</span>
+                      <span className="font-semibold text-status-warning-fg">⚠ {r.unconfirmed}</span>
                     ) : null}
                   </div>
                 </button>

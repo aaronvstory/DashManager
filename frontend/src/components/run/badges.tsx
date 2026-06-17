@@ -6,45 +6,21 @@ import type {
   RefundStatus,
   StrategyName,
 } from "@/lib/types"
+import { TONE } from "@/lib/status-tone"
 import { cn } from "@/lib/utils"
 
 // ---------------------------------------------------------------------------
-// Refund status — emerald / amber / red / zinc per the design spec
+// Refund status — semantic tones (success / warning / critical / info / …)
 // ---------------------------------------------------------------------------
 
 const REFUND_STYLES: Record<RefundStatus, { label: string; className: string }> = {
-  refunded: {
-    label: "Refunded",
-    className:
-      "border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-  },
-  partial: {
-    label: "Partial",
-    className:
-      "border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400",
-  },
-  pending_claim: {
-    label: "Self-claim",
-    className: "border-sky-500/25 bg-sky-500/10 text-sky-600 dark:text-sky-400",
-  },
-  not_refunded: {
-    label: "Not refunded",
-    className: "border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-400",
-  },
-  remake: {
-    label: "Remake",
-    className:
-      "border-orange-500/25 bg-orange-500/10 text-orange-600 dark:text-orange-400",
-  },
-  unconfirmed: {
-    label: "⚠ Unconfirmed",
-    className:
-      "border-amber-500/40 bg-amber-500/15 font-semibold text-amber-600 dark:text-amber-400",
-  },
-  unknown: {
-    label: "Unknown",
-    className: "border-border bg-muted text-muted-foreground",
-  },
+  refunded: { label: "Refunded", className: TONE.success },
+  partial: { label: "Partial", className: TONE.warning },
+  pending_claim: { label: "Self-claim", className: TONE.info },
+  not_refunded: { label: "Not refunded", className: TONE.critical },
+  remake: { label: "Remake", className: TONE.warning },
+  unconfirmed: { label: "⚠ Unconfirmed", className: TONE["warning-strong"] },
+  unknown: { label: "Unknown", className: TONE.neutral },
   unchecked: {
     label: "Unchecked",
     className: "border-border bg-transparent text-muted-foreground",
@@ -92,10 +68,7 @@ export function OrderStatusBadge({
 }) {
   if (status === "cancelled") {
     return (
-      <Badge
-        variant="outline"
-        className={cn("border-red-500/30 bg-red-500/5 text-red-600 dark:text-red-400", className)}
-      >
+      <Badge variant="outline" className={cn(TONE.critical, className)}>
         Cancelled
       </Badge>
     )
@@ -112,29 +85,11 @@ export function OrderStatusBadge({
 // ---------------------------------------------------------------------------
 
 const OUTCOME_STYLES: Record<ChatOutcome, { label: string; className: string }> = {
-  success: {
-    label: "Refund won",
-    className:
-      "border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-  },
-  failed: {
-    label: "Failed",
-    className: "border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-400",
-  },
-  blocked: {
-    label: "Blocked",
-    className:
-      "border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400",
-  },
-  review_blocked: {
-    label: "Review blocked",
-    className:
-      "border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400",
-  },
-  manual_flag: {
-    label: "Needs human",
-    className: "border-sky-500/25 bg-sky-500/10 text-sky-600 dark:text-sky-400",
-  },
+  success: { label: "Refund won", className: TONE.success },
+  failed: { label: "Failed", className: TONE.critical },
+  blocked: { label: "Blocked", className: TONE.warning },
+  review_blocked: { label: "Review blocked", className: TONE.warning },
+  manual_flag: { label: "Needs human", className: TONE.info },
 }
 
 export function OutcomeBadge({

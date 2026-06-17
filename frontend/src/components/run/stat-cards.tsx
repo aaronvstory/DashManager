@@ -24,22 +24,22 @@ const STATS: StatDef[] = [
     key: "not_refunded",
     label: "Missing refund",
     icon: SearchX,
-    accent: "text-red-600 dark:text-red-400",
-    iconBg: "bg-red-500/10 text-red-600 dark:text-red-400",
+    accent: "text-status-critical-fg",
+    iconBg: "bg-status-critical/10 text-status-critical-fg",
   },
   {
     key: "chats_won",
     label: "Chats won",
     icon: MessageSquareHeart,
-    accent: "text-emerald-600 dark:text-emerald-400",
-    iconBg: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+    accent: "text-status-success-fg",
+    iconBg: "bg-status-success/10 text-status-success-fg",
   },
   {
     key: "blocked",
     label: "Blocked",
     icon: ShieldAlert,
-    accent: "text-amber-600 dark:text-amber-400",
-    iconBg: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+    accent: "text-status-warning-fg",
+    iconBg: "bg-status-warning/10 text-status-warning-fg",
   },
 ]
 

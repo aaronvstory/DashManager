@@ -209,8 +209,8 @@ export function LoginCustomerDialog({
         {phase === "done" ? (
           <>
             <div className="flex flex-col items-center gap-4 py-6 text-center">
-              <div className="flex size-12 items-center justify-center rounded-full bg-emerald-500/10 ring-1 ring-emerald-500/25">
-                <CircleCheck className="size-6 text-emerald-500" />
+              <div className="flex size-12 items-center justify-center rounded-full bg-status-success/10 ring-1 ring-status-success/25">
+                <CircleCheck className="size-6 text-status-success-fg" />
               </div>
               <div className="space-y-1">
                 <p className="text-sm font-medium">Logged in</p>
@@ -265,7 +265,7 @@ function StepList({
                 aria-hidden
                 className={cn(
                   "absolute top-7 left-[1.0625rem] h-[calc(100%-1rem)] w-px",
-                  status === "done" ? "bg-emerald-500/40" : "bg-border",
+                  status === "done" ? "bg-status-success/40" : "bg-border",
                 )}
               />
             ) : null}
@@ -277,7 +277,7 @@ function StepList({
             >
               <span className="mt-0.5 flex size-[1.375rem] shrink-0 items-center justify-center">
                 {status === "done" ? (
-                  <CircleCheck className="size-[1.375rem] text-emerald-500" />
+                  <CircleCheck className="size-[1.375rem] text-status-success-fg" />
                 ) : status === "active" ? (
                   <LoaderCircle className="size-[1.375rem] animate-spin text-primary" />
                 ) : (
@@ -299,7 +299,7 @@ function StepList({
                 </p>
 
                 {step.key === "otp" && otpResent && !otpCode ? (
-                  <p className="text-xs text-amber-500">code resent</p>
+                  <p className="text-xs text-status-warning-fg">code resent</p>
                 ) : null}
 
                 {step.key === "code" && otpCode ? (
