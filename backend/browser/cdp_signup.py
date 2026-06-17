@@ -112,20 +112,20 @@ def _cdp_source(sb: Any) -> str:
             return ""
 
 
-# The window the OS input must be aimed at. TALL (1000px) on purpose: the signup
-# form runs First/Last → Email → Phone → Password → Sign Up, taller than 720px,
-# so a short window pushed the "Sign Up" button BELOW the fold and the OS click
-# landed off-screen (live bug). 1000px tall keeps the whole form — button
-# included — visible so element-center clicks stay inside the window. Anchored
-# near top-left (x=40,y=40) so the whole frame is on-screen. (The keep-open
-# windows the user watches later stay at the project-standard 1200x720; only
-# this signup-driver window needs the extra height.)
+# The window the OS input must be aimed at. DELIBERATE EXCEPTION to the project
+# 1200x720 window rule: that rule sizes the windows the USER watches/resizes (the
+# keep-open profiles), but this is a HEADLESS-style automation driver the user
+# does not resize. The signup form runs First/Last → Email → Phone → Password →
+# Sign Up — taller than 720px — so a 720-tall window pushed the "Sign Up" button
+# BELOW the fold and the OS click landed off-screen (verified live bug). 1000px
+# keeps the whole form (button included) visible so element-center clicks stay
+# inside the window. Anchored top-left (x=40,y=40) so the frame is fully on-screen.
 _WIN_X, _WIN_Y, _WIN_W, _WIN_H = 40, 40, 1200, 1000
 
 
 def focus_signup_window(sb: Any, *,
                         emit: Callable[[str, dict], None] | None = None) -> bool:
-    """Foreground + restore the browser to a known 1200x720 rect BEFORE OS input.
+    """Foreground + restore the browser to a known 1200x1000 rect BEFORE OS input.
 
     os_input (PyAutoGUI) types into whatever window has OS focus, and
     gui_click_element moves the REAL mouse to the element's SCREEN coordinates —
@@ -161,10 +161,25 @@ def focus_signup_window(sb: Any, *,
     # 2. OS-level backstop: a Chromium window can be at the right rect yet not be
     # the FOREGROUND window (CDP front != Win32 SetForegroundWindow). pygetwindow
     # activates it so real keystrokes land in it, not whatever was focused.
+    # Match "DoorDash" FIRST (the signup tab title) and only fall back to a
+    # generic Chromium title if none — a bare "Chrom" match is too broad and
+    # could activate the USER's own personal Chrome window, stealing their focus.
     try:
         import pygetwindow as gw  # available (verified); guard anyway
-        wins = [w for w in gw.getAllWindows()
-                if w.title and ("DoorDash" in w.title or "Chrom" in w.title)]
+        # Read each title ONCE, defensively: w.title can raise mid-iteration (a
+        # window closing, or a restricted system window) — a bare comprehension
+        # over w.title would let one bad window abort the whole focus step. Build
+        # (window, title) pairs, skipping any that raise.
+        titled = []
+        for w in gw.getAllWindows():
+            try:
+                t = w.title
+            except Exception:
+                continue
+            if t:
+                titled.append((w, t))
+        wins = [w for w, t in titled if "DoorDash" in t] or \
+            [w for w, t in titled if "Chrom" in t]
         if wins:
             w = wins[0]
             try:
@@ -201,6 +216,17 @@ def _cdp_url(sb: Any) -> str:
 def _page_has(sb: Any, markers: tuple[str, ...]) -> bool:
     src = _cdp_source(sb)
     return any(m in src for m in markers)
+
+
+def _modal_gone_from_source(src: str) -> bool:
+    """Pure: did the verify modal disappear, given the page source?
+
+    True ONLY when the source is non-empty AND carries no verify markers. An
+    EMPTY source (a transient CDP read failure / mid-navigation) returns False —
+    otherwise "no verify markers" is vacuously true and a post-OTP success check
+    would falsely flag the account created on a blank read (Gemini critical).
+    """
+    return bool(src) and not any(m in src for m in VERIFY_MARKERS)
 
 
 def clear_captcha_ladder(sb: Any, *, emit: Callable[[str, dict], None] | None,
@@ -942,7 +968,11 @@ def signup_via_cdp(identity: dict[str, Any], *,
                             break
                         if _page_has(sb, BOT_BLOCK_MARKERS):
                             break  # not created — bot-blocked after OTP
-                        modal_gone = not _page_has(sb, VERIFY_MARKERS)
+                        # modal_gone needs a REAL page read (see
+                        # _modal_gone_from_source): an empty source must NOT count
+                        # as "modal gone", else a transient CDP read failure
+                        # falsely flags success.
+                        modal_gone = _modal_gone_from_source(_cdp_source(sb))
                         left_auth = not any(s in url.lower()
                                             for s in ("verify", "/auth",
                                                       "login"))

@@ -195,3 +195,14 @@ def test_focus_signup_window_survives_cdp_failure():
     # on the test box), but the event is always emitted.
     c.focus_signup_window(FakeSB(), emit=lambda t, d: events.append((t, d)))
     assert events and events[0][0] == "signup_window_focus"
+
+
+def test_modal_gone_from_source_rejects_empty():
+    # An EMPTY source (transient CDP read failure) must NOT read as "modal gone"
+    # — else the post-OTP check falsely flags the account created on a blank read
+    # (Gemini critical). Real home source (no verify markers) IS gone.
+    assert c._modal_gone_from_source("") is False
+    assert c._modal_gone_from_source("welcome to doordash home") is True
+    # A source still showing a verify marker = modal NOT gone.
+    marker = c.VERIFY_MARKERS[0]
+    assert c._modal_gone_from_source(f"please {marker} your phone") is False
