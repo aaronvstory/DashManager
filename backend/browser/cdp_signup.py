@@ -112,14 +112,14 @@ def _cdp_source(sb: Any) -> str:
             return ""
 
 
-# The window the OS input must be aimed at. TALL (1000px) on purpose: the signup
-# form runs First/Last → Email → Phone → Password → Sign Up, taller than 720px,
-# so a short window pushed the "Sign Up" button BELOW the fold and the OS click
-# landed off-screen (live bug). 1000px tall keeps the whole form — button
-# included — visible so element-center clicks stay inside the window. Anchored
-# near top-left (x=40,y=40) so the whole frame is on-screen. (The keep-open
-# windows the user watches later stay at the project-standard 1200x720; only
-# this signup-driver window needs the extra height.)
+# The window the OS input must be aimed at. DELIBERATE EXCEPTION to the project
+# 1200x720 window rule: that rule sizes the windows the USER watches/resizes (the
+# keep-open profiles), but this is a HEADLESS-style automation driver the user
+# does not resize. The signup form runs First/Last → Email → Phone → Password →
+# Sign Up — taller than 720px — so a 720-tall window pushed the "Sign Up" button
+# BELOW the fold and the OS click landed off-screen (verified live bug). 1000px
+# keeps the whole form (button included) visible so element-center clicks stay
+# inside the window. Anchored top-left (x=40,y=40) so the frame is fully on-screen.
 _WIN_X, _WIN_Y, _WIN_W, _WIN_H = 40, 40, 1200, 1000
 
 
@@ -166,9 +166,20 @@ def focus_signup_window(sb: Any, *,
     # could activate the USER's own personal Chrome window, stealing their focus.
     try:
         import pygetwindow as gw  # available (verified); guard anyway
-        all_wins = [w for w in gw.getAllWindows() if w.title]
-        wins = [w for w in all_wins if "DoorDash" in w.title] or \
-            [w for w in all_wins if "Chrom" in w.title]
+        # Read each title ONCE, defensively: w.title can raise mid-iteration (a
+        # window closing, or a restricted system window) — a bare comprehension
+        # over w.title would let one bad window abort the whole focus step. Build
+        # (window, title) pairs, skipping any that raise.
+        titled = []
+        for w in gw.getAllWindows():
+            try:
+                t = w.title
+            except Exception:
+                continue
+            if t:
+                titled.append((w, t))
+        wins = [w for w, t in titled if "DoorDash" in t] or \
+            [w for w, t in titled if "Chrom" in t]
         if wins:
             w = wins[0]
             try:
