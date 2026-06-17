@@ -247,7 +247,11 @@ export default function DaisyPage() {
             <DialogTitle>Delete from CustomerDaisy?</DialogTitle>
             <DialogDescription>
               Removes <span className="font-medium text-foreground">
-                {deleting?.full_name || deleting?.email}
+                {deleting
+                  ? deleting.full_name ||
+                    `${deleting.first_name} ${deleting.last_name}`.trim() ||
+                    deleting.email
+                  : ""}
               </span>{" "}
               from CustomerDaisy's pool. This does not affect DashManager.
             </DialogDescription>
@@ -256,6 +260,9 @@ export default function DaisyPage() {
             <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
             <Button
               variant="destructive"
+              // Disable while a delete is in flight so a double-click / slow
+              // network can't fire the mutation twice.
+              disabled={!deleting || del.isPending}
               onClick={() => {
                 if (deleting) del.mutate(deleting.customer_id)
                 setDeleting(null)

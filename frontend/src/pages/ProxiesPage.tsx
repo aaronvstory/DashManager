@@ -189,6 +189,9 @@ export default function ProxiesPage() {
       toast.info("No tested-dead proxies to delete")
       return
     }
+    // Sequential deletes can take a few seconds; show a loading toast so the
+    // user has feedback while the dead rows linger before the refetch.
+    const t = toast.loading(`Deleting ${dead.length} dead proxies…`)
     let removed = 0
     let failed = 0
     for (const p of dead) {
@@ -199,11 +202,12 @@ export default function ProxiesPage() {
         failed += 1
       }
     }
-    if (removed > 0) {
-      toast.success(`Deleted ${removed} dead prox${removed === 1 ? "y" : "ies"}`)
-    }
     if (failed > 0) {
-      toast.error(`${failed} could not be deleted — see backend`)
+      toast.error(`Deleted ${removed}; ${failed} failed — see backend`, { id: t })
+    } else {
+      toast.success(
+        `Deleted ${removed} dead prox${removed === 1 ? "y" : "ies"}`, { id: t },
+      )
     }
     void qc.invalidateQueries({ queryKey: ["proxies"] })
   }
