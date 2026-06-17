@@ -87,16 +87,23 @@ class KeepOpenManager:
         *,
         headless: bool = False,
         landing_url: str | None = _DEFAULT_LANDING_URL,
+        ensure_login: bool = False,
     ) -> dict[str, list[int]]:
-        """Open a window per id and hold it. Returns {opened, skipped}.
+        """Open a window per id and hold it. Returns {opened, skipped, logged_in}.
 
         Skips an id that is already kept open, or whose profile_lock is held by
         something else (a run in flight, a manual session) — never double-opens
         one user-data-dir. Each successfully opened id has its profile_lock held
         until ``close``.
+
+        ``ensure_login``: after navigating, if the window landed logged-OUT
+        (expired session), drive a login IN that same window so it ends up
+        logged in — sequentially, emitting progress. Needs a real landing_url to
+        detect against; an account with no saved number is left as-is.
         """
         opened: list[int] = []
         skipped: list[int] = []
+        logged_in: list[int] = []
         async with self._gate:
             pw = await self._ensure_pw()
             for cid in ids:
@@ -131,12 +138,32 @@ class KeepOpenManager:
                     lock.release()
                     skipped.append(cid)
                     continue
+                page = None
                 if landing_url:
                     try:
                         page = ctx.pages[0] if ctx.pages else await ctx.new_page()
                         await page.goto(landing_url, wait_until="domcontentloaded")
                     except Exception:
-                        pass  # a window that won't navigate is still usable
+                        page = None  # a window that won't navigate is still usable
+                # ensure_login: if the window is logged OUT (expired session),
+                # log it in IN PLACE so the user's window ends up authenticated.
+                # Best-effort per account — a failure leaves the window open
+                # (logged out) rather than aborting the whole batch.
+                if ensure_login and page is not None:
+                    try:
+                        from backend import relogin
+                        if await relogin.is_logged_in(page):
+                            logged_in.append(cid)
+                        else:
+                            bus.publish("keep_open_login_started", {"id": cid})
+                            outcome = await relogin.login_open_page(cid, page)
+                            if outcome == "logged_in":
+                                logged_in.append(cid)
+                            bus.publish("keep_open_login_done",
+                                        {"id": cid, "outcome": outcome})
+                    except Exception as exc:  # noqa: BLE001 — never abort the batch
+                        bus.publish("keep_open_login_done",
+                                    {"id": cid, "outcome": f"error: {exc}"[:120]})
                 self._contexts[cid] = ctx
                 self._held[cid] = lock
                 # If the USER closes the window manually, Playwright fires
@@ -152,7 +179,7 @@ class KeepOpenManager:
             bus.publish("keep_open_started", {"ids": opened})
         if skipped:
             bus.publish("keep_open_skipped", {"ids": skipped})
-        return {"opened": opened, "skipped": skipped}
+        return {"opened": opened, "skipped": skipped, "logged_in": logged_in}
 
     async def close(self, ids: list[int] | None = None) -> list[int]:
         """Close the given kept-open windows (or all if ids is None).

@@ -24,6 +24,9 @@ class OpenBody(BaseModel):
     bucket_date: str | None = None
     headless: bool = False
     landing_url: str | None = None
+    # True: after opening, log in any window that landed logged-out (stale
+    # session) so every window ends up authenticated.
+    ensure_login: bool = False
 
 
 class CloseBody(BaseModel):
@@ -48,8 +51,13 @@ async def open_keep_open(body: OpenBody) -> dict:
     # Forward landing_url only when the caller actually set the field, so the
     # manager's default (the logged-in orders page) applies on omit. `is not
     # None` (not truthiness) so a caller CAN pass "" to deliberately stay blank.
-    kw = {"landing_url": body.landing_url} if body.landing_url is not None else {}
-    result = await manager.open(resolved, headless=body.headless, **kw)
+    if body.landing_url is not None:
+        result = await manager.open(
+            resolved, headless=body.headless,
+            landing_url=body.landing_url, ensure_login=body.ensure_login)
+    else:
+        result = await manager.open(
+            resolved, headless=body.headless, ensure_login=body.ensure_login)
     return result
 
 
