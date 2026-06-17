@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react"
-import { Link } from "react-router-dom"
+import { useNavigate } from "react-router-dom"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { format } from "date-fns"
 import {
@@ -136,6 +136,7 @@ export function CreateAccountDialog({
   initialBatch?: { batch_id: string; batch_label: string }
 }) {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
   const lastEvent = useRunStore((s) => s.lastEvent)
 
   const [phase, setPhase] = useState<Phase>("idle")
@@ -756,13 +757,16 @@ export function CreateAccountDialog({
                     actual cursor and keyboard for about{" "}
                     <strong>{estMinutes}</strong> — don&apos;t touch the PC
                     until it finishes.
-                    <label className="mt-2 flex items-center gap-2 font-medium text-foreground">
+                    <div className="mt-2 flex items-center gap-2 font-medium text-foreground">
                       <Checkbox
+                        id="ack-hijack"
                         checked={ackHijack}
                         onCheckedChange={(v) => setAckHijack(v === true)}
                       />
-                      I understand — leave the PC alone while it runs.
-                    </label>
+                      <Label htmlFor="ack-hijack" className="cursor-pointer">
+                        I understand — leave the PC alone while it runs.
+                      </Label>
+                    </div>
                   </AlertDescription>
                 </Alert>
               ) : null}
@@ -837,17 +841,18 @@ export function CreateAccountDialog({
               </Button>
               {/* Next step in the workflow: grab the SMS codes. A multi-account
                   batch lands in batch mode (newest batch auto-selected); a
-                  single account uses the bucket view. Navigating unmounts the
-                  launching page, which closes the dialog. */}
+                  single account uses the bucket view. Close the dialog FIRST
+                  (so base-ui restores scroll/focus), then navigate. */}
               <Button
                 variant="outline"
-                render={
-                  <Link to={results.length > 1 ? "/otp?mode=batch" : "/otp"}>
-                    <Smartphone data-icon="inline-start" />
-                    Watch OTPs
-                  </Link>
-                }
-              />
+                onClick={() => {
+                  onOpenChange(false)
+                  navigate(results.length > 1 ? "/otp?mode=batch" : "/otp")
+                }}
+              >
+                <Smartphone data-icon="inline-start" />
+                Watch OTPs
+              </Button>
               <DialogClose render={<Button />}>Done</DialogClose>
             </DialogFooter>
           </>
