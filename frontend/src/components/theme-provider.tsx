@@ -20,6 +20,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       themes={[...THEME_ORDER]}
       defaultTheme={DEFAULT_THEME}
       enableSystem={false}
+      // Themes aren't named "light"/"dark", so next-themes can't drive
+      // color-scheme correctly — we pin it to dark in CSS instead (index.css
+      // html rule). Let it manage data-theme only.
+      enableColorScheme={false}
       storageKey="dashmanager-theme"
       disableTransitionOnChange
     >

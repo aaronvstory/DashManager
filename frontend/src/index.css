@@ -326,6 +326,10 @@
     }
   html {
     @apply font-sans;
+    /* All themes are dark — pin native UI (scrollbars, date/select popups) to
+       dark so it doesn't render light on a light-OS user. next-themes can't set
+       this (theme names aren't "light"/"dark"); enableColorScheme is off. */
+    color-scheme: dark;
     }
   /* BRUTALIST: no ambient gradient wash — flat black, structure comes from
      borders and type, not glows. (Removed the radial red wash on purpose.) */
