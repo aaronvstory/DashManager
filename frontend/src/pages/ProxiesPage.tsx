@@ -374,6 +374,24 @@ function ProxyCard({
     }
   }
 
+  // The password isn't in the list payload (withheld); fetch it on demand for
+  // this one proxy so it can be copied individually like the other 3 fields.
+  async function copyPassword() {
+    try {
+      const r = await api.get<ProxyLine>(
+        `/proxies/${encodeURIComponent(proxy.id)}/line`,
+      )
+      if (!r.password) {
+        toast.info("This proxy has no password")
+        return
+      }
+      await navigator.clipboard.writeText(r.password)
+      toast.success("Copied password")
+    } catch {
+      toast.error("Could not copy password")
+    }
+  }
+
   return (
     <div
       className={cn(
@@ -419,11 +437,23 @@ function ProxyCard({
         </div>
       </div>
 
-      {/* Per-field copy: host, port, username, + full line (incl. password). */}
+      {/* Per-field copy — all 4 fields individually (password fetched on demand
+          since the list withholds it), plus a full-line convenience. */}
       <div className="space-y-1 text-xs">
         <CopyRow label="Host" value={proxy.host} mono />
         <CopyRow label="Port" value={proxy.port} mono />
         <CopyRow label="User" value={proxy.label} mono />
+        <div className="flex items-center gap-2">
+          <span className="eyebrow w-12 shrink-0">Pass</span>
+          <button
+            type="button"
+            onClick={() => void copyPassword()}
+            className="rounded px-1 py-0.5 text-left font-mono text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+            title="Copy this proxy's password"
+          >
+            •••••• copy
+          </button>
+        </div>
         <div className="flex items-center gap-2">
           <span className="eyebrow w-12 shrink-0">Line</span>
           <button
@@ -432,7 +462,7 @@ function ProxyCard({
             className="truncate rounded px-1 py-0.5 text-left text-muted-foreground hover:bg-muted/60 hover:text-foreground"
             title="Copy the full proxy line (with password)"
           >
-            copy full line (with password)
+            copy full line
           </button>
         </div>
       </div>
