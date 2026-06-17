@@ -242,20 +242,20 @@ export function SettingsCard({
               "flex items-center gap-1.5 text-xs font-medium",
               invalid
                 ? "text-destructive"
-                : "text-amber-600 dark:text-amber-400",
+                : "text-status-warning-fg",
             )}
           >
             <span
               className={cn(
                 "size-1.5 rounded-full",
-                invalid ? "bg-destructive" : "bg-amber-500",
+                invalid ? "bg-destructive" : "bg-status-warning",
               )}
             />
             {invalid ? "Fix invalid values to save" : "Unsaved changes"}
           </span>
         ) : (
           <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <CircleCheck className="size-3.5 text-emerald-600 dark:text-emerald-500" />
+            <CircleCheck className="size-3.5 text-status-success-fg" />
             Saved
           </span>
         )}

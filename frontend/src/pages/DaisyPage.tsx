@@ -171,7 +171,7 @@ export default function DaisyPage() {
                     </td>
                     <td className="px-4 py-2.5">
                       {c.in_dashmanager ? (
-                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-500">
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-status-success-fg">
                           <Check className="size-3.5" /> adopted
                         </span>
                       ) : (

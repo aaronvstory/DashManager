@@ -199,7 +199,7 @@ export function StartRunCard() {
             </SelectContent>
           </Select>
           {selectedBucket && selectedBucket.expired > 0 ? (
-            <p className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+            <p className="flex items-center gap-1.5 text-xs text-status-warning-fg">
               <TriangleAlert className="size-3.5" />
               {selectedBucket.expired} of {selectedBucket.count} session
               {selectedBucket.expired === 1 ? " is" : "s are"} not active and may

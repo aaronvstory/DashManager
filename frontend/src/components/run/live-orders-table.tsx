@@ -100,7 +100,7 @@ export function LiveOrdersTable() {
                       className={cn(
                         "text-right tabular-nums",
                         typeof o.refund_amount === "number" && o.refund_amount > 0
-                          ? "font-medium text-emerald-600 dark:text-emerald-400"
+                          ? "font-medium text-status-success-fg"
                           : "text-muted-foreground",
                       )}
                     >

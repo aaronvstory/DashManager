@@ -46,7 +46,7 @@ function OrderTrail({ order }: { order: Order }) {
   return (
     <div className="space-y-4 px-4 py-4">
       {order.resolution?.confirmation ? (
-        <div className="flex items-start gap-2.5 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.06] px-3.5 py-2.5">
+        <div className="flex items-start gap-2.5 rounded-lg border border-status-success/20 bg-status-success/[0.06] px-3.5 py-2.5">
           <ResolutionBadge label={order.resolution.label} />
           <p className="min-w-0 flex-1 text-sm leading-relaxed text-foreground/80">
             {order.resolution.confirmation}
@@ -65,8 +65,8 @@ function OrderTrail({ order }: { order: Order }) {
               className={cn(
                 "rounded px-1.5 py-0.5 text-xs",
                 c.confirmed
-                  ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                  : "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+                  ? "bg-status-success/10 text-status-success-fg"
+                  : "bg-status-warning/10 text-status-warning-fg",
               )}
             >
               {c.confirmed ? "confirmed" : c.outcome}
@@ -88,7 +88,7 @@ function OrderTrail({ order }: { order: Order }) {
             <MessageSquareText className="size-3.5" />
             Support chat
             {chat.agent_reached ? (
-              <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-emerald-600 dark:text-emerald-400">
+              <span className="rounded bg-status-success/10 px-1.5 py-0.5 text-status-success-fg">
                 agent reached
               </span>
             ) : null}
@@ -189,7 +189,7 @@ export function OrdersTable({ orders }: { orders: Order[] }) {
                   <TableCell className="text-right tabular-nums">
                     {money(o.total_amount ?? o.price)}
                   </TableCell>
-                  <TableCell className="pr-3 text-right tabular-nums text-emerald-600 dark:text-emerald-400">
+                  <TableCell className="pr-3 text-right tabular-nums text-status-success-fg">
                     {o.refund_amount ? money(o.refund_amount) : "—"}
                   </TableCell>
                 </TableRow>

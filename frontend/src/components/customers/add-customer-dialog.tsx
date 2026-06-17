@@ -198,8 +198,8 @@ export function AddCustomerDialog({
         {phase === "captured" ? (
           <>
             <div className="flex flex-col items-center gap-4 py-6 text-center">
-              <div className="flex size-12 items-center justify-center rounded-full bg-emerald-500/10 ring-1 ring-emerald-500/25">
-                <CircleCheck className="size-6 text-emerald-500" />
+              <div className="flex size-12 items-center justify-center rounded-full bg-status-success/10 ring-1 ring-status-success/25">
+                <CircleCheck className="size-6 text-status-success-fg" />
               </div>
               <div className="space-y-1">
                 <p className="text-sm font-medium">Session captured</p>

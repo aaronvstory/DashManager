@@ -53,7 +53,7 @@ export function ChatTranscript({
           return (
             <div key={i} className="flex items-center gap-2 py-1">
               <span className="h-px flex-1 bg-border" />
-              <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+              <span className="inline-flex items-center gap-1 rounded-full border border-status-warning/30 bg-status-warning/10 px-2 py-0.5 text-[11px] font-medium text-status-warning-fg">
                 <ArrowUpRight className="size-3" />
                 {m.content}
               </span>

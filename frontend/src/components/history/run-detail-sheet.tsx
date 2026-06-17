@@ -109,13 +109,13 @@ function ChatCard({ chat }: { chat: ChatWithMessages }) {
         <span className="text-xs text-muted-foreground">Chat #{chat.id}</span>
         <div className="ml-auto flex items-center gap-2.5">
           {chat.agent_reached ? (
-            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
-              <span className="size-1.5 rounded-full bg-emerald-500" />
+            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-status-success-fg">
+              <span className="size-1.5 rounded-full bg-status-success" />
               Agent reached
             </span>
           ) : (
             <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-              <span className="size-1.5 rounded-full bg-zinc-500" />
+              <span className="size-1.5 rounded-full bg-muted-foreground/50" />
               No agent
             </span>
           )}
@@ -136,7 +136,7 @@ function ClaimRow({ claim }: { claim: Claim }) {
         className={cn(
           "size-4 shrink-0",
           claim.outcome === "success"
-            ? "text-emerald-500"
+            ? "text-status-success-fg"
             : "text-muted-foreground",
         )}
       />
@@ -151,7 +151,7 @@ function ClaimRow({ claim }: { claim: Claim }) {
         {claim.error ? (
           <span
             title={claim.error}
-            className="max-w-36 truncate text-red-600 dark:text-red-400"
+            className="max-w-36 truncate text-status-critical-fg"
           >
             {claim.error}
           </span>
@@ -277,8 +277,8 @@ export function RunDetailSheet({
               <span
                 className={
                   missing > 0
-                    ? "text-red-600 dark:text-red-400"
-                    : "text-emerald-600 dark:text-emerald-400"
+                    ? "text-status-critical-fg"
+                    : "text-status-success-fg"
                 }
               >
                 {missing}
@@ -320,7 +320,7 @@ export function RunDetailSheet({
             </div>
           ) : detailQuery.isError ? (
             <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
-              <AlertCircle className="size-6 text-red-500" />
+              <AlertCircle className="size-6 text-status-critical-fg" />
               <p className="text-sm text-muted-foreground">
                 Couldn't load the details for this run.
               </p>
@@ -373,7 +373,7 @@ export function RunDetailSheet({
                                   {order.order_status === "cancelled" ? (
                                     <Badge
                                       variant="outline"
-                                      className="h-4 border-red-500/40 bg-red-500/5 px-1.5 text-[10px] text-red-600 dark:text-red-400"
+                                      className="h-4 border-status-critical/40 bg-status-critical/5 px-1.5 text-[10px] text-status-critical-fg"
                                     >
                                       Cancelled
                                     </Badge>
@@ -408,7 +408,7 @@ export function RunDetailSheet({
                                   {order.error ? (
                                     <span
                                       title={order.error}
-                                      className="block max-w-36 truncate text-xs text-red-600 dark:text-red-400"
+                                      className="block max-w-36 truncate text-xs text-status-critical-fg"
                                     >
                                       {order.error}
                                     </span>

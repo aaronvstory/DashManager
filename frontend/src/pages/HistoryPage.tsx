@@ -96,7 +96,7 @@ export default function HistoryPage() {
         <LoadingRows />
       ) : isError ? (
         <Card className="flex flex-col items-center gap-3 border-dashed px-8 py-16 text-center shadow-none">
-          <AlertCircle className="size-6 text-red-500" />
+          <AlertCircle className="size-6 text-status-critical-fg" />
           <p className="text-sm text-muted-foreground">
             Couldn't load run history. Is the backend running?
           </p>

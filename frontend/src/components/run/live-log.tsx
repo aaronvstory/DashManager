@@ -19,8 +19,8 @@ function levelOf(ev: AppEvent): "error" | "warn" | "info" {
 }
 
 const LEVEL_CLASS: Record<"error" | "warn" | "info", string> = {
-  error: "text-red-500 dark:text-red-400",
-  warn: "text-amber-600 dark:text-amber-400",
+  error: "text-status-critical-fg",
+  warn: "text-status-warning-fg",
   info: "text-muted-foreground",
 }
 

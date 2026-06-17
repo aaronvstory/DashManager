@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom"
 import { AppLayout } from "@/components/app-layout"
 import { Toaster } from "@/components/ui/sonner"
+import CreatePage from "@/pages/CreatePage"
 import CustomersPage from "@/pages/CustomersPage"
 import DaisyPage from "@/pages/DaisyPage"
 import DatabasePage from "@/pages/DatabasePage"
@@ -17,6 +18,7 @@ export default function App() {
       <Routes>
         <Route element={<AppLayout />}>
           <Route index element={<CustomersPage />} />
+          <Route path="/create" element={<CreatePage />} />
           <Route path="/daisy" element={<DaisyPage />} />
           <Route path="/database" element={<DatabasePage />} />
           <Route path="/run" element={<RunPage />} />

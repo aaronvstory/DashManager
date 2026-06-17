@@ -90,9 +90,9 @@ export function DatabaseCustomer({ customer }: { customer: FullCustomer }) {
             r.count === 0
               ? "bg-muted-foreground/40"
               : allRefunded
-                ? "bg-emerald-500"
+                ? "bg-status-success"
                 : r.needs > 0
-                  ? "bg-amber-500"
+                  ? "bg-status-warning"
                   : "bg-muted-foreground/40",
           )}
         />
@@ -122,20 +122,20 @@ export function DatabaseCustomer({ customer }: { customer: FullCustomer }) {
               <span
                 className={cn(
                   "num font-semibold",
-                  allRefunded ? "text-emerald-500" : "text-foreground",
+                  allRefunded ? "text-status-success-fg" : "text-foreground",
                 )}
               >
                 {r.refunded}/{r.count} refunded
               </span>
               {r.recovered > 0 ? (
-                <span className="num text-emerald-500">{money(r.recovered)}</span>
+                <span className="num text-status-success-fg">{money(r.recovered)}</span>
               ) : null}
               {r.unconfirmed > 0 ? (
-                <span className="border border-amber-500/40 bg-amber-500/15 px-1.5 py-0.5 font-semibold text-amber-500">
+                <span className="border border-status-warning/40 bg-status-warning/15 px-1.5 py-0.5 font-semibold text-status-warning-fg">
                   ⚠ {r.unconfirmed}
                 </span>
               ) : r.needs > 0 ? (
-                <span className="border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-amber-500">
+                <span className="border border-status-warning/40 bg-status-warning/10 px-1.5 py-0.5 text-status-warning-fg">
                   {r.needs} open
                 </span>
               ) : null}

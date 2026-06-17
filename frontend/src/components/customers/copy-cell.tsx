@@ -53,7 +53,7 @@ export function CopyValue({
     >
       <span className="truncate">{value}</span>
       {copied ? (
-        <Check className="size-3 shrink-0 text-emerald-500" />
+        <Check className="size-3 shrink-0 text-status-success-fg" />
       ) : (
         <Copy className="size-3 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-muted-foreground" />
       )}

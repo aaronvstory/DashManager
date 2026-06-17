@@ -71,7 +71,7 @@ export function BrowserSection({ browser }: { browser: BrowserSettings }) {
             is the default for all actions.
           </p>
           {form.headless ? (
-            <p className="flex items-center gap-1.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+            <p className="flex items-center gap-1.5 text-xs font-medium text-status-warning-fg">
               <TriangleAlert className="size-3.5 shrink-0" />
               Headless runs are very likely to be blocked.
             </p>

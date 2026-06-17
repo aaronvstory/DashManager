@@ -136,10 +136,10 @@ export function FetchOtpDialog({
         ) : null}
 
         {phase === "timeout" ? (
-          <Alert className="border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400">
+          <Alert className="border-status-warning/25 bg-status-warning/10 text-status-warning-fg">
             <CircleAlert />
             <AlertTitle>No code arrived yet</AlertTitle>
-            <AlertDescription className="text-amber-600/90 dark:text-amber-400/90">
+            <AlertDescription className="text-status-warning-fg/90">
               Try Fetch again, or resend the code on the device.
             </AlertDescription>
           </Alert>

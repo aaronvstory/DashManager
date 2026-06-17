@@ -68,17 +68,17 @@ export function DatabaseBucket({
               <span
                 className={cn(
                   "num font-semibold",
-                  allDone ? "text-emerald-500" : "text-foreground",
+                  allDone ? "text-status-success-fg" : "text-foreground",
                 )}
               >
                 {refundedTotal}/{orderTotal} refunded
               </span>
             ) : null}
             {recovered > 0 ? (
-              <span className="num text-emerald-500">${recovered.toFixed(2)}</span>
+              <span className="num text-status-success-fg">${recovered.toFixed(2)}</span>
             ) : null}
             {needs > 0 ? (
-              <span className="border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-semibold text-amber-500">
+              <span className="border border-status-warning/40 bg-status-warning/10 px-1.5 py-0.5 font-semibold text-status-warning-fg">
                 {needs} open
               </span>
             ) : null}

@@ -19,8 +19,8 @@ function StatBlock({ label, value, tone }: {
   tone?: "good" | "warn" | "alert"
 }) {
   const accent =
-    tone === "good" ? "text-emerald-500"
-    : tone === "warn" ? "text-amber-500"
+    tone === "good" ? "text-status-success-fg"
+    : tone === "warn" ? "text-status-warning-fg"
     : tone === "alert" ? "text-primary"
     : "text-foreground"
   return (
@@ -56,7 +56,7 @@ function OrderRow({ order }: { order: Order }) {
         <ResolutionBadge label={order.resolution?.label ?? "—"} />
       </td>
       <td className="num px-3 py-2.5 text-right">{money(order.total_amount ?? order.price)}</td>
-      <td className={`num px-3 py-2.5 text-right ${refunded ? "text-emerald-500" : "text-muted-foreground"}`}>
+      <td className={`num px-3 py-2.5 text-right ${refunded ? "text-status-success-fg" : "text-muted-foreground"}`}>
         {order.refund_amount ? money(order.refund_amount) : "—"}
       </td>
     </tr>
@@ -88,7 +88,7 @@ function CustomerSection({ customer }: { customer: ReportCustomer }) {
           <span className="text-muted-foreground">
             {orders.length} order{orders.length === 1 ? "" : "s"}
           </span>
-          <span className="num font-bold text-emerald-500">{money(refundedTotal)}</span>
+          <span className="num font-bold text-status-success-fg">{money(refundedTotal)}</span>
         </div>
       </div>
 
@@ -132,7 +132,7 @@ function CustomerSection({ customer }: { customer: ReportCustomer }) {
             <div className="eyebrow flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2">
               Support chat
               {chat.agent_reached ? (
-                <span className="text-emerald-500">· agent reached</span>
+                <span className="text-status-success-fg">· agent reached</span>
               ) : null}
               {chat.outcome ? <span className="ml-auto normal-case">{chat.outcome}</span> : null}
             </div>
