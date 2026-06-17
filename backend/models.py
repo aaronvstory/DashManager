@@ -238,6 +238,11 @@ EVENT_TYPES = (
     "customer_done",
     "run_done",
     "run_error",
+    # Keep-open: app-owned windows held open between runs.
+    "keep_open_started",
+    "keep_open_closed",
+    "keep_open_skipped",
+    "keep_open_status",
     "log",
     "heartbeat",
 )
