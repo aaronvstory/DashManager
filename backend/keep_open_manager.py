@@ -138,6 +138,17 @@ class KeepOpenManager:
                     lock.release()
                     skipped.append(cid)
                     continue
+                # Register the context + lock + manual-close handler IMMEDIATELY
+                # (before navigate/login). ensure_login can take minutes waiting
+                # on an OTP; if the user closes the window mid-login and we hadn't
+                # registered yet, the "close" handler wouldn't be wired and the
+                # profile_lock would leak — blocking every future run for this id.
+                self._contexts[cid] = ctx
+                self._held[cid] = lock
+                ctx.on("close",
+                       lambda _ctx=None, _cid=cid: self._on_context_closed(_cid))
+                opened.append(cid)
+
                 page = None
                 if landing_url:
                     try:
@@ -148,13 +159,14 @@ class KeepOpenManager:
                 # ensure_login: if the window is logged OUT (expired session),
                 # log it in IN PLACE so the user's window ends up authenticated.
                 # Best-effort per account — a failure leaves the window open
-                # (logged out) rather than aborting the whole batch.
+                # (logged out) rather than aborting the whole batch. Guard on the
+                # context still being ours (the user may have closed it mid-login).
                 if ensure_login and page is not None:
                     try:
                         from backend import relogin
                         if await relogin.is_logged_in(page):
                             logged_in.append(cid)
-                        else:
+                        elif cid in self._contexts:
                             bus.publish("keep_open_login_started", {"id": cid})
                             outcome = await relogin.login_open_page(cid, page)
                             if outcome == "logged_in":
@@ -164,15 +176,6 @@ class KeepOpenManager:
                     except Exception as exc:  # noqa: BLE001 — never abort the batch
                         bus.publish("keep_open_login_done",
                                     {"id": cid, "outcome": f"error: {exc}"[:120]})
-                self._contexts[cid] = ctx
-                self._held[cid] = lock
-                # If the USER closes the window manually, Playwright fires
-                # "close" — without this we'd leak state and, worse, never
-                # release the profile_lock (blocking every future run for this
-                # customer). Clean up reactively. (Our own close() pops the
-                # entry BEFORE awaiting ctx.close(), so this no-ops then.)
-                ctx.on("close", lambda _ctx=None, _cid=cid: self._on_context_closed(_cid))
-                opened.append(cid)
 
         if opened:
             profiles_live.mark_open(opened)
