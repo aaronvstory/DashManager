@@ -3,6 +3,8 @@
 `open_customer_profile` and `profile_dir` are monkeypatched so nothing launches
 Chromium. The point is the lock/skip/reconcile logic, not Playwright itself.
 """
+from pathlib import Path
+
 import httpx
 import pytest
 
@@ -163,12 +165,14 @@ async def test_failed_launch_releases_lock(monkeypatch):
     assert driver.profile_lock(9).locked() is False
 
 
-async def test_open_seeds_fresh_signup_from_storage_state(tmp_path, monkeypatch):
+async def test_open_seeds_fresh_signup_from_storage_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A just-signed-up account has captured cookies but NO profile dir yet.
     Keep-open must still open it, seeded from its storage_state, so the window
     comes up already logged in (the create→keep-open gap)."""
     # Empty profile dir (fresh signup — no prior login wrote into it).
-    def empty_profile_dir(cid: int):
+    def empty_profile_dir(cid: int) -> Path:
         d = tmp_path / "profiles" / str(cid)
         d.mkdir(parents=True, exist_ok=True)
         return d
@@ -185,8 +189,9 @@ async def test_open_seeds_fresh_signup_from_storage_state(tmp_path, monkeypatch)
 
     seeds: list[str | None] = []
 
-    async def capture_open(pw, c, headless, *, viewport=(1200, 720),
-                           seed_storage_state=None):
+    async def capture_open(pw: object, c: int, headless: bool, *,
+                           viewport: tuple[int, int] = (1200, 720),
+                           seed_storage_state: str | None = None) -> _FakeCtx:
         seeds.append(seed_storage_state)
         return _FakeCtx()
 
@@ -199,9 +204,11 @@ async def test_open_seeds_fresh_signup_from_storage_state(tmp_path, monkeypatch)
     assert seeds == [str(storage)]         # seeded from the captured cookies
 
 
-async def test_open_skips_when_no_profile_and_no_seed(tmp_path, monkeypatch):
+async def test_open_skips_when_no_profile_and_no_seed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """No profile dir AND no storage_state → nothing to open from; skip."""
-    def empty_profile_dir(cid: int):
+    def empty_profile_dir(cid: int) -> Path:
         d = tmp_path / "profiles" / str(cid)
         d.mkdir(parents=True, exist_ok=True)
         return d
