@@ -6,7 +6,7 @@
  * running we poll so the audit trail fills in live.
  */
 
-import { useRef } from "react"
+import { useEffect, useState } from "react"
 import type { ReactNode } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { format } from "date-fns"
@@ -206,9 +206,12 @@ export function RunDetailSheet({
   onClose: () => void
 }) {
   // Keep the last selected run around so the close animation doesn't flash empty.
-  const lastRef = useRef<Run | null>(null)
-  if (run) lastRef.current = run
-  const shown = run ?? lastRef.current
+  // Held in state (synced via effect) rather than written to a ref during render
+  // — a render-phase ref write is unsafe under concurrent/double-invoked render.
+  const [shown, setShown] = useState<Run | null>(run)
+  useEffect(() => {
+    if (run) setShown(run)
+  }, [run])
   const open = run !== null
 
   const detailQuery = useQuery({
