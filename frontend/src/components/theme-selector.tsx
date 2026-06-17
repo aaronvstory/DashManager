@@ -19,6 +19,9 @@ export function ThemeSelector() {
   const { theme, setTheme } = useTheme()
   return (
     <Select
+      // base-ui uses items for keyboard nav + typeahead (matches the other
+      // Selects in the app, e.g. create-account-dialog).
+      items={THEME_ORDER.map((t) => ({ label: THEME_LABELS[t], value: t }))}
       value={coerceTheme(theme)}
       onValueChange={(v) => {
         if (v) setTheme(v as string)
