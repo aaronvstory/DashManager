@@ -22,6 +22,15 @@ import { EditCustomerDialog } from "@/components/daisy/edit-customer-dialog"
 import { EmptyState } from "@/components/empty-state"
 import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Skeleton } from "@/components/ui/skeleton"
 import { api } from "@/lib/api"
 import { cn } from "@/lib/utils"
@@ -53,6 +62,7 @@ export default function DaisyPage() {
   // The row being edited (null = dialog closed). Holding the record (not just an
   // id) means the dialog seeds its form without a second fetch.
   const [editing, setEditing] = useState<DaisyCustomer | null>(null)
+  const [deleting, setDeleting] = useState<DaisyCustomer | null>(null)
 
   const list = useQuery({
     queryKey: ["daisy"],
@@ -192,15 +202,7 @@ export default function DaisyPage() {
                           variant="ghost"
                           size="icon"
                           title="Delete from CustomerDaisy"
-                          onClick={() => {
-                            if (
-                              window.confirm(
-                                `Delete ${c.full_name || c.email} from CustomerDaisy? This does not affect DashManager.`,
-                              )
-                            ) {
-                              del.mutate(c.customer_id)
-                            }
-                          }}
+                          onClick={() => setDeleting(c)}
                           // Disable only THIS row's button while it's deleting
                           // (del.variables is the id passed to mutate), not all.
                           disabled={del.isPending && del.variables === c.customer_id}
@@ -231,6 +233,47 @@ export default function DaisyPage() {
           if (!o) setEditing(null)
         }}
       />
+
+      {/* Delete confirmation — a proper Dialog, consistent with the rest of the
+          app (was window.confirm, which blocked the thread + broke the look). */}
+      <Dialog
+        open={deleting !== null}
+        onOpenChange={(o) => {
+          if (!o) setDeleting(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete from CustomerDaisy?</DialogTitle>
+            <DialogDescription>
+              Removes <span className="font-medium text-foreground">
+                {deleting
+                  ? deleting.full_name ||
+                    `${deleting.first_name} ${deleting.last_name}`.trim() ||
+                    deleting.email
+                  : ""}
+              </span>{" "}
+              from CustomerDaisy's pool. This does not affect DashManager.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
+            <Button
+              variant="destructive"
+              // Disable while a delete is in flight so a double-click / slow
+              // network can't fire the mutation twice.
+              disabled={!deleting || del.isPending}
+              onClick={() => {
+                if (deleting) del.mutate(deleting.customer_id)
+                setDeleting(null)
+              }}
+            >
+              <Trash2 data-icon="inline-start" />
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   )
 }
