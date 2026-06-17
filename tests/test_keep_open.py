@@ -14,11 +14,20 @@ from backend.keep_open_manager import KeepOpenManager
 from backend.main import create_app
 
 
+class _FakePage:
+    def __init__(self) -> None:
+        self.goto_url: str | None = None
+
+    async def goto(self, url: str, **kw: object) -> None:
+        self.goto_url = url
+
+
 class _FakeCtx:
     """Stands in for a Playwright BrowserContext (records close handlers)."""
 
     def __init__(self) -> None:
-        self.pages: list = []
+        self.page = _FakePage()
+        self.pages: list = []  # empty → manager calls new_page() to navigate
         self.closed = False
         self._handlers: dict[str, list] = {}
 
@@ -31,8 +40,8 @@ class _FakeCtx:
         for h in self._handlers.get("close", []):
             h(self)
 
-    async def new_page(self):
-        raise AssertionError("landing_url not used in these tests")
+    async def new_page(self) -> _FakePage:
+        return self.page
 
     async def close(self) -> None:
         self.fire_close()
@@ -75,6 +84,15 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.setattr(KeepOpenManager, "_ensure_pw", fake_ensure_pw)
 
     return opened_ctxs
+
+
+async def test_open_navigates_to_orders_not_blank(_isolate):
+    """A kept-open window must land on the logged-in orders page, not about:blank
+    (a blank window is useless — the whole point is to see the account)."""
+    m = KeepOpenManager()
+    await m.open([1])
+    # The fake ctx's page recorded where the manager navigated it.
+    assert _isolate[0].page.goto_url == "https://www.doordash.com/orders"
 
 
 async def test_open_then_status_lists_open_ids():

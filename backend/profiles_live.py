@@ -76,7 +76,7 @@ def mark_closed(ids: list[int]) -> list[int]:
 
 
 async def keep_open(ids: list[int], *, headless: bool = False,
-                    landing_url: str | None = None,
+                    landing_url: str | None = "https://www.doordash.com/orders",
                     record_state: bool = True) -> None:
     """Open each customer's persistent profile in its own window; hold open.
 
