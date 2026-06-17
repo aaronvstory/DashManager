@@ -13,6 +13,7 @@ import { useNavigate, useSearchParams } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import { format } from "date-fns"
 import { Layers, MonitorPlay, RadioTower, RefreshCw, Smartphone, UserPlus } from "lucide-react"
+import { toast } from "sonner"
 import { CreateAccountDialog } from "@/components/customers/create-account-dialog"
 import { parseBucketDate } from "@/components/customers/helpers"
 import { EmptyState } from "@/components/empty-state"
@@ -211,11 +212,16 @@ function BucketOtp({ paused }: { paused: boolean }) {
           variant="outline"
           size="sm"
           disabled={!bucket}
-          onClick={() => {
+          onClick={async () => {
             if (!bucket) return
-            void api
-              .post("/keep-open", { bucket_date: bucket })
-              .catch(() => {})
+            // This is the button's PRIMARY action — await it and report a
+            // failure (vs the post-create best-effort version), so the user
+            // isn't sent to an empty Keep Open board with no explanation.
+            try {
+              await api.post("/keep-open", { bucket_date: bucket })
+            } catch {
+              toast.error("Couldn't open browser windows — is the backend up?")
+            }
             navigate("/keep-open")
           }}
         >

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from backend import config, db
 from backend.events import bus
@@ -66,6 +66,17 @@ class CustomerPatch(BaseModel):
     phone: str | None = None
     bucket_date: str | None = None
     notes: str | None = None
+
+    @field_validator("bucket_date")
+    @classmethod
+    def _valid_bucket(cls, v: str | None) -> str | None:
+        # A malformed bucket_date flows into the DB and then breaks the
+        # frontend's parseBucketDate (garbled labels / thrown render). Reject it
+        # here with the same YYYY-MM-DD shape the otp-live route enforces.
+        import re
+        if v is not None and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+            raise ValueError("bucket_date must be YYYY-MM-DD")
+        return v
 
 
 def _derive_pills(c: dict[str, Any]) -> dict[str, Any]:

@@ -70,7 +70,7 @@ export default function CustomersPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["customers"],
     queryFn: () => api.get<{ customers: Customer[] }>("/customers"),
   })
@@ -215,6 +215,15 @@ export default function CustomersPage() {
 
       {isLoading ? (
         <LoadingSkeleton />
+      ) : isError ? (
+        <div className="flex flex-col items-center gap-3 border border-border bg-card px-8 py-16 text-center">
+          <p className="text-sm text-muted-foreground">
+            Couldn't load customers. Is the backend running?
+          </p>
+          <Button variant="outline" size="sm" onClick={() => void refetch()}>
+            Try again
+          </Button>
+        </div>
       ) : customers.length === 0 ? (
         <EmptyHero onAdd={() => setAddOpen(true)} />
       ) : (

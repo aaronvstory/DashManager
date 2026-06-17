@@ -151,6 +151,15 @@ async def test_patch_and_delete_customer(client, monkeypatch, tmp_path):
     assert r.json()["notes"] == "vip"
     assert r.json()["first_name"] == "Ada"
 
+    # A valid bucket_date moves the customer; a malformed one is rejected (422)
+    # before it can corrupt the frontend's date parsing.
+    r = await client.patch(f"/api/customers/{cid}",
+                           json={"bucket_date": "2026-07-04"})
+    assert r.status_code == 200 and r.json()["bucket_date"] == "2026-07-04"
+    r = await client.patch(f"/api/customers/{cid}",
+                           json={"bucket_date": "not-a-date"})
+    assert r.status_code == 422
+
     r = await client.patch("/api/customers/99999", json={"notes": "x"})
     assert r.status_code == 404
 
