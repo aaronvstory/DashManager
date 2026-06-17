@@ -44,8 +44,16 @@ def test_continue_selectors_exclude_social_buttons():
     assert "Facebook" not in joined
 
 
-def test_phone_input_selectors_present():
-    assert any("tel" in s for s in cl.PHONE_INPUT_SELECTORS)
+def test_continue_selectors_use_stable_submit_id():
+    # The stable #guided-submit-button (verified live) is preferred over text.
+    assert "#guided-submit-button" in cl.CONTINUE_SELECTORS
+
+
+def test_login_field_selectors_present():
+    # Email + password + OTP-box selectors, verified against the live DOM.
+    assert cl.EMAIL_INPUT_SEL == 'input[type="email"]'
+    assert cl.PASSWORD_SEL == 'input[type="password"]'
+    assert "one-time-code" in cl.OTP_ANY_SEL or "maxlength" in cl.OTP_ANY_SEL
 
 
 def test_hand_it_selectors_target_hand_it_to_me():

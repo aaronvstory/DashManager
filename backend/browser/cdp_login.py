@@ -28,14 +28,13 @@ from backend.browser.cdp_signup import (
     _enter_otp,
     _export_storage,
     _fill_home_address,
-    _gui_click_in_view,
     _modal_gone_from_source,
     clear_captcha_ladder,
     focus_signup_window,
 )
 from backend.browser.delivery_prefs import pick_instruction
 
-# The consumer login page (email-first; we switch it to phone).
+# The consumer login page (email-first → passwordless OTP for these accounts).
 LOGIN_URL = "https://www.doordash.com/consumer/login/"
 HOME_URL = "https://www.doordash.com/home"
 
@@ -48,25 +47,19 @@ HAND_IT_SELECTORS = ('label:contains("Hand it to me")',
 SAVE_SELECTORS = ('button:contains("Save")', 'button:contains("Continue")',
                   'button:contains("Done")')
 
-# Control that switches the login form to phone-number entry. DoorDash labels it
-# a few ways; key on text. Also the tel field once we're there.
-PHONE_TAB_SELECTORS = (
-    'button:contains("Use phone")',
-    'button:contains("phone number")',
-    'button:contains("Sign in with phone")',
-    'button:contains("Continue with phone")',
-)
-PHONE_INPUT_SELECTORS = ('input[type="tel"]', 'input[autocomplete="tel"]',
-                         'input[name*="phone" i]', 'input[id*="phone" i]')
-# The email/phone field on the email-first screen also accepts a phone number.
-EMAIL_OR_PHONE_SELECTORS = ('input[type="email"]', 'input[type="tel"]',
-                            'input[name="email"]',
-                            'input[placeholder*="email" i]')
-# The submit button. EXACT DoorDash text only — a broad contains("Continue")
-# wrongly matches "Continue with Google" (the live derail). Never the social
-# buttons (Google/Apple/Facebook).
-CONTINUE_SELECTORS = ('button:contains("Continue to Sign In")',
-                      'button:contains("Continue to Login")')
+# Login-screen controls, verified against the live DOM 2026-06-17.
+EMAIL_INPUT_SEL = 'input[type="email"]'
+PASSWORD_SEL = 'input[type="password"]'
+# Any OTP "Verify code" input — the 6 split digit boxes (inputmode/maxlength) OR
+# a single code field. Matches what _enter_otp targets.
+OTP_ANY_SEL = ('input[inputmode="numeric"], input[maxlength="1"], '
+               'input[autocomplete="one-time-code"]')
+# The submit button. The stable id #guided-submit-button = "Continue to Sign In"
+# (also the password "Sign In" step). EXACT text fallbacks — NEVER the social
+# buttons (a broad contains("Continue") wrongly matches "Continue with Google").
+CONTINUE_SELECTORS = ('#guided-submit-button',
+                      'button:contains("Continue to Sign In")',
+                      'button:contains("Sign In")')
 
 
 def _emit_factory(emit):
@@ -89,6 +82,18 @@ def _find(sb: Any, selectors: tuple[str, ...]):
     return None
 
 
+def _click_first(sb: Any, selectors: tuple[str, ...]) -> bool:
+    """Click the first selector that matches. Returns True if a click fired."""
+    sel = _find(sb, selectors)
+    if sel is None:
+        return False
+    try:
+        sb.cdp.click(sel)
+        return True
+    except Exception:
+        return False
+
+
 def _is_logged_in(sb: Any) -> bool:
     """True only on a DoorDash post-login page.
 
@@ -102,7 +107,19 @@ def _is_logged_in(sb: Any) -> bool:
         return False
     if any(s in url for s in ("/login", "/auth", "identity.")):
         return False
-    return any(m in url for m in SUCCESS_URL_MARKERS)
+    if any(m in url for m in SUCCESS_URL_MARKERS):
+        return True
+    # The post-OTP landing can be the bare doordash.com/ root showing the
+    # logged-in home (the "$0 delivery fee" address modal). That URL lacks the
+    # markers above, so also accept a doordash page whose content is the home
+    # address-entry modal (only rendered when logged in) — verified live.
+    # _cdp_source already lower-cases; the explicit .lower() here keeps the
+    # case-insensitive contract local + robust if that ever changes (the
+    # negative "continue to sign in" guard must reliably suppress the login page).
+    src = _cdp_source(sb).lower()
+    return ("enter delivery address" in src
+            and "delivery fee" in src
+            and "continue to sign in" not in src)
 
 
 def _set_prefs_via_cdp(sb: Any, full_address: str, instruction: str,
@@ -175,7 +192,7 @@ def _set_prefs_via_cdp(sb: Any, full_address: str, instruction: str,
     return out
 
 
-def phone_login_via_cdp(phone10: str, *,
+def phone_login_via_cdp(email: str, *,
                         poll_otp: Callable[[], str],
                         proxy: str | None = None,
                         headless: bool = False,
@@ -185,11 +202,19 @@ def phone_login_via_cdp(phone10: str, *,
                         instruction: str | None = None,
                         emit: Callable[[str, dict], None] | None = None,
                         screenshot_dir: str | None = None) -> dict[str, Any]:
-    """Drive a phone-number→OTP login. SYNC; call via asyncio.to_thread.
+    """Log in via EMAIL → OTP using SeleniumBase CDP (beats the login CF gate).
+
+    The flow verified live 2026-06-17: clear the Cloudflare Turnstile, enter the
+    EMAIL, "Continue to Sign In" → DoorDash goes passwordless and sends a 6-digit
+    code to the account's PHONE (its rented api.cc number), which ``poll_otp``
+    fetches. Enter the code → /home. (No password needed — these accounts route
+    to the OTP-first "Verify code" screen.) os_input is unused for typing here
+    (CDP press_keys is focus-independent) but kept for signature stability.
 
     If set_address is given, ALSO sets the delivery address + "Hand it to me" +
-    a dasher instruction (random if instruction is None) in the SAME session,
-    avoiding a second context that would re-hit the login CF gate.
+    a dasher instruction in the SAME session (a second context would re-hit CF).
+
+    SYNC; call via asyncio.to_thread.
     """
     from seleniumbase import SB
 
@@ -242,57 +267,61 @@ def phone_login_via_cdp(phone10: str, *,
                 return _finalize(sb)
 
             # Clear the login CF Turnstile (clickable checkbox -> gui_captcha).
+            # It can re-appear after the email step, so we re-clear below too.
             clear_captcha_ladder(sb, emit=emit, gui_captcha=True)
             time.sleep(1.0)
             _shot("02_post_cf")
 
-            if os_input:
-                focus_signup_window(sb, emit=emit)
+            def _wait_for(sel: str, secs: float = 20.0) -> bool:
+                end = time.time() + secs
+                while time.time() < end:
+                    if _find(sb, (sel,)):
+                        return True
+                    time.sleep(1.0)
+                return False
 
-            # Prefer a dedicated phone tab + tel field; else fall back to the
-            # email-first screen's email/phone field (it accepts a phone number).
-            if _find(sb, PHONE_INPUT_SELECTORS) is None:
-                tab = _find(sb, PHONE_TAB_SELECTORS)
-                if tab:
-                    if os_input:
-                        _gui_click_in_view(sb, tab)
-                    else:
-                        sb.cdp.click(tab)
-                    time.sleep(2.0)
-
-            phone_sel = (_find(sb, PHONE_INPUT_SELECTORS)
-                         or _find(sb, EMAIL_OR_PHONE_SELECTORS))
-            if phone_sel is None:
-                _shot("03_no_phone_field")
-                result["outcome"] = "no_phone_field"
+            # STEP 1: enter the EMAIL, "Continue to Sign In". The email field can
+            # lag a beat behind the CF clear, so wait for it.
+            if not _wait_for(EMAIL_INPUT_SEL, 30):
+                _shot("03_no_email_field")
+                result["outcome"] = "no_email_field"
                 return result
-
-            # Enter the 10-digit number.
             try:
-                if os_input:
-                    sb.cdp.gui_click_element(phone_sel)
-                    time.sleep(0.4)
-                    sb.cdp.gui_write(phone10)
-                else:
-                    sb.cdp.click(phone_sel)
-                    sb.cdp.press_keys(phone_sel, phone10)
-            except Exception:
-                pass
-            time.sleep(1.0)
-            _shot("04_phone_entered")
-
-            # Continue to trigger the SMS code.
-            cont = _find(sb, CONTINUE_SELECTORS)
-            if cont:
-                if os_input:
-                    _gui_click_in_view(sb, cont)
-                else:
-                    sb.cdp.click(cont)
+                sb.cdp.click(EMAIL_INPUT_SEL)
+                sb.cdp.press_keys(EMAIL_INPUT_SEL, email)
+                time.sleep(0.5)
+                _click_first(sb, CONTINUE_SELECTORS)
+                _e("login_email_submitted", {})
+            except Exception as exc:
+                _e("login_warn", {"step": "email", "error": str(exc)[:100]})
             time.sleep(3.0)
-            _shot("05_submitted")
+            clear_captcha_ladder(sb, emit=emit, gui_captcha=True)
+            _shot("04_email_submitted")
 
             if _is_logged_in(sb):
                 return _finalize(sb)
+
+            # "Incorrect email — we couldn't find an account" = the account was
+            # never finalized (signup OTP-timed-out). Distinct from a real
+            # password/OTP screen, so report it precisely (verified live).
+            src = _cdp_source(sb)
+            if "couldn't find an account" in src or "incorrect email" in src:
+                _shot("04_no_account")
+                result["outcome"] = "no_account"
+                return result
+
+            # STEP 2: a real account goes passwordless → "Verify code" (OTP sent
+            # to the account's phone). Poll api.cc + enter the code via the shared
+            # _enter_otp. If a real PASSWORD prompt shows instead (no OTP boxes
+            # AND a "welcome back / enter your password" screen), we can't proceed
+            # without the password — bail clearly.
+            if not _wait_for(OTP_ANY_SEL, 25):
+                src = _cdp_source(sb)
+                if _find(sb, (PASSWORD_SEL,)) and (
+                        "welcome back" in src or "enter your password" in src):
+                    _shot("04_wants_password")
+                    result["outcome"] = "needs_password"
+                    return result
 
             # Poll + enter OTP.
             started = time.time()
