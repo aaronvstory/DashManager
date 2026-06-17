@@ -112,6 +112,12 @@ class KeepOpenManager:
                         pass  # a window that won't navigate is still usable
                 self._contexts[cid] = ctx
                 self._held[cid] = lock
+                # If the USER closes the window manually, Playwright fires
+                # "close" — without this we'd leak state and, worse, never
+                # release the profile_lock (blocking every future run for this
+                # customer). Clean up reactively. (Our own close() pops the
+                # entry BEFORE awaiting ctx.close(), so this no-ops then.)
+                ctx.on("close", lambda _ctx=None, _cid=cid: self._on_context_closed(_cid))
                 opened.append(cid)
 
         if opened:
@@ -135,15 +141,18 @@ class KeepOpenManager:
                 else [cid for cid in ids if cid in self._contexts]
             )
             for cid in targets:
+                # Pop + release FIRST so the ctx "close" handler (which fires
+                # during await ctx.close()) sees the entry already gone and
+                # no-ops — no double release.
                 ctx = self._contexts.pop(cid, None)
+                lock = self._held.pop(cid, None)
+                if lock is not None and lock.locked():
+                    lock.release()
                 if ctx is not None:
                     try:
                         await ctx.close()
                     except Exception:
-                        pass  # already gone; still release the lock below
-                lock = self._held.pop(cid, None)
-                if lock is not None and lock.locked():
-                    lock.release()
+                        pass  # already gone; the lock is already released
                 closed.append(cid)
 
         if closed:
@@ -151,9 +160,33 @@ class KeepOpenManager:
             bus.publish("keep_open_closed", {"ids": closed})
         return closed
 
+    def _on_context_closed(self, cid: int) -> None:
+        """Sync handler for Playwright's ctx "close" — fires on manual close.
+
+        Releases the held lock and clears state for a window the user closed
+        themselves. Idempotent: a no-op when our own close() already popped the
+        entry (it pops before awaiting ctx.close()). All work here is sync
+        (dict ops, lock.release, file write, publish) — safe in a sync callback.
+        """
+        if cid not in self._contexts:
+            return  # our own close() already handled it
+        self._contexts.pop(cid, None)
+        lock = self._held.pop(cid, None)
+        if lock is not None and lock.locked():
+            lock.release()
+        profiles_live.mark_closed([cid])
+        bus.publish("keep_open_closed", {"ids": [cid]})
+
     async def close_all(self) -> list[int]:
-        """Close every kept-open window — for server shutdown."""
-        return await self.close(None)
+        """Close every kept-open window + stop Playwright — for shutdown."""
+        closed = await self.close(None)
+        if self._pw is not None:
+            try:
+                await self._pw.stop()
+            except Exception:
+                pass
+            self._pw = None
+        return closed
 
     # ── status ────────────────────────────────────────────────────────────
 

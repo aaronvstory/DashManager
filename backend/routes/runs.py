@@ -26,6 +26,10 @@ async def start_run(body: StartRunBody) -> dict:
         raise HTTPException(400, "chat_strategy must be scripted|llm|none")
     if not (body.scope.get("bucket_date") or body.scope.get("customer_ids")):
         raise HTTPException(400, "scope needs bucket_date or customer_ids")
+    # Reject a concurrent run BEFORE touching keep-open state — otherwise a
+    # rejected start would needlessly close the user's kept-open windows.
+    if manager.is_running:
+        raise HTTPException(409, "a run is already active")
     # Yield any kept-open windows for the customers this run will touch: the run
     # acquires each profile_lock keep-open is holding, so it would block forever
     # otherwise. Closing releases the locks; the run re-opens the same on-disk

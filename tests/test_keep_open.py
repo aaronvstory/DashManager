@@ -13,17 +13,27 @@ from backend.main import create_app
 
 
 class _FakeCtx:
-    """Stands in for a Playwright BrowserContext."""
+    """Stands in for a Playwright BrowserContext (records close handlers)."""
 
     def __init__(self) -> None:
         self.pages: list = []
         self.closed = False
+        self._handlers: dict[str, list] = {}
+
+    def on(self, event: str, handler) -> None:
+        self._handlers.setdefault(event, []).append(handler)
+
+    def fire_close(self) -> None:
+        """Simulate the user closing the window: Playwright fires 'close'."""
+        self.closed = True
+        for h in self._handlers.get("close", []):
+            h(self)
 
     async def new_page(self):
         raise AssertionError("landing_url not used in these tests")
 
     async def close(self) -> None:
-        self.closed = True
+        self.fire_close()
 
 
 @pytest.fixture(autouse=True)
@@ -122,6 +132,19 @@ async def test_close_all_closes_everything(_isolate):
     assert all(c.closed for c in _isolate)
 
 
+async def test_external_close_releases_lock_and_state(_isolate):
+    """User closing the window manually must clean state + free the lock —
+    otherwise the lock blocks every future run for that customer."""
+    m = KeepOpenManager()
+    await m.open([4])
+    assert driver.profile_lock(4).locked() is True
+    # Simulate the user closing the Chromium window.
+    _isolate[0].fire_close()
+    assert m.status()["open_ids"] == []          # state cleaned
+    assert driver.profile_lock(4).locked() is False  # lock freed
+    assert profiles_live.read_open_ids() == []   # durable state cleared
+
+
 async def test_failed_launch_releases_lock(monkeypatch):
     m = KeepOpenManager()
 
@@ -172,3 +195,24 @@ async def test_route_open_by_bucket_resolves_customers(client):
     assert r.status_code == 200
     assert sorted(r.json()["opened"]) == sorted([a, b])
     await client.post("/api/keep-open/close", json={})
+
+
+async def test_rejected_run_start_does_not_close_kept_open(client, monkeypatch):
+    """A 409 (run already active) must NOT close the user's kept-open windows."""
+    from backend.routes import runs as runs_route
+    from backend.keep_open_manager import manager as singleton
+
+    # A window is being kept open for this customer.
+    cid = await db.create_customer("2026-06-17", first_name="K")
+    await client.post("/api/keep-open", json={"ids": [cid]})
+    assert (await client.get("/api/keep-open")).json()["open_ids"] == [cid]
+
+    # Pretend a run is already in flight, then try to start another for the
+    # same bucket. The start must be rejected WITHOUT closing the window.
+    monkeypatch.setattr(type(runs_route.manager), "is_running",
+                        property(lambda self: True))
+    r = await client.post("/api/runs", json={"scope": {"customer_ids": [cid]}})
+    assert r.status_code == 409
+    assert (await client.get("/api/keep-open")).json()["open_ids"] == [cid]
+
+    await singleton.close_all()
