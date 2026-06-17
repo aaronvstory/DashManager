@@ -343,10 +343,18 @@ export function CreateAccountDialog({
       }
       case "account_failed":
         // a single failure in a batch is non-fatal — keep running; only fail the
-        // whole dialog for a single (non-batch) creation.
+        // whole dialog for a single (non-batch) creation. In a batch, surface
+        // WHICH account failed in the live log (else it's silently swallowed and
+        // only the final created<of count hints something went wrong).
         if (!batchInfo || batchInfo.of <= 1) {
           setError(str(d.error) || "Account creation failed.")
           setPhase("failed")
+        } else {
+          const idx = num(d.index) ?? currentBatchIdx.current
+          setLiveLines((ls) => [
+            ...ls,
+            `❌ [${idx}/${batchInfo.of}] ${str(d.error) || "Account creation failed"}`,
+          ])
         }
         break
       default:

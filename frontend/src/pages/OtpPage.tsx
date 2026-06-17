@@ -13,6 +13,7 @@ import { useNavigate, useSearchParams } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import { format } from "date-fns"
 import { Layers, MonitorPlay, RadioTower, RefreshCw, Smartphone, UserPlus } from "lucide-react"
+import { toast } from "sonner"
 import { CreateAccountDialog } from "@/components/customers/create-account-dialog"
 import { parseBucketDate } from "@/components/customers/helpers"
 import { EmptyState } from "@/components/empty-state"
@@ -211,12 +212,17 @@ function BucketOtp({ paused }: { paused: boolean }) {
           variant="outline"
           size="sm"
           disabled={!bucket}
-          onClick={() => {
+          onClick={async () => {
             if (!bucket) return
-            void api
-              .post("/keep-open", { bucket_date: bucket })
-              .catch(() => {})
-            navigate("/keep-open")
+            // This is the button's PRIMARY action — await it and only navigate
+            // on success, so a failure shows the toast instead of dumping the
+            // user on an empty Keep Open board with no explanation.
+            try {
+              await api.post("/keep-open", { bucket_date: bucket })
+              navigate("/keep-open")
+            } catch {
+              toast.error("Couldn't open browser windows — is the backend up?")
+            }
           }}
         >
           <MonitorPlay data-icon="inline-start" />

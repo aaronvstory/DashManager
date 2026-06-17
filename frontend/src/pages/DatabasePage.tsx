@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { DatabaseBucket } from "@/components/database/database-bucket"
+import { apiErrorDetail } from "@/components/customers/helpers"
 import { api } from "@/lib/api"
 import type { FullCustomer } from "@/lib/types"
 
@@ -102,9 +103,7 @@ export default function DatabasePage() {
         <EmptyState
           icon={ServerCrash}
           title="Couldn't load the database"
-          description={
-            error instanceof Error ? error.message : "The backend did not respond."
-          }
+          description={apiErrorDetail(error, "The backend did not respond.")}
           action={<Button onClick={() => void refetch()}>Retry</Button>}
         />
       ) : customers.length === 0 ? (

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query"
 import { RotateCw, ServerCrash } from "lucide-react"
 import { api } from "@/lib/api"
+import { apiErrorDetail } from "@/components/customers/helpers"
 import { EmptyState } from "@/components/empty-state"
 import { PageHeader } from "@/components/page-header"
 import { Button } from "@/components/ui/button"
@@ -75,11 +76,7 @@ export default function SettingsPage() {
         <EmptyState
           icon={ServerCrash}
           title="Couldn't load settings"
-          description={
-            error instanceof Error
-              ? error.message
-              : "The backend did not respond."
-          }
+          description={apiErrorDetail(error, "The backend did not respond.")}
           action={
             <Button onClick={() => refetch()}>
               <RotateCw />
