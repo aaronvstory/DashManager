@@ -9,6 +9,7 @@ import {
   CircleCheck,
   LoaderCircle,
   MapPin,
+  MonitorPlay,
   MousePointerClick,
   Phone,
   RefreshCw,
@@ -852,6 +853,26 @@ export function CreateAccountDialog({
               >
                 <Smartphone data-icon="inline-start" />
                 Watch OTPs
+              </Button>
+              {/* Open the new accounts' browser windows (logged in) and jump to
+                  the Keep Open board. Only ids we actually saved to the DB. */}
+              <Button
+                variant="outline"
+                onClick={() => {
+                  const ids = results
+                    .map((r) => r.customer_id)
+                    .filter((id) => id > 0)
+                  onOpenChange(false)
+                  if (ids.length > 0) {
+                    void api
+                      .post("/keep-open", { ids })
+                      .catch(() => {}) // best-effort; the page reflects truth
+                  }
+                  navigate("/keep-open")
+                }}
+              >
+                <MonitorPlay data-icon="inline-start" />
+                Keep open
               </Button>
               <DialogClose render={<Button />}>Done</DialogClose>
             </DialogFooter>
