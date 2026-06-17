@@ -1,11 +1,12 @@
 import { cn } from "@/lib/utils"
 
-/** Dasher-ish glyph: two offset speed dashes on a DoorDash-red tile. */
+/** Dasher-ish glyph: two offset speed dashes on the theme's primary tile.
+    The glow tracks --primary so it doesn't stay red on the blue themes. */
 export function DashGlyph({ className }: { className?: string }) {
   return (
     <span
       className={cn(
-        "flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary shadow-[0_2px_10px_-2px_rgba(235,23,0,0.55)]",
+        "flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary shadow-[0_2px_10px_-2px_color-mix(in_srgb,var(--primary)_55%,transparent)]",
         className,
       )}
     >

@@ -1,10 +1,27 @@
 <!doctype html>
-<html lang="en" class="dark">
+<!-- class="dark" is PERMANENT + load-bearing: themes are dark-only, so the
+     dark: utilities must always apply. next-themes manages data-theme only and
+     leaves this class alone. data-theme is the default-theme FOUC guard. -->
+<html lang="en" class="dark" data-theme="brutalist">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DashManager</title>
+    <!-- Migrate legacy theme prefs: older builds stored "dark"/"light" under
+         this key. There's no [data-theme="dark"] block anymore, so letting
+         next-themes apply a stale value would leave every theme var undefined
+         (broken render). Clear anything that isn't a current theme BEFORE
+         next-themes reads it; it then falls back to the default. -->
+    <script>
+      (function () {
+        try {
+          var k = "dashmanager-theme";
+          var ok = ["brutalist", "editorial", "notion", "bento"];
+          if (ok.indexOf(localStorage.getItem(k)) === -1) localStorage.removeItem(k);
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

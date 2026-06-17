@@ -3,7 +3,7 @@ import { Database, FileText, Flower2, History, MonitorPlay, Network, Play, Setti
 import type { LucideIcon } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Logo } from "@/components/logo"
-import { ThemeToggle } from "@/components/theme-toggle"
+import { ThemeSelector } from "@/components/theme-selector"
 import { useEvents } from "@/lib/sse"
 import { useRunStore } from "@/store/runStore"
 import { cn } from "@/lib/utils"
@@ -125,7 +125,7 @@ export function AppLayout() {
                 Run active
               </Badge>
             ) : null}
-            <ThemeToggle />
+            <ThemeSelector />
           </div>
         </header>
 
