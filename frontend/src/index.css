@@ -2,18 +2,24 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/inter";
+@import "@fontsource-variable/fraunces";
+@import "@fontsource-variable/jetbrains-mono";
 
+/* LOAD-BEARING: themes are dark-only now, so `dark:` utilities must ALWAYS
+   apply. <html> keeps a permanent class="dark" (index.html) that next-themes
+   never manages — it writes data-theme only. Do NOT remove this line or the
+   permanent class, or every dark: tint silently dies. */
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-    --font-heading: var(--font-sans);
-    --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system,
-        "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif,
-        "Apple Color Emoji", "Segoe UI Emoji";
-    /* Tabular numerals for money + counts — what makes data feel deliberate.
-       System stack (no extra dependency, works offline). */
-    --font-mono: ui-monospace, "Cascadia Code", "Cascadia Mono", "SF Mono",
-        "JetBrains Mono", "Roboto Mono", "Consolas", monospace;
+    /* Fonts + radius are per-theme: each [data-theme] sets --app-font-* and
+       --app-radius-*; these registrations defer to them via var() so the
+       font-/rounded-* utilities follow the active theme (same indirection the
+       --color-X: var(--X) registrations below already use). */
+    --font-heading: var(--app-font-heading);
+    --font-sans: var(--app-font-sans);
+    --font-mono: var(--app-font-mono);
+    --shadow-brutal: var(--app-shadow-brutal);
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -60,111 +66,252 @@
     --color-card: var(--card);
     --color-foreground: var(--foreground);
     --color-background: var(--background);
-    /* BRUTALIST: hard corners everywhere. Radius is ~0 across the scale, so
-       every shadcn component that reaches for rounded-md/lg/xl renders square.
-       A hairline 2px on the largest containers only, to avoid pixel-fighting
-       on big panels — still reads as sharp. */
-    --radius-sm: 0px;
-    --radius-md: 0px;
-    --radius-lg: 0px;
-    --radius-xl: 0px;
-    --radius-2xl: 2px;
-    --radius-3xl: 2px;
-    --radius-4xl: 2px;
+    /* Radius scale is per-theme (brutalist 0, notion ~3px, editorial ~8px,
+       bento ~12px). Each [data-theme] sets --app-radius-*; rounded-* utilities
+       resolve through these. */
+    --radius-sm: var(--app-radius-sm);
+    --radius-md: var(--app-radius-md);
+    --radius-lg: var(--app-radius-lg);
+    --radius-xl: var(--app-radius-xl);
+    --radius-2xl: var(--app-radius-2xl);
+    --radius-3xl: var(--app-radius-3xl);
+    --radius-4xl: var(--app-radius-4xl);
 }
 
-/* Light theme — BRUTALIST: paper-white, hard near-black borders, DoorDash red. */
-:root {
-    --background: #f4f4f1;
-    --foreground: #0a0a0a;
-    --card: #ffffff;
-    --card-foreground: #0a0a0a;
-    --popover: #ffffff;
-    --popover-foreground: #0a0a0a;
-    --primary: #e01700;
-    --primary-hover: #ff2d16;
-    --primary-foreground: #ffffff;
-    --secondary: #ebebe8;
-    --secondary-foreground: #0a0a0a;
-    --muted: #ebebe8;
-    --muted-foreground: #5c5c58;
-    --accent: #e4e4e0;
-    --accent-foreground: #0a0a0a;
-    --destructive: #cc1f1f;
-    --border: #1a1a1a;
-    --input: #1a1a1a;
-    --ring: #e01700;
-    --chart-1: #e01700;
-    --chart-2: #d97706;
-    --chart-3: #15803d;
-    --chart-4: #0d9488;
-    --chart-5: #4f46e5;
-    /* Status (light): base = Tailwind 500, fg = 600 (the old text-*-600). */
-    --status-success: #10b981;
-    --status-success-fg: #059669;
-    --status-warning: #f59e0b;
-    --status-warning-fg: #d97706;
-    --status-critical: #ef4444;
-    --status-critical-fg: #dc2626;
+/* ── Themes ───────────────────────────────────────────────────────────────
+   Four named dark themes ported verbatim from BalTracker (C:\claude\BalTracker).
+   Each maps BalTracker's palette onto DashManager's token contract and sets its
+   own radius scale + display font. next-themes writes data-theme on <html>; the
+   permanent class="dark" (index.html) keeps dark: utilities live. Default is
+   brutalist (closest to the prior identity). primary-foreground is each theme's
+   --bg (dark text) because white fails contrast on the amber/blue accents. */
+
+/* BRUTALIST — dim amber on warm gray, square corners, JetBrains Mono everywhere. */
+[data-theme="brutalist"] {
+    --background: #1a1a1a;
+    --foreground: #f0f0f0;
+    --card: #232323;
+    --card-foreground: #f0f0f0;
+    --popover: #2d2d2d;
+    --popover-foreground: #f0f0f0;
+    --primary: #e0b341;
+    --primary-hover: #ecc35e;
+    --primary-foreground: #1a1a1a;
+    --secondary: #2d2d2d;
+    --secondary-foreground: #f0f0f0;
+    --muted: #2d2d2d;
+    --muted-foreground: #a3a3a3;
+    --accent: #2d2d2d;
+    --accent-foreground: #f0f0f0;
+    --destructive: #a82318;
+    --border: #4a4a4a;
+    --input: #4a4a4a;
+    --ring: #e0b341;
+    --chart-1: #e0b341;
+    --chart-2: #9a9a9a;
+    --chart-3: #6fae6f;
+    --chart-4: #e08585;
+    --chart-5: #a3a3a3;
+    --status-success: #6fae6f;
+    --status-success-fg: #6fae6f;
+    --status-warning: #e0b341;
+    --status-warning-fg: #e0b341;
+    --status-critical: #e08585;
+    --status-critical-fg: #e08585;
     --status-info: #0ea5e9;
-    --status-info-fg: #0284c7;
+    --status-info-fg: #38bdf8;
+    --sidebar: #1a1a1a;
+    --sidebar-foreground: #a3a3a3;
+    --sidebar-primary: #e0b341;
+    --sidebar-primary-foreground: #1a1a1a;
+    --sidebar-accent: #2d2d2d;
+    --sidebar-accent-foreground: #f0f0f0;
+    --sidebar-border: #4a4a4a;
+    --sidebar-ring: #e0b341;
     --radius: 0px;
-    --sidebar: #f7f7f8;
-    --sidebar-foreground: #3f3f46;
-    --sidebar-primary: #eb1700;
-    --sidebar-primary-foreground: #ffffff;
-    --sidebar-accent: #ececee;
-    --sidebar-accent-foreground: #18181b;
-    --sidebar-border: #e4e4e7;
-    --sidebar-ring: #ff3008;
+    --app-radius-sm: 0px;
+    --app-radius-md: 0px;
+    --app-radius-lg: 0px;
+    --app-radius-xl: 0px;
+    --app-radius-2xl: 2px;
+    --app-radius-3xl: 2px;
+    --app-radius-4xl: 2px;
+    --app-font-sans: "JetBrains Mono Variable", ui-monospace, monospace;
+    --app-font-heading: var(--app-font-sans);
+    --app-font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+    --app-shadow-brutal: 6px 6px 0 0 rgba(0, 0, 0, 0.5);
 }
 
-/* Dark theme — DEFAULT. BRUTALIST: true near-black, flat panels (no raised
-   warm cards), HARD high-contrast hairline borders that actually read as
-   structure, DoorDash red used as solid blocks not glows. */
-.dark {
+/* EDITORIAL — amber accent, soft 8px corners, Fraunces headings + Inter body. */
+[data-theme="editorial"] {
     --background: #0a0a0a;
-    --foreground: #f5f5f3;
-    --card: #131313;
-    --card-foreground: #f5f5f3;
-    --popover: #161616;
-    --popover-foreground: #f5f5f3;
-    --primary: #ff2d16;
-    --primary-hover: #ff4a36;
-    --primary-foreground: #ffffff;
-    --secondary: #1c1c1c;
-    --secondary-foreground: #f5f5f3;
-    --muted: #1a1a1a;
-    --muted-foreground: #9a9a96;
-    --accent: #1f1f1f;
-    --accent-foreground: #ffffff;
-    --destructive: #ff4d4d;
-    /* Hard, visible borders — the load-bearing element of the brutalist look. */
-    --border: rgba(245, 245, 243, 0.16);
-    --input: rgba(245, 245, 243, 0.22);
-    --ring: #ff2d16;
-    --chart-1: #ff2d16;
-    --chart-2: #f5a623;
-    --chart-3: #34c759;
-    --chart-4: #2dd4bf;
-    --chart-5: #8a8aff;
-    /* Status (dark): base = Tailwind 500, fg = 400 (the old dark:text-*-400). */
-    --status-success: #10b981;
+    --foreground: #f5f5f5;
+    --card: #171717;
+    --card-foreground: #f5f5f5;
+    --popover: #171717;
+    --popover-foreground: #f5f5f5;
+    --primary: #fbbf24;
+    --primary-hover: #fcd34d;
+    --primary-foreground: #0a0a0a;
+    --secondary: #202020;
+    --secondary-foreground: #f5f5f5;
+    --muted: #202020;
+    --muted-foreground: #a3a3a3;
+    --accent: #202020;
+    --accent-foreground: #f5f5f5;
+    --destructive: #b42318;
+    --border: #262626;
+    --input: #262626;
+    --ring: #fbbf24;
+    --chart-1: #fbbf24;
+    --chart-2: #f59e0b;
+    --chart-3: #34d399;
+    --chart-4: #fb7185;
+    --chart-5: #a78bfa;
+    --status-success: #34d399;
     --status-success-fg: #34d399;
     --status-warning: #f59e0b;
     --status-warning-fg: #fbbf24;
-    --status-critical: #ef4444;
-    --status-critical-fg: #f87171;
+    --status-critical: #fb7185;
+    --status-critical-fg: #fb7185;
     --status-info: #0ea5e9;
     --status-info-fg: #38bdf8;
     --sidebar: #0a0a0a;
-    --sidebar-foreground: #c8c8c4;
-    --sidebar-primary: #ff2d16;
-    --sidebar-primary-foreground: #ffffff;
-    --sidebar-accent: #1c1c1c;
+    --sidebar-foreground: #a3a3a3;
+    --sidebar-primary: #fbbf24;
+    --sidebar-primary-foreground: #0a0a0a;
+    --sidebar-accent: #202020;
+    --sidebar-accent-foreground: #f5f5f5;
+    --sidebar-border: #262626;
+    --sidebar-ring: #fbbf24;
+    --radius: 8px;
+    --app-radius-sm: 5px;
+    --app-radius-md: 6px;
+    --app-radius-lg: 8px;
+    --app-radius-xl: 12px;
+    --app-radius-2xl: 16px;
+    --app-radius-3xl: 20px;
+    --app-radius-4xl: 24px;
+    --app-font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+    --app-font-heading: "Fraunces Variable", Georgia, serif;
+    --app-font-mono: ui-monospace, "JetBrains Mono Variable", monospace;
+    --app-shadow-brutal: 0 8px 24px -12px rgba(0, 0, 0, 0.55);
+}
+
+/* NOTION — true-blue accent, near-flat 3px corners, Inter throughout. */
+[data-theme="notion"] {
+    --background: #161616;
+    --foreground: #ffffff;
+    --card: #242424;
+    --card-foreground: #ffffff;
+    --popover: #242424;
+    --popover-foreground: #ffffff;
+    --primary: #6cb0ff;
+    --primary-hover: #9ccbff;
+    --primary-foreground: #161616;
+    --secondary: #3a3a3a;
+    --secondary-foreground: #ffffff;
+    --muted: #3a3a3a;
+    --muted-foreground: #d4d4d2;
+    --accent: #3a3a3a;
+    --accent-foreground: #ffffff;
+    --destructive: #b42318;
+    --border: #565656;
+    --input: #565656;
+    --ring: #6cb0ff;
+    --chart-1: #6cb0ff;
+    --chart-2: #9ccbff;
+    --chart-3: #34e3b0;
+    --chart-4: #ff8b7d;
+    --chart-5: #9ccbff;
+    --status-success: #34e3b0;
+    --status-success-fg: #34e3b0;
+    --status-warning: #f59e0b;
+    --status-warning-fg: #fbbf24;
+    --status-critical: #ff8b7d;
+    --status-critical-fg: #ff8b7d;
+    --status-info: #6cb0ff;
+    --status-info-fg: #9ccbff;
+    --sidebar: #161616;
+    --sidebar-foreground: #b4b4b2;
+    --sidebar-primary: #6cb0ff;
+    --sidebar-primary-foreground: #161616;
+    --sidebar-accent: #3a3a3a;
     --sidebar-accent-foreground: #ffffff;
-    --sidebar-border: rgba(245, 245, 243, 0.14);
-    --sidebar-ring: #ff2d16;
+    --sidebar-border: #565656;
+    --sidebar-ring: #6cb0ff;
+    --radius: 3px;
+    --app-radius-sm: 2px;
+    --app-radius-md: 3px;
+    --app-radius-lg: 4px;
+    --app-radius-xl: 6px;
+    --app-radius-2xl: 8px;
+    --app-radius-3xl: 10px;
+    --app-radius-4xl: 12px;
+    --app-font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+    --app-font-heading: var(--app-font-sans);
+    --app-font-mono: ui-monospace, "JetBrains Mono Variable", monospace;
+    --app-shadow-brutal: 0 8px 24px -12px rgba(0, 0, 0, 0.55);
+}
+
+/* BENTO — slate-blue on deep navy, rounded 12px corners, Fraunces + Inter. */
+[data-theme="bento"] {
+    --background: #0b1220;
+    --foreground: #e6e7eb;
+    --card: #111827;
+    --card-foreground: #e6e7eb;
+    --popover: #1f2937;
+    --popover-foreground: #e6e7eb;
+    --primary: #60a5fa;
+    --primary-hover: #93c5fd;
+    --primary-foreground: #0b1220;
+    --secondary: #1f2937;
+    --secondary-foreground: #e6e7eb;
+    --muted: #1f2937;
+    --muted-foreground: #94a3b8;
+    --accent: #1f2937;
+    --accent-foreground: #e6e7eb;
+    --destructive: #b42318;
+    --border: #2a3344;
+    --input: #2a3344;
+    --ring: #60a5fa;
+    --chart-1: #60a5fa;
+    --chart-2: #3b82f6;
+    --chart-3: #34d399;
+    --chart-4: #f87171;
+    --chart-5: #a78bfa;
+    --status-success: #34d399;
+    --status-success-fg: #34d399;
+    --status-warning: #f59e0b;
+    --status-warning-fg: #fbbf24;
+    --status-critical: #f87171;
+    --status-critical-fg: #f87171;
+    --status-info: #60a5fa;
+    --status-info-fg: #93c5fd;
+    --sidebar: #0b1220;
+    --sidebar-foreground: #94a3b8;
+    --sidebar-primary: #60a5fa;
+    --sidebar-primary-foreground: #0b1220;
+    --sidebar-accent: #1f2937;
+    --sidebar-accent-foreground: #e6e7eb;
+    --sidebar-border: #2a3344;
+    --sidebar-ring: #60a5fa;
+    --radius: 12px;
+    --app-radius-sm: 8px;
+    --app-radius-md: 10px;
+    --app-radius-lg: 12px;
+    --app-radius-xl: 16px;
+    --app-radius-2xl: 20px;
+    --app-radius-3xl: 24px;
+    --app-radius-4xl: 28px;
+    --app-font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
+    --app-font-heading: "Fraunces Variable", Georgia, serif;
+    --app-font-mono: ui-monospace, "JetBrains Mono Variable", monospace;
+    --app-shadow-brutal: 0 8px 24px -12px rgba(0, 0, 0, 0.55);
+    /* Bento tile extras (no consumer yet; exposed for future tile components). */
+    --tile-radius: 1.25rem;
+    --tile-shadow: 0 1px 2px rgba(0, 0, 0, 0.3),
+        0 8px 24px -12px rgba(0, 0, 0, 0.55);
 }
 
 @layer base {

@@ -71,7 +71,7 @@ export function ProofThumb({ shot }: { shot: ProofShot }) {
 
       {hover ? (
         <span
-          className="pointer-events-none fixed z-50 border-2 border-primary bg-background shadow-[6px_6px_0_0_rgba(0,0,0,0.5)]"
+          className="pointer-events-none fixed z-50 border-2 border-primary bg-background shadow-brutal"
           style={{
             // Anchor near the cursor, clamped to the viewport on both axes.
             left: Math.max(12, Math.min(hover.x + 24, hover.vw - previewW - 12)),
