@@ -11,7 +11,7 @@
  * keep_open_* SSE event lands so several tabs / the run loop stay in sync.
  */
 
-import { useEffect, useMemo } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { format } from "date-fns"
 import { Info, MonitorPlay, MonitorX, PanelsTopLeft } from "lucide-react"
@@ -21,7 +21,9 @@ import { PageHeader } from "@/components/page-header"
 import { SessionStatusBadge } from "@/components/customers/session-status-badge"
 import { parseBucketDate } from "@/components/customers/helpers"
 import { Button } from "@/components/ui/button"
+import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Switch } from "@/components/ui/switch"
 import { api } from "@/lib/api"
 import { useRunStore } from "@/store/runStore"
 import { TONE } from "@/lib/status-tone"
@@ -43,6 +45,9 @@ function prettyDate(bucket: string): string {
 export default function KeepOpenPage() {
   const queryClient = useQueryClient()
   const lastEvent = useRunStore((s) => s.lastEvent)
+  // When on, opening a window also logs it in if its session is stale, so the
+  // window ends up authenticated (vs landing on the login page).
+  const [ensureLogin, setEnsureLogin] = useState(true)
 
   const customersQ = useQuery({
     queryKey: ["customers"],
@@ -81,7 +86,18 @@ export default function KeepOpenPage() {
   async function openIdsReq(ids: number[]) {
     if (ids.length === 0) return
     try {
-      await api.post("/keep-open", { ids })
+      // ensure_login: log in any window that opens logged-out (stale session)
+      // so every window ends up authenticated. Sequential on the backend; for a
+      // batch of stale accounts this can take a bit (one OTP per account).
+      const res = await api.post<{ opened: number[]; logged_in: number[] }>(
+        "/keep-open",
+        { ids, ensure_login: ensureLogin },
+      )
+      if (ensureLogin && res.opened.length > 0) {
+        toast.success(
+          `Opened ${res.opened.length}; ${res.logged_in.length} logged in`,
+        )
+      }
       void queryClient.invalidateQueries({ queryKey: ["keep-open"] })
     } catch {
       toast.error("Couldn't open the browser window(s) — is the backend up?")
@@ -103,15 +119,27 @@ export default function KeepOpenPage() {
         title="Keep Open"
         description="Hold customer browser windows open (already logged in) between runs — to spot-check accounts or log them in. Starting a refund run on a customer closes its window first; the on-disk login always persists."
         actions={
-          openIds.size > 0 ? (
-            <Button
-              variant="outline"
-              onClick={() => void closeIdsReq([...openIds])}
-            >
-              <MonitorX data-icon="inline-start" />
-              Close all ({openIds.size})
-            </Button>
-          ) : null
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <Switch
+                id="ensure-login"
+                checked={ensureLogin}
+                onCheckedChange={setEnsureLogin}
+              />
+              <Label htmlFor="ensure-login" className="text-sm font-normal">
+                Log in if needed
+              </Label>
+            </div>
+            {openIds.size > 0 ? (
+              <Button
+                variant="outline"
+                onClick={() => void closeIdsReq([...openIds])}
+              >
+                <MonitorX data-icon="inline-start" />
+                Close all ({openIds.size})
+              </Button>
+            ) : null}
+          </div>
         }
       />
 

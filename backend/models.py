@@ -243,6 +243,8 @@ EVENT_TYPES = (
     "keep_open_closed",
     "keep_open_skipped",
     "keep_open_status",
+    "keep_open_login_started",
+    "keep_open_login_done",
     "log",
     "heartbeat",
 )
