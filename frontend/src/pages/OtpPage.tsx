@@ -214,15 +214,15 @@ function BucketOtp({ paused }: { paused: boolean }) {
           disabled={!bucket}
           onClick={async () => {
             if (!bucket) return
-            // This is the button's PRIMARY action — await it and report a
-            // failure (vs the post-create best-effort version), so the user
-            // isn't sent to an empty Keep Open board with no explanation.
+            // This is the button's PRIMARY action — await it and only navigate
+            // on success, so a failure shows the toast instead of dumping the
+            // user on an empty Keep Open board with no explanation.
             try {
               await api.post("/keep-open", { bucket_date: bucket })
+              navigate("/keep-open")
             } catch {
               toast.error("Couldn't open browser windows — is the backend up?")
             }
-            navigate("/keep-open")
           }}
         >
           <MonitorPlay data-icon="inline-start" />
