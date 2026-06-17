@@ -16,11 +16,19 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from backend.browser import proxy_pool
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+class AddProxyBody(BaseModel):
+    # One or more proxy lines (any supported format). A single quick-add sends
+    # one line; bulk-paste sends many (newline-joined or a list).
+    text: str = ""
+    lines: list[str] | None = None
 
 
 @router.get("")
@@ -47,6 +55,69 @@ async def list_proxies() -> dict[str, Any]:
             }
             for px in proxies
         ],
+    }
+
+
+@router.post("")
+async def add_proxies(body: AddProxyBody) -> dict[str, Any]:
+    """Add one or many proxies (any supported format). Parses each line, skips
+    blanks/dupes, appends to the file. Returns counts + per-line parse errors so
+    the UI can show which pasted lines were bad.
+
+    Handles quick-add (one line in ``text``) and bulk paste (many lines in
+    ``text`` newline-joined, or a ``lines`` list).
+    """
+    raw_lines: list[str] = []
+    if body.lines:
+        raw_lines.extend(body.lines)
+    if body.text:
+        raw_lines.extend(body.text.splitlines())
+
+    parsed: list[dict[str, str]] = []
+    errors: list[dict[str, str]] = []
+    for line in raw_lines:
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        px = proxy_pool.parse_proxy_line(s)
+        if px is None:
+            errors.append({"line": s, "error": "unparseable"})
+        else:
+            parsed.append(px)
+
+    added = await asyncio.to_thread(proxy_pool.add_proxies, parsed)
+    return {"added": added, "parsed": len(parsed), "errors": errors}
+
+
+@router.delete("/{proxy_id}")
+async def delete_proxy(proxy_id: str) -> dict[str, Any]:
+    """Delete every line matching this proxy id (host:port~username). 404 if none."""
+    removed = await asyncio.to_thread(proxy_pool.delete_proxy, proxy_id)
+    if removed == 0:
+        raise HTTPException(status_code=404, detail="proxy not found")
+    return {"removed": removed}
+
+
+@router.get("/{proxy_id}/line")
+async def proxy_line(proxy_id: str) -> dict[str, Any]:
+    """The full proxy line (incl. password) for ONE proxy — for a copy button.
+
+    The list endpoint withholds the password by design; this returns it only on
+    an explicit per-proxy request, so the user can copy their own credential to
+    use elsewhere. Local single-user app; the password is the user's own.
+    """
+    proxies = proxy_pool.dedup_proxies(proxy_pool.load_proxies())
+    target = next(
+        (px for px in proxies if proxy_pool.proxy_id(px) == proxy_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="proxy not found")
+    return {
+        "scheme": target.get("scheme", "http"),
+        "host": target["host"],
+        "port": target["port"],
+        "username": target.get("username", ""),
+        "password": target.get("password", ""),
+        "line": proxy_pool.serialize_proxy_line(target),
     }
 
 

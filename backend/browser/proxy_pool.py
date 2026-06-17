@@ -168,6 +168,64 @@ def dedup_proxies(proxies: Iterable[dict[str, str]]) -> list[dict[str, str]]:
     return out
 
 
+def serialize_proxy_line(proxy: dict[str, str]) -> str:
+    """A proxy dict back to a canonical file line: scheme://host:port:user:pass.
+
+    Round-trips through ``parse_proxy_line``. Auth is omitted when absent.
+    """
+    scheme = proxy.get("scheme") or "http"
+    host, port = proxy["host"], proxy["port"]
+    user, pwd = proxy.get("username", ""), proxy.get("password", "")
+    if user or pwd:
+        return f"{scheme}://{host}:{port}:{user}:{pwd}"
+    return f"{scheme}://{host}:{port}"
+
+
+def _write_proxies(proxies: list[dict[str, str]],
+                   path: str | Path | None = None) -> None:
+    """Overwrite the proxy file with these lines (one per proxy)."""
+    p = Path(path) if path else DEFAULT_PROXY_FILE
+    body = "\n".join(serialize_proxy_line(px) for px in proxies)
+    p.write_text(body + ("\n" if body else ""), encoding="utf-8")
+
+
+def add_proxies(new: Iterable[dict[str, str]],
+                path: str | Path | None = None) -> int:
+    """Append proxies to the file, skipping exact duplicates. Returns # added.
+
+    Dedup key is (host, port, username, password) — same as ``dedup_proxies`` —
+    so re-pasting the same lines is a no-op rather than piling up repeats.
+    """
+    existing = load_proxies(path)
+    seen = {(p["host"], p["port"], p.get("username"), p.get("password"))
+            for p in existing}
+    added = 0
+    for px in new:
+        key = (px["host"], px["port"], px.get("username"), px.get("password"))
+        if key in seen:
+            continue
+        seen.add(key)
+        existing.append(px)
+        added += 1
+    if added:
+        _write_proxies(existing, path)
+    return added
+
+
+def delete_proxy(target_id: str, path: str | Path | None = None) -> int:
+    """Remove every proxy whose ``proxy_id`` matches. Returns # removed.
+
+    Matches by id (host:port~username), so all repeats of one gateway line go
+    together — which is what "delete this proxy" means to the user.
+    """
+    existing = load_proxies(path)
+    kept = [px for px in existing if proxy_id(px) != target_id]
+    removed = len(existing) - len(kept)
+    if removed:
+        _write_proxies(kept, path)
+    return removed
+
+
 def _classify_geo(payload: dict[str, Any]) -> dict[str, str]:
     """Pull {exit_ip, country, city, region} out of an IP-echo JSON payload.
 
