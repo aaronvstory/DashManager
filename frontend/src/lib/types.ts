@@ -306,6 +306,10 @@ export type EventType =
   | "customer_done"
   | "run_done"
   | "run_error"
+  | "keep_open_started"
+  | "keep_open_closed"
+  | "keep_open_skipped"
+  | "keep_open_status"
   | "log"
   | "heartbeat"
 
@@ -354,6 +358,10 @@ export const EVENT_TYPES: readonly EventType[] = [
   "customer_done",
   "run_done",
   "run_error",
+  "keep_open_started",
+  "keep_open_closed",
+  "keep_open_skipped",
+  "keep_open_status",
   "log",
   "heartbeat",
 ]

@@ -9,10 +9,10 @@
  */
 
 import { useEffect, useMemo, useState } from "react"
-import { useSearchParams } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router-dom"
 import { useQuery } from "@tanstack/react-query"
 import { format, parseISO } from "date-fns"
-import { Layers, RadioTower, RefreshCw, Smartphone, UserPlus } from "lucide-react"
+import { Layers, MonitorPlay, RadioTower, RefreshCw, Smartphone, UserPlus } from "lucide-react"
 import { CreateAccountDialog } from "@/components/customers/create-account-dialog"
 import { EmptyState } from "@/components/empty-state"
 import { OtpTable, type OtpRow } from "@/components/otp/otp-table"
@@ -126,6 +126,7 @@ export default function OtpPage() {
 }
 
 function BucketOtp({ paused }: { paused: boolean }) {
+  const navigate = useNavigate()
   const [bucket, setBucket] = useState<string | null>(null)
 
   const customersQ = useQuery({
@@ -201,6 +202,24 @@ function BucketOtp({ paused }: { paused: boolean }) {
           disabled={!bucket || otpQ.isFetching}
           spinning={otpQ.isFetching}
         />
+        {/* Next step: keep this bucket's browsers open (logged in) to finish
+            logging accounts in, then head to the Keep Open board. */}
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={!bucket}
+          onClick={() => {
+            if (bucket) {
+              void api
+                .post("/keep-open", { bucket_date: bucket })
+                .catch(() => {})
+            }
+            navigate("/keep-open")
+          }}
+        >
+          <MonitorPlay data-icon="inline-start" />
+          Keep open
+        </Button>
       </div>
 
       <OtpTable

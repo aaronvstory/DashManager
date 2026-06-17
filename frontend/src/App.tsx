@@ -3,6 +3,7 @@ import { AppLayout } from "@/components/app-layout"
 import { Toaster } from "@/components/ui/sonner"
 import CreatePage from "@/pages/CreatePage"
 import CustomersPage from "@/pages/CustomersPage"
+import KeepOpenPage from "@/pages/KeepOpenPage"
 import DaisyPage from "@/pages/DaisyPage"
 import DatabasePage from "@/pages/DatabasePage"
 import HistoryPage from "@/pages/HistoryPage"
@@ -23,6 +24,7 @@ export default function App() {
           <Route path="/database" element={<DatabasePage />} />
           <Route path="/run" element={<RunPage />} />
           <Route path="/otp" element={<OtpPage />} />
+          <Route path="/keep-open" element={<KeepOpenPage />} />
           {/* Live OTP + Batch OTP merged into one page; keep the old batch
               path alive AND in batch mode so bookmarks still land right. */}
           <Route

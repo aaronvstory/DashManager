@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useLocation } from "react-router-dom"
-import { Database, FileText, Flower2, History, Network, Play, Settings, Smartphone, UserPlus, Users } from "lucide-react"
+import { Database, FileText, Flower2, History, MonitorPlay, Network, Play, Settings, Smartphone, UserPlus, Users } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { Logo } from "@/components/logo"
@@ -23,11 +23,12 @@ interface NavItem {
 // launch/monitor a refund-check run; "Customer Data" = the live per-customer
 // database (sessions, every scraped order, raw audit); "Reports" = the frozen
 // daily refund worklog (proof + transcripts). (The "Keep Open" item slots in
-// after "OTP" once its page lands.)
+// after "OTP".)
 const NAV: NavItem[] = [
   { to: "/create", label: "Create", icon: UserPlus },
   { to: "/", label: "Customers", icon: Users, end: true },
   { to: "/otp", label: "OTP", icon: Smartphone },
+  { to: "/keep-open", label: "Keep Open", icon: MonitorPlay },
   { to: "/run", label: "Refund Run", icon: Play },
   { to: "/database", label: "Customer Data", icon: Database },
   { to: "/reports", label: "Reports", icon: FileText },
