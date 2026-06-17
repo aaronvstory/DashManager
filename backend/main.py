@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,9 +14,11 @@ from sse_starlette.sse import EventSourceResponse
 
 from backend import config, db
 from backend.events import bus
+from backend.keep_open_manager import manager as keep_open_manager
 from backend.routes import (
     customers,
     daisy as daisy_routes,
+    keep_open as keep_open_routes,
     proxies as proxies_routes,
     reports as reports_routes,
     runs,
@@ -24,9 +28,18 @@ from backend.routes import (
 HEARTBEAT_S = 15
 
 
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Startup: nothing to pre-warm (keep-open opens lazily on first request).
+    yield
+    # Shutdown: tear down any windows this process is holding open, releasing
+    # their profile locks. The on-disk logins persist, so they reopen instantly.
+    await keep_open_manager.close_all()
+
+
 def create_app() -> FastAPI:
     db.init_db()
-    app = FastAPI(title="DashManager")
+    app = FastAPI(title="DashManager", lifespan=_lifespan)
 
     app.add_middleware(
         CORSMiddleware,
@@ -47,6 +60,8 @@ def create_app() -> FastAPI:
                        tags=["proxies"])
     app.include_router(daisy_routes.router, prefix="/api/daisy",
                        tags=["daisy"])
+    app.include_router(keep_open_routes.router, prefix="/api/keep-open",
+                       tags=["keep-open"])
 
     @app.get("/api/health")
     async def health() -> dict:

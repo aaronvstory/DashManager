@@ -112,7 +112,12 @@ class RunManager:
     def stop(self) -> None:
         self._stop.set()
 
-    async def _resolve_customers(self, scope: dict[str, Any]) -> list[dict]:
+    async def resolve_customers(self, scope: dict[str, Any]) -> list[dict]:
+        """Customers a scope selects (by customer_ids or bucket_date).
+
+        Public so the run-start route can pre-resolve the same set to yield any
+        kept-open windows before the run grabs their profile locks.
+        """
         customers = await db.list_customers()
         if scope.get("customer_ids"):
             # Coerce in case the API client sends IDs as strings — otherwise
@@ -141,7 +146,7 @@ class RunManager:
         try:
             from playwright.async_api import async_playwright  # lazy
 
-            customers = await self._resolve_customers(scope)
+            customers = await self.resolve_customers(scope)
             browser_cfg = await db.get_setting("browser")
             cfg = {
                 "chat": await db.get_setting("chat"),
