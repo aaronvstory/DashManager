@@ -41,6 +41,11 @@ def _default_daisy_root() -> str:
 
 DEFAULT_DAISY_ROOT = _default_daisy_root()
 
+# asyncio's StreamReader defaults to a 64 KiB line limit; one JSON response for a
+# large list (list_customers over a big pool) exceeds it. 16 MiB leaves ample
+# headroom for thousands of records.
+_STREAM_LIMIT = 16 * 1024 * 1024
+
 
 def _default_python(root: str) -> str:
     """The CustomerDaisy venv interpreter, cross-platform.
@@ -85,6 +90,13 @@ class DaisyBridge:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            # The protocol is one JSON object per LINE. A big response (e.g.
+            # list_customers over a 200+ pool) is a single line that blows past
+            # asyncio's default 64 KiB StreamReader limit — readline() then
+            # raises "chunk is longer than limit" (the whole list endpoint 500s
+            # while small calls like analytics still work). Give the reader
+            # plenty of room so the pool can grow.
+            limit=_STREAM_LIMIT,
         )
         ready = await self._read_line()
         if not ready.get("ok"):
