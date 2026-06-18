@@ -279,17 +279,52 @@ async def cmd_status(bucket, ids):
     await _print_status(customers)
 
 
-async def cmd_detect(bucket, ids, headless):
+async def cmd_detect(bucket, ids, headless, legacy=False):
     db.init_db()
-    scope = _scope_dict(bucket, ids)
-    _p("PROGRESS: phase 1/1 — detect (scrape + classify all orders headed)…")
-    rid = await _run_pass(scope, "none", headless)
-    _p(f"PROGRESS: detect run {rid} complete.")
+    if legacy:
+        scope = _scope_dict(bucket, ids)
+        _p("PROGRESS: phase 1/1 — detect (legacy Playwright scrape + classify)…")
+        rid = await _run_pass(scope, "none", headless)
+        _p(f"PROGRESS: detect run {rid} complete.")
+        await _print_status(await _scope_customers(bucket, ids))
+        return
+    # CDP detect: reads receipts PAST Cloudflare (the Playwright path re-gates on
+    # /orders and leaves everything unconfirmed). Promotes only on proof.
+    await _cdp_detect(bucket, ids, headless)
+    await _print_status(await _scope_customers(bucket, ids))
+
+
+async def _cdp_detect(bucket, ids, headless):
+    """Per-customer CDP detect for any customer with pending (unconfirmed/
+    unchecked/not_refunded) receipt-bearing orders."""
+    from backend.relogin import detect_customer_via_cdp
     customers = await _scope_customers(bucket, ids)
-    await _print_status(customers)
+    pending_cids = []
+    for c in customers:
+        os_ = await db.list_orders(c["id"])
+        if any(o.get("refund_status") in ("unconfirmed", "unchecked",
+                                          "not_refunded")
+               and (o.get("receipt_url") or "").find("/orders/") >= 0
+               for o in os_):
+            pending_cids.append(c)
+    if not pending_cids:
+        _p("PROGRESS: detect — no pending receipt-bearing orders to check.")
+        return
+    _p(f"PROGRESS: CDP detect — {len(pending_cids)} customer(s) with pending "
+       f"orders (reads receipts past Cloudflare)…")
+    for i, c in enumerate(pending_cids, 1):
+        name = f"{c.get('first_name','')} {c.get('last_name','')}".strip()
+        _p(f"PROGRESS: [{c['id']}] {name} ({i}/{len(pending_cids)})…")
+        try:
+            res = await detect_customer_via_cdp(c["id"], headless=headless)
+            _p(f"PROGRESS:   [{c['id']}] {name}: {res.get('promoted',0)} "
+               f"promoted → refunded (login {res.get('outcome')})")
+        except Exception as exc:
+            _p(f"PROGRESS:   [{c['id']}] {name}: detect FAILED — "
+               f"{type(exc).__name__}: {exc}")
 
 
-async def cmd_claim(bucket, ids, headless):
+async def cmd_claim(bucket, ids, headless, legacy=False):
     db.init_db()
     scope = _scope_dict(bucket, ids)
     _p("PROGRESS: phase 1/3 — detect (scraping + classifying orders)…")
@@ -300,17 +335,24 @@ async def cmd_claim(bucket, ids, headless):
     customers = await _scope_customers(bucket, ids)
     n = await _verify_unconfirmed(customers, headless)
     _p(f"PROGRESS: {n} claim(s) proven on receipt → refunded.")
-    await _print_status(customers)
+    # CDP verify pass: promote any still-pending receipt-bearing orders the
+    # Playwright verify couldn't read past Cloudflare.
+    if not legacy:
+        await _cdp_detect(bucket, ids, headless)
+    await _print_status(await _scope_customers(bucket, ids))
 
 
-async def cmd_login(bucket, ids, headless):
+async def cmd_login(bucket, ids, headless, legacy=False):
     """Log in every in-scope customer that has no DoorDash session yet.
 
     Skips customers already logged in (a carried-over customer keeps yesterday's
     session). One at a time, headed — the OTP is fetched via api.cc internally.
     """
     db.init_db()
-    from backend.relogin import relogin_customer
+    # CDP login clears the Cloudflare Turnstile that plain-Playwright login can't
+    # (it fronts the consumer login page). Falls back to Playwright with --legacy.
+    from backend.relogin import phone_login_customer_cdp, relogin_customer
+    login_fn = relogin_customer if legacy else phone_login_customer_cdp
     customers = await _scope_customers(bucket, ids)
     need = [c for c in customers if not (c.get("storage_state_path") or "").strip()]
     skip = len(customers) - len(need)
@@ -323,20 +365,20 @@ async def cmd_login(bucket, ids, headless):
         name = f"{c.get('first_name','')} {c.get('last_name','')}".strip()
         _p(f"PROGRESS: logging in {i}/{len(need)} — [{c['id']}] {name}…")
         try:
-            res = await relogin_customer(c["id"], headless=headless)
+            res = await login_fn(c["id"], headless=headless)
             _p(f"PROGRESS:   [{c['id']}] {name}: {res.get('outcome', '?')}")
         except Exception as exc:
             _p(f"PROGRESS:   [{c['id']}] {name}: LOGIN FAILED — "
                f"{type(exc).__name__}: {exc}")
 
 
-async def cmd_all(bucket, ids, headless):
+async def cmd_all(bucket, ids, headless, legacy=False):
     # Log in any not-yet-logged-in customer first (no-op if all have sessions),
     # so a freshly-adopted batch runs end-to-end from one command.
     _p("PROGRESS: === full run starting (login → detect → claim → verify → "
        "report) ===")
-    await cmd_login(bucket, ids, headless)
-    await cmd_claim(bucket, ids, headless)
+    await cmd_login(bucket, ids, headless, legacy)
+    await cmd_claim(bucket, ids, headless, legacy)
     if bucket:
         from backend import report
         _p("PROGRESS: building daily report…")
@@ -355,6 +397,9 @@ def main() -> None:
     ap.add_argument("--ids", help="comma-separated customer ids")
     ap.add_argument("--headless", action="store_true",
                     help="run headless (default headed — user watches)")
+    ap.add_argument("--legacy", action="store_true",
+                    help="use the old Playwright login/detect path (re-trips "
+                         "Cloudflare); default is the CDP path that clears CF")
     args = ap.parse_args()
 
     try:
@@ -365,16 +410,17 @@ def main() -> None:
         ap.error("need --bucket or --ids")
     headless = args.headless
 
+    legacy = args.legacy
     if args.command == "status":
         asyncio.run(cmd_status(args.bucket, ids))
     elif args.command == "login":
-        asyncio.run(cmd_login(args.bucket, ids, headless))
+        asyncio.run(cmd_login(args.bucket, ids, headless, legacy))
     elif args.command == "detect":
-        asyncio.run(cmd_detect(args.bucket, ids, headless))
+        asyncio.run(cmd_detect(args.bucket, ids, headless, legacy))
     elif args.command == "claim":
-        asyncio.run(cmd_claim(args.bucket, ids, headless))
+        asyncio.run(cmd_claim(args.bucket, ids, headless, legacy))
     elif args.command == "all":
-        asyncio.run(cmd_all(args.bucket, ids, headless))
+        asyncio.run(cmd_all(args.bucket, ids, headless, legacy))
 
 
 if __name__ == "__main__":

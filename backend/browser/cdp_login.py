@@ -60,6 +60,15 @@ OTP_ANY_SEL = ('input[inputmode="numeric"], input[maxlength="1"], '
 CONTINUE_SELECTORS = ('#guided-submit-button',
                       'button:contains("Continue to Sign In")',
                       'button:contains("Sign In")')
+# OTP-screen escape hatches when the SMS code isn't arriving (verified live
+# 2026-06-18): switch to password auth, or re-trigger the SMS.
+USE_PASSWORD_SELECTORS = ('button:contains("Use password instead")',
+                          'a:contains("Use password instead")',
+                          'div:contains("Use password instead")',
+                          '*:contains("Use password instead")')
+RESEND_CODE_SELECTORS = ('button:contains("Resend code")',
+                         'a:contains("Resend code")',
+                         '*:contains("Resend code")')
 
 
 def _emit_factory(emit):
@@ -80,6 +89,36 @@ def _find(sb: Any, selectors: tuple[str, ...]):
         except Exception:
             continue
     return None
+
+
+def _submit_password(sb: Any, password: str, emit_e) -> None:
+    """Type the password + submit robustly (Enter → button → JS form-submit).
+
+    The "Sign In" button id varies and a CDP click on it can no-op, so press
+    Enter in the field first (submits the form regardless of button impl),
+    then fall back to clicking the button, then to a JS requestSubmit().
+    """
+    try:
+        sb.cdp.click(PASSWORD_SEL)
+        sb.cdp.press_keys(PASSWORD_SEL, password)
+        time.sleep(0.5)
+        submitted = False
+        try:
+            sb.cdp.press_keys(PASSWORD_SEL, "\n")
+            submitted = True
+        except Exception:
+            pass
+        if not _click_first(sb, CONTINUE_SELECTORS + ('button[type="submit"]',)) \
+                and not submitted:
+            try:
+                sb.cdp.evaluate(
+                    "document.querySelector('input[type=\"password\"]')"
+                    ".form.requestSubmit()")
+            except Exception:
+                pass
+        emit_e("login_password_submitted", {})
+    except Exception as exc:
+        emit_e("login_warn", {"step": "password", "error": str(exc)[:100]})
 
 
 def _click_first(sb: Any, selectors: tuple[str, ...]) -> bool:
@@ -194,6 +233,7 @@ def _set_prefs_via_cdp(sb: Any, full_address: str, instruction: str,
 
 def phone_login_via_cdp(email: str, *,
                         poll_otp: Callable[[], str],
+                        password: str | None = None,
                         proxy: str | None = None,
                         headless: bool = False,
                         os_input: bool = True,
@@ -201,7 +241,9 @@ def phone_login_via_cdp(email: str, *,
                         set_address: str | None = None,
                         instruction: str | None = None,
                         emit: Callable[[str, dict], None] | None = None,
-                        screenshot_dir: str | None = None) -> dict[str, Any]:
+                        screenshot_dir: str | None = None,
+                        after_login: Callable[[Any], Any] | None = None
+                        ) -> dict[str, Any]:
     """Log in via EMAIL → OTP using SeleniumBase CDP (beats the login CF gate).
 
     The flow verified live 2026-06-17: clear the Cloudflare Turnstile, enter the
@@ -248,6 +290,13 @@ def phone_login_via_cdp(email: str, *,
                 pass
         result["storage_state"] = _export_storage(sb)
         _shot("06_logged_in")
+        if after_login is not None:
+            # Run caller work IN-SESSION (past Cloudflare) before SB() closes —
+            # e.g. scrape /orders or drive a support chat in the same browser.
+            try:
+                result["after_login"] = after_login(sb)
+            except Exception as exc:
+                _e("after_login_error", {"error": f"{type(exc).__name__}: {exc}"[:200]})
         return result
 
     kwargs: dict[str, Any] = dict(uc=True, headless=headless,
@@ -260,6 +309,14 @@ def phone_login_via_cdp(email: str, *,
             sb_ref[0] = sb
             sb.activate_cdp_mode(LOGIN_URL)
             time.sleep(3.0)
+            # activate_cdp_mode can land on a stale/previous tab (verified live
+            # 2026-06-18 — opened on a leftover Google search), so explicitly
+            # (re)navigate to the login URL and settle before proceeding.
+            try:
+                sb.cdp.open(LOGIN_URL)
+                time.sleep(4.0)
+            except Exception:
+                pass
             _shot("01_open")
 
             # Already logged in?
@@ -281,11 +338,18 @@ def phone_login_via_cdp(email: str, *,
                 return False
 
             # STEP 1: enter the EMAIL, "Continue to Sign In". The email field can
-            # lag a beat behind the CF clear, so wait for it.
-            if not _wait_for(EMAIL_INPUT_SEL, 30):
-                _shot("03_no_email_field")
-                result["outcome"] = "no_email_field"
-                return result
+            # lag a beat behind the CF clear, so wait for it. If still missing,
+            # re-open the login URL once (the UC tab can mis-land) before bailing.
+            if not _wait_for(EMAIL_INPUT_SEL, 20):
+                sb.cdp.open(LOGIN_URL)
+                time.sleep(4.0)
+                clear_captcha_ladder(sb, emit=emit, gui_captcha=True)
+                if _is_logged_in(sb):
+                    return _finalize(sb)
+                if not _wait_for(EMAIL_INPUT_SEL, 20):
+                    _shot("03_no_email_field")
+                    result["outcome"] = "no_email_field"
+                    return result
             try:
                 sb.cdp.click(EMAIL_INPUT_SEL)
                 sb.cdp.press_keys(EMAIL_INPUT_SEL, email)
@@ -313,19 +377,37 @@ def phone_login_via_cdp(email: str, *,
             # STEP 2: a real account goes passwordless → "Verify code" (OTP sent
             # to the account's phone). Poll api.cc + enter the code via the shared
             # _enter_otp. If a real PASSWORD prompt shows instead (no OTP boxes
-            # AND a "welcome back / enter your password" screen), we can't proceed
-            # without the password — bail clearly.
+            # AND a "welcome back / enter your password" screen), enter the saved
+            # password + Sign In, re-clear any CF re-gate, then fall through to the
+            # OTP wait (DoorDash often does password THEN a phone OTP). Only bail
+            # as needs_password if we have no password to type.
             if not _wait_for(OTP_ANY_SEL, 25):
                 src = _cdp_source(sb)
                 if _find(sb, (PASSWORD_SEL,)) and (
                         "welcome back" in src or "enter your password" in src):
-                    _shot("04_wants_password")
-                    result["outcome"] = "needs_password"
-                    return result
+                    if not password:
+                        _shot("04_wants_password")
+                        result["outcome"] = "needs_password"
+                        return result
+                    _shot("04_password_screen")
+                    _submit_password(sb, password, _e)
+                    time.sleep(3.0)
+                    clear_captcha_ladder(sb, emit=emit, gui_captcha=True)
+                    _shot("05_post_password")
+                    # Password alone may complete the login (no OTP step).
+                    if _is_logged_in(sb):
+                        return _finalize(sb)
+                    # Otherwise wait for the OTP boxes the password step triggers.
+                    _wait_for(OTP_ANY_SEL, 25)
 
-            # Poll + enter OTP.
+            # STEP 3: poll + enter OTP, but DON'T wait blindly. Poll api.cc on a
+            # tight loop; if the SMS isn't arriving, resend once, and finally
+            # fall back to "Use password instead" (when we have a password) —
+            # mirrors what a human does on this screen (verified live 2026-06-18).
             started = time.time()
             tried: set[str] = set()
+            resent = False
+            pw_fallback_done = False
             while time.time() - started < otp_total_wait_s:
                 code = poll_otp()
                 if code and code not in tried:
@@ -339,10 +421,6 @@ def phone_login_via_cdp(email: str, *,
                         url = _cdp_url(sb)
                         if _is_logged_in(sb):
                             return _finalize(sb)
-                        # modal-gone only counts if we LEFT the verify/auth step
-                        # and stayed on doordash (not a blank/error page). The
-                        # shared helper rejects an empty source so a transient
-                        # CDP read can't falsely flag success.
                         modal_gone = _modal_gone_from_source(_cdp_source(sb))
                         left_auth = not any(
                             s in url.lower()
@@ -350,6 +428,32 @@ def phone_login_via_cdp(email: str, *,
                         if modal_gone and left_auth and "doordash.com" in url:
                             return _finalize(sb)
                         time.sleep(2.0)
+                else:
+                    elapsed = time.time() - started
+                    # ~30s in with no code: resend the SMS once.
+                    if not resent and elapsed > 30 and not tried:
+                        if _click_first(sb, RESEND_CODE_SELECTORS):
+                            _e("login_otp_resend", {})
+                        resent = True
+                    # ~60s in, still nothing, and we have a password: switch to
+                    # "Use password instead" and complete via the password path.
+                    elif (not pw_fallback_done and password and elapsed > 60
+                          and not tried):
+                        pw_fallback_done = True
+                        if _click_first(sb, USE_PASSWORD_SELECTORS):
+                            _e("login_use_password_instead", {})
+                            time.sleep(2.0)
+                            if _wait_for(PASSWORD_SEL, 10):
+                                _shot("05_password_fallback")
+                                _submit_password(sb, password, _e)
+                                time.sleep(3.0)
+                                clear_captcha_ladder(sb, emit=emit,
+                                                     gui_captcha=True)
+                                if _is_logged_in(sb):
+                                    return _finalize(sb)
+                                # password may itself trigger a fresh OTP — loop
+                                # continues and will pick up the new code.
+                                _wait_for(OTP_ANY_SEL, 15)
                 time.sleep(3.0)
             result["outcome"] = "otp_timeout"
             _shot("06_otp_timeout")
@@ -362,3 +466,169 @@ def phone_login_via_cdp(email: str, *,
                 err = err.replace(pwd, "<redacted>")
         _e("login_error", {"error": err})
         return result
+
+
+def scrape_orders_via_cdp(sb: Any, *,
+                          emit: Callable[[str, dict], None] | None = None,
+                          scroll_iters: int = 8) -> list[dict[str, Any]]:
+    """Read /orders in a LOGGED-IN SeleniumBase CDP session, past Cloudflare.
+
+    Plain Playwright re-trips the CF Turnstile on /orders even with valid login
+    cookies (CF fingerprints the engine, not just the session). The CDP/UC
+    browser is already past CF, so we navigate + extract HERE, reusing the pure
+    card parsers from ``orders.py``. If /orders DOES re-gate, we detect it and
+    run the GUI captcha ladder (autonomous recovery — no manual click needed).
+
+    Returns a list of dicts: {order_uuid, receipt_url, store_name, price,
+    cancelled, pending_claim, claimable_from_card, description, items_count}.
+    SYNC; call via asyncio.to_thread.
+    """
+    from backend.browser.orders import (_EXTRACT_CARDS_JS, extract_order_uuid,
+                                         parse_card_text)
+    from backend.browser.selectors import (ORDER_CARD_SELECTORS,
+                                            ORDER_LINK_SELECTOR, ORDERS_URL)
+    _e = _emit_factory(emit)
+
+    sb.cdp.open(ORDERS_URL)
+    time.sleep(4.0)
+    # Autonomous CF recovery: /orders can re-gate; clear it in-session.
+    clear_captcha_ladder(sb, emit=emit, gui_captcha=True)
+    time.sleep(3.0)
+
+    # Pick the first card selector that matches, scrolling to lazy-load all.
+    chosen = None
+    for sel in ORDER_CARD_SELECTORS:
+        try:
+            if sb.cdp.find_elements(sel):
+                chosen = sel
+                break
+        except Exception:
+            continue
+    if not chosen:
+        _e("cdp_orders_none", {})
+        return []
+
+    prev = stable = 0
+    for _ in range(scroll_iters):
+        try:
+            sb.cdp.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        except Exception:
+            pass
+        time.sleep(1.0)
+        try:
+            count = len(sb.cdp.find_elements(chosen) or [])
+        except Exception:
+            count = prev
+        if count == prev and count > 0:
+            stable += 1
+            if stable >= 2:
+                break
+        else:
+            stable = 0
+        prev = count
+
+    raw = sb.cdp.evaluate(
+        _EXTRACT_CARDS_JS.replace("(sel) =>", "() =>").replace(
+            "sel.card", repr(chosen)).replace(
+            "sel.link", repr(ORDER_LINK_SELECTOR))) or []
+
+    orders: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    claim_idx = 0
+    for item in raw:
+        href = (item or {}).get("href") or ""
+        text = (item or {}).get("text") or ""
+        parsed = parse_card_text(text)
+        uuid = extract_order_uuid(href)
+        if uuid is None:
+            if not parsed.get("pending_claim"):
+                continue
+            claim_idx += 1
+            uuid = f"pendingclaim:{parsed['store_name']}:{claim_idx}"
+            if uuid in seen:
+                continue
+            seen.add(uuid)
+            orders.append({**parsed, "order_uuid": uuid, "receipt_url": "",
+                           "claimable_from_card": True})
+            continue
+        if uuid in seen:
+            continue
+        seen.add(uuid)
+        orders.append({**parsed, "order_uuid": uuid, "receipt_url": href,
+                       "claimable_from_card": parsed.get("pending_claim",
+                                                         False)})
+    _e("cdp_orders_scraped", {"count": len(orders)})
+    return orders
+
+
+# JS that extracts the cost-breakdown rows (Subtotal/Total/Refund/...) as clean
+# "label\n$value" pairs. DoorDash renders each row as label+value in sibling
+# leaf elements, and get_text("body") collapses the whole receipt onto ONE line
+# (so the line-pair detector sees no bare "Total"). This walks the DOM to the
+# row's grandparent and pulls the last money token — yielding detector-friendly
+# text the pure detect() parses correctly. Verified live 2026-06-18.
+_RECEIPT_BREAKDOWN_JS = r"""
+(() => {
+  const labels = ['Subtotal','Delivery Fee','Service Fee','Estimated Tax',
+                  'Dasher Tip','Total','Refund'];
+  const out = [];
+  const seen = new Set();
+  [...document.querySelectorAll('*')].forEach(e => {
+    if (e.children.length !== 0) return;
+    const t = (e.textContent || '').trim();
+    if (!labels.includes(t) || seen.has(t)) return;
+    const row = (e.parentElement && e.parentElement.parentElement)
+              ? e.parentElement.parentElement.textContent : '';
+    const m = row.match(/-?\$[0-9,]+\.[0-9]{2}/g);
+    if (m) { out.push(t); out.push(m[m.length - 1]); seen.add(t); }
+  });
+  return out.join('\n');
+})()
+"""
+
+
+def read_receipt_via_cdp(sb: Any, receipt_url: str, *,
+                         emit: Callable[[str, dict], None] | None = None,
+                         settle_s: float = 7.0) -> str:
+    """Open one receipt in the logged-in CDP session (past CF) and return text
+    the pure detect() can parse. Extracts the cost breakdown via DOM (since
+    get_text collapses the receipt onto one line) and appends the raw body for
+    cancelled/pending/remake prose detection. Returns "" if unreadable.
+
+    The receipt loads slowly and a too-early read catches a store-page redirect
+    or an unrendered shell — so settle generously and clear any CF re-gate.
+    """
+    _e = _emit_factory(emit)
+    sb.cdp.open(receipt_url)
+    time.sleep(settle_s)
+    clear_captcha_ladder(sb, emit=emit, gui_captcha=True)
+    time.sleep(2.0)
+    try:
+        body = sb.cdp.get_text("body") or ""
+    except Exception as exc:
+        _e("cdp_receipt_error", {"error": str(exc)[:120]})
+        return ""
+    low = body.lower()
+    if "just a moment" in low or "verify you are human" in low:
+        clear_captcha_ladder(sb, emit=emit, gui_captcha=True)
+        time.sleep(2.5)
+        try:
+            body = sb.cdp.get_text("body") or ""
+        except Exception:
+            return ""
+    # If the nav bounced to the store menu (slow receipt load), retry once.
+    if "/store/" in (_cdp_url(sb) or "") or "Menu & Prices" in body:
+        sb.cdp.open(receipt_url)
+        time.sleep(settle_s + 2)
+        try:
+            body = sb.cdp.get_text("body") or ""
+        except Exception:
+            body = ""
+    breakdown = ""
+    try:
+        breakdown = sb.cdp.evaluate(_RECEIPT_BREAKDOWN_JS) or ""
+    except Exception:
+        pass
+    # Breakdown (clean label\nvalue pairs) first so detect() parses Total/Refund;
+    # body after it for cancelled/pending/remake prose.
+    return (breakdown + "\n" + body) if breakdown else body
