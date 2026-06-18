@@ -56,6 +56,69 @@ DAISY_ROOT = Path(os.environ.get("DAISY_ROOT", Path.cwd()))
 _real_stdout = sys.stdout
 
 
+def _doh_resolve(host: str) -> str | None:
+    """Resolve an A record via DNS-over-HTTPS (Google, then Cloudflare).
+
+    Returns a bare IPv4 string or None. Used as the fallback when the OS
+    resolver fails. Network failures return None (caller keeps the original
+    gaierror), so DoH being down never makes resolution worse.
+    """
+    import json as _json
+    import urllib.request
+    for base in ("https://dns.google/resolve",
+                 "https://cloudflare-dns.com/dns-query"):
+        try:
+            req = urllib.request.Request(
+                f"{base}?name={host}&type=A",
+                headers={"accept": "application/dns-json"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                data = _json.load(r)
+            for ans in data.get("Answer", []):
+                ip = ans.get("data", "")
+                if ip.count(".") == 3 and ip.replace(".", "").isdigit():
+                    return ip
+        except Exception:
+            continue
+    return None
+
+
+def _install_doh_fallback(doh_resolve=_doh_resolve) -> None:
+    """Resolve hostnames via DNS-over-HTTPS when the OS resolver fails.
+
+    CustomerDaisy's identity step calls api.mail.tm / MapQuest; on some machines
+    the local DNS resolver intermittently can't resolve api.mail.tm even though
+    the host is up (verified 2026-06-18: api.mail.tm failed getaddrinfo locally
+    but resolved fine via Google DoH). That blocked account creation entirely.
+
+    Monkeypatch socket.getaddrinfo: try the real resolver first; only on a
+    gaierror fall back to ``doh_resolve`` (injectable for tests) and retry with
+    the numeric IP. Results are cached for the process lifetime.
+    """
+    import socket
+
+    _real_getaddrinfo = socket.getaddrinfo
+    _cache: dict[str, str] = {}
+
+    def _resolve(host: str) -> str | None:
+        if host not in _cache:
+            ip = doh_resolve(host)
+            if ip:
+                _cache[host] = ip
+        return _cache.get(host)
+
+    def _patched(host, port, *args, **kwargs):
+        try:
+            return _real_getaddrinfo(host, port, *args, **kwargs)
+        except socket.gaierror:
+            ip = _resolve(host) if isinstance(host, str) else None
+            if not ip:
+                raise
+            # Re-resolve the now-known IP (numeric host never hits DNS).
+            return _real_getaddrinfo(ip, port, *args, **kwargs)
+
+    socket.getaddrinfo = _patched
+
+
 def _bootstrap() -> None:
     """Apply the worker's process side-effects. Call once from main().
 
@@ -66,6 +129,7 @@ def _bootstrap() -> None:
     os.chdir(DAISY_ROOT)
     sys.path.insert(0, str(DAISY_ROOT))
     sys.stdout = sys.stderr
+    _install_doh_fallback()
 
 
 def _emit(obj: dict) -> None:

@@ -131,3 +131,77 @@ async def test_scope_customers_filters_by_bucket(patched_customers):
 
 async def test_scope_customers_both_none_is_empty(patched_customers):
     assert await _scope_customers(None, None) == []
+
+
+# ── detect_customer_via_cdp write decisions (mock login + DB) ──────────────────
+async def test_cdp_detect_promotes_only_proven_and_records_partial(monkeypatch):
+    """The CDP detect path must: promote a proven full refund -> refunded;
+    record a partial refund's amount but keep it `unconfirmed` (not dropped,
+    not promoted); leave not_refunded untouched. Mirrors the legacy gate.
+    """
+    from backend import relogin
+
+    ORDERS = [
+        {"id": 1, "order_uuid": "u-full", "refund_status": "unconfirmed",
+         "receipt_url": "https://x/orders/u-full", "price": 100.0},
+        {"id": 2, "order_uuid": "u-partial", "refund_status": "unconfirmed",
+         "receipt_url": "https://x/orders/u-partial", "price": 80.0},
+        {"id": 3, "order_uuid": "u-none", "refund_status": "not_refunded",
+         "receipt_url": "https://x/orders/u-none", "price": 60.0},
+    ]
+    by_uuid = {
+        "u-full": dict(status="refunded", total=100.0, refund=100.0),
+        "u-partial": dict(status="partial", total=80.0, refund=30.0),
+        "u-none": dict(status="not_refunded", total=60.0, refund=None),
+    }
+    writes: list[tuple] = []
+
+    async def fake_get_customer(_cid):
+        return {"id": 44, "email": "x@y.z", "number_token": "tok",
+                "api_url": "", "mirror_hosts": "[]", "password": "pw"}
+
+    async def fake_list_orders(_cid):
+        return list(ORDERS)
+
+    async def fake_get_setting(key):
+        return {} if key in ("refund_signal", "daisy") else {}
+
+    async def fake_resolve_pw(_c):
+        return "pw"
+
+    async def fake_update(order_id, status, total, amount):
+        writes.append((order_id, status, total, amount))
+
+    # phone_login_via_cdp runs the after_login callback and returns its rows.
+    def fake_login(email, *, poll_otp, after_login=None, **kw):
+        rows = []
+        for o in ORDERS:
+            sig = by_uuid[o["order_uuid"]]
+            rows.append({"id": o["id"], "uuid": o["order_uuid"],
+                         "status": sig["status"], "total": sig["total"],
+                         "refund": sig["refund"], "card_block": False,
+                         "credits": False, "readable": True})
+        return {"outcome": "logged_in", "storage_state": None,
+                "after_login": rows}
+
+    class _FakeBridge:
+        def __init__(self, *a, **k): ...
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+
+    monkeypatch.setattr(relogin.db, "get_customer", fake_get_customer)
+    monkeypatch.setattr(relogin.db, "list_orders", fake_list_orders)
+    monkeypatch.setattr(relogin.db, "get_setting", fake_get_setting)
+    monkeypatch.setattr(relogin.db, "update_order_refund", fake_update)
+    monkeypatch.setattr(relogin, "_resolve_password", fake_resolve_pw)
+    monkeypatch.setattr(relogin, "DaisyBridge", _FakeBridge)
+    monkeypatch.setattr(
+        "backend.browser.cdp_login.phone_login_via_cdp", fake_login)
+
+    res = await relogin.detect_customer_via_cdp(44, headless=True)
+
+    assert res["promoted"] == 1  # only the full refund
+    w = {row[0]: row for row in writes}
+    assert w[1] == (1, "refunded", 100.0, 100.0)        # full -> refunded
+    assert w[2] == (2, "unconfirmed", 80.0, 30.0)       # partial -> recorded amt
+    assert 3 not in w                                   # not_refunded untouched

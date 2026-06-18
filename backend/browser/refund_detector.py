@@ -29,6 +29,28 @@ from backend.models import RefundResult, RefundStatus
 _AMOUNT = r"(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2}"
 _MONEY_VALUE_RE = re.compile(rf"^[-+]?\s*\$\s*-?({_AMOUNT})$")
 
+# Top-of-receipt refund banner, e.g. "We've issued $201.59 refund + free Express
+# delivery upgrade. Refund will process to your original payment method within
+# 5-7 business days." This is valid refund proof on its own (the charge comes
+# back by the original authorization dropping off — a breakdown `Refund -$X`
+# line may never appear). The apostrophe is often a curly ' on the live page, so
+# allow any single char between We and ve. Verified live 2026-06-18.
+_ISSUED_BANNER_RE = re.compile(
+    rf"we.?ve\s+issued\s+\$\s*({_AMOUNT})\s+refund", re.IGNORECASE)
+# A card/Payment block on the receipt ("Payment  Visa…0000  $X" + "Change payment
+# method"). Its presence WITH no refund proof = risk of a missing refund.
+_CARD_BLOCK_RE = re.compile(
+    r"change payment method|\bpayment\b[\s\S]{0,40}\bvisa\b|"
+    r"\bvisa\b[\s\S]{0,20}\d{4}", re.IGNORECASE)
+# Money issued to DoorDash credits rather than the original card — must be
+# converted (chat) within ~3 days. Match DoorDash-credit / credit-balance /
+# "issued $X ... credit" but NOT "credit card" (the negative lookahead excludes
+# "...to your credit card" promo/payment phrasing, which is not a credits refund).
+_CREDITS_RE = re.compile(
+    r"door ?dash credit(?!\s+card)|credit balance|in credits?\b|"
+    r"issued\s+(?:a\s+)?\$[\d,.]+\s+(?:door ?dash\s+)?credit(?!s?\s+card)",
+    re.IGNORECASE)
+
 
 def _to_float(num: str) -> float:
     return float(num.replace(",", ""))
@@ -115,40 +137,55 @@ def detect(page_text: str, cfg: dict) -> RefundResult:
     pending_seen = any(t.casefold() in text_cf for t in pending_texts if t)
     remake_seen = any(t.casefold() in text_cf for t in remake_texts if t)
 
+    # Refinement signals (2026-06-18).
+    banner_m = _ISSUED_BANNER_RE.search(text)
+    issued_banner = _to_float(banner_m.group(1)) if banner_m else None
+    # Banner only counts as proof if it also says the money goes to the original
+    # payment method (credits banners would say "credit" — handled separately).
+    banner_to_card = bool(issued_banner) and "original payment method" in text_cf
+    card_block_seen = bool(_CARD_BLOCK_RE.search(text))
+    credits_seen = bool(_CREDITS_RE.search(text))
+
     totals = _label_amounts(lines, total_label)
     refunds = _label_amounts(lines, refund_label)
 
     total = totals[-1] if totals else None
     refund = abs(refunds[-1]) if refunds else None
 
-    if total is None:
-        return RefundResult(
-            status=RefundStatus.unknown, total_amount=None,
-            refund_amount=refund, cancelled_text_seen=cancelled_seen,
-            remake_seen=remake_seen)
-
-    # A real refund line wins outright.
-    if refund:  # non-zero Refund line — money moved
-        status = (RefundStatus.refunded if refund >= total
-                  else RefundStatus.partial)
+    def _result(status: RefundStatus, **kw) -> RefundResult:
         return RefundResult(
             status=status, total_amount=total, refund_amount=refund,
-            cancelled_text_seen=cancelled_seen, remake_seen=remake_seen)
+            cancelled_text_seen=cancelled_seen, remake_seen=remake_seen,
+            issued_banner_amount=issued_banner, card_block_seen=card_block_seen,
+            credits_seen=credits_seen, **kw)
 
-    # No refund yet — is it self-claimable, or does it need a chat?
+    # A real Refund line wins outright (strongest proof).
+    if refund and total is not None:
+        return _result(RefundStatus.refunded if refund >= total
+                       else RefundStatus.partial)
+
+    # An "We've issued $X refund ... original payment method" banner is valid
+    # proof even when the breakdown Total/Refund didn't parse (banner-only
+    # receipts). Use the banner amount as the refund amount.
+    if banner_to_card:
+        refund = issued_banner
+        return _result(RefundStatus.refunded)
+
+    if total is None:
+        # No Total parsed AND no banner proof. If a card block is present this is
+        # a live charge with no refund proof -> pursue (not silently unknown).
+        if card_block_seen:
+            return _result(RefundStatus.not_refunded)
+        return _result(RefundStatus.unknown)
+
+    # Total known, no refund line, no card-to-original banner.
+    # Credits: money issued but to credits, not card -> needs conversion (chat).
+    if credits_seen and not pending_seen:
+        return _result(RefundStatus.not_refunded)  # routes to chat (convert)
     if pending_seen:
-        return RefundResult(
-            status=RefundStatus.pending_claim, total_amount=total,
-            refund_amount=refund, cancelled_text_seen=cancelled_seen,
-            remake_seen=remake_seen)
-    # A remade order with no refund line — flagged so the chat calls it out;
-    # routed to chat just like not_refunded.
+        return _result(RefundStatus.pending_claim)
     if remake_seen:
-        return RefundResult(
-            status=RefundStatus.remake, total_amount=total,
-            refund_amount=refund, cancelled_text_seen=cancelled_seen,
-            remake_seen=True)
-    return RefundResult(
-        status=RefundStatus.not_refunded, total_amount=total,
-        refund_amount=refund, cancelled_text_seen=cancelled_seen,
-        remake_seen=remake_seen)
+        return _result(RefundStatus.remake)
+    # Cancelled order, no refund line: a card block present = clear risk of a
+    # missing refund; absence of a card block + no banner is still not proven.
+    return _result(RefundStatus.not_refunded)

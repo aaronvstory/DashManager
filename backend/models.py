@@ -144,6 +144,13 @@ class RefundResult(BaseModel):
     refund_amount: float | None = None
     cancelled_text_seen: bool = False
     remake_seen: bool = False  # receipt mentions a remake/redelivery
+    # Refinements (2026-06-18, user-taught): a top-of-receipt "We've issued $X
+    # refund ... original payment method" banner is valid refund proof even with
+    # no breakdown Refund line; a card/Payment block WITHOUT refund proof is a
+    # risk of a MISSING refund (pursue); "credits" means convert-to-card.
+    issued_banner_amount: float | None = None  # amount in the issued banner
+    card_block_seen: bool = False              # a Payment/card block is shown
+    credits_seen: bool = False                 # "credit(s)" appears on the page
 
 
 class IdentityProfile(BaseModel):

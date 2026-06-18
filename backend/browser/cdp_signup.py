@@ -478,6 +478,17 @@ HOME_ADDR_SELECTORS = (
     'input[aria-controls*="AddressSearchAutocomplete" i]',
     'input[role="combobox"]')
 
+# The autocomplete dropdown options under the address combobox. DoorDash renders
+# these as role=option in a listbox the combobox's aria-controls points at. We
+# CLICK the first option rather than blind-Enter — pressing Enter before the
+# dropdown registers a highlighted suggestion dismisses the modal with NO address
+# saved (verified live 2026-06-18: typed, then the modal "refreshed" empty).
+HOME_ADDR_SUGGESTION_SELECTORS = (
+    '[role="option"]',
+    '[id*="AddressSearchAutocomplete" i] [role="option"]',
+    'li[role="option"]',
+    'ul[role="listbox"] li')
+
 
 def _field_present(sb: Any, selectors: tuple[str, ...]) -> bool:
     """True if any of the selectors matches an element on the page right now."""
@@ -510,11 +521,37 @@ def _fill_home_address(sb: Any, full_address: str) -> bool:
                 sb.cdp.click(sel)            # focus the field (DOM click)
                 time.sleep(0.3)
                 sb.cdp.press_keys(sel, full_address)  # focus-independent type
-                time.sleep(2.0)              # let autocomplete populate
-                if _field_value(sb, sel).strip():
-                    sb.cdp.press_keys(sel, "\n")   # accept first suggestion
-                    time.sleep(2.0)
-                    return True
+                # WAIT for the autocomplete dropdown to actually populate before
+                # committing. Pressing Enter too early (before a suggestion is
+                # highlighted) dismisses the modal with NO address saved — the
+                # "typed then modal refreshed empty" bug (live 2026-06-18). Poll
+                # up to ~6s for a suggestion option to render.
+                if not _field_value(sb, sel).strip():
+                    time.sleep(0.6)
+                    continue
+                got_suggestion = False
+                for _ in range(12):
+                    if _field_present(sb, HOME_ADDR_SUGGESTION_SELECTORS):
+                        got_suggestion = True
+                        break
+                    time.sleep(0.5)
+                time.sleep(0.4)  # let the first option settle as highlighted
+                # Commit: Enter accepts the highlighted first suggestion.
+                sb.cdp.press_keys(sel, "\n")
+                time.sleep(2.0)
+                # If Enter didn't take (field/modal still asking), click the
+                # first suggestion explicitly as a fallback.
+                if got_suggestion and _field_present(sb, HOME_ADDR_SELECTORS) \
+                        and _field_present(sb, HOME_ADDR_SUGGESTION_SELECTORS):
+                    for s in HOME_ADDR_SUGGESTION_SELECTORS:
+                        try:
+                            if sb.cdp.find_element(s):
+                                sb.cdp.click(s)
+                                time.sleep(2.0)
+                                break
+                        except Exception:
+                            continue
+                return True
             except Exception:
                 pass
             time.sleep(0.6)

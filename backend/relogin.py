@@ -246,6 +246,9 @@ async def phone_login_customer_cdp(customer_id: int,
     email = customer.get("email") or ""
     if not email:
         raise ValueError("customer has no email for OTP login")
+    # Some accounts route to a password screen instead of passwordless OTP;
+    # resolve the saved/default password so the CDP flow can complete those too.
+    password = await _resolve_password(customer)
 
     daisy_cfg = await db.get_setting("daisy")
     loop = asyncio.get_running_loop()
@@ -265,7 +268,7 @@ async def phone_login_customer_cdp(customer_id: int,
             shot_dir = str(config.SCREENSHOTS_DIR / "login" / f"cust{customer_id}")
         result = await asyncio.to_thread(
             phone_login_via_cdp, email, poll_otp=_poll_otp_sync,
-            proxy=None, headless=headless, os_input=True,
+            password=password, proxy=None, headless=headless, os_input=True,
             set_address=set_address, instruction=instruction,
             emit=_emit, screenshot_dir=shot_dir)
 
@@ -286,6 +289,109 @@ async def phone_login_customer_cdp(customer_id: int,
     _emit("relogin_failed", {"customer_id": customer_id, "outcome": outcome,
                              "mode": "cdp_phone"})
     raise RuntimeError(f"cdp phone login failed (outcome={outcome})")
+
+
+async def detect_customer_via_cdp(customer_id: int,
+                                  headless: bool = False) -> dict[str, Any]:
+    """Read a customer's pending receipts in a CDP session (PAST Cloudflare) and
+    promote unconfirmed/unchecked/not_refunded orders to ``refunded`` on proof.
+
+    Plain-Playwright detect (RunManager) re-trips the Cloudflare gate on
+    /orders/<uuid>, so it never reads these receipts and leaves everything
+    ``unconfirmed`` forever. This logs in via the CDP flow that clears CF, then
+    reopens each pending receipt IN that session and runs the pure ``detect()``.
+    Only a proven refund (Refund -$X >= Total, or a "We've issued $X refund …
+    original payment method" banner) promotes to ``refunded`` — the zero-
+    tolerance gate is preserved. Returns a summary dict.
+    """
+    import asyncio
+
+    from backend import config, db
+    from backend.browser.cdp_login import phone_login_via_cdp, read_receipt_via_cdp
+    from backend.browser.refund_detector import detect
+
+    customer = await db.get_customer(customer_id)
+    if customer is None:
+        raise ValueError("customer not found")
+    token, api_url, hosts = _token_fields(customer)
+    if not token:
+        raise ValueError("customer has no saved number token for OTP login")
+    email = customer.get("email") or ""
+    password = await _resolve_password(customer)
+    cfg = await db.get_setting("refund_signal")
+    orders = await db.list_orders(customer_id)
+    pending = [o for o in orders
+               if o.get("refund_status") in ("unconfirmed", "unchecked",
+                                             "not_refunded")
+               and "/orders/" in (o.get("receipt_url") or "")]
+
+    daisy_cfg = await db.get_setting("daisy")
+    loop = asyncio.get_running_loop()
+    _emit("cdp_detect_started",
+          {"customer_id": customer_id, "pending": len(pending)})
+
+    def _after_login(sb) -> list[dict[str, Any]]:
+        # Runs in the CDP thread, in-session (past CF). Reads each receipt and
+        # classifies; returns rows the async side writes to the DB.
+        rows: list[dict[str, Any]] = []
+        for o in pending:
+            text = read_receipt_via_cdp(sb, o["receipt_url"], emit=_emit)
+            res = detect(text, cfg)
+            rows.append({"id": o["id"], "uuid": o["order_uuid"],
+                         "status": str(res.status),
+                         "total": res.total_amount,
+                         "refund": res.refund_amount or res.issued_banner_amount,
+                         "card_block": res.card_block_seen,
+                         "credits": res.credits_seen,
+                         "readable": bool(
+                             text and "just a moment" not in text.lower()
+                             and "verify you are human" not in text.lower())})
+        return rows
+
+    async with DaisyBridge(root=daisy_cfg.get("root")) as daisy:
+        def _poll_otp_sync() -> str:
+            fut = asyncio.run_coroutine_threadsafe(
+                daisy.fetch_otp(token, api_url, hosts), loop)
+            try:
+                return (fut.result(timeout=60.0).get("code") or "")
+            except Exception:
+                return ""
+
+        shot_dir = None
+        if hasattr(config, "SCREENSHOTS_DIR"):
+            shot_dir = str(config.SCREENSHOTS_DIR / "login" / f"cust{customer_id}")
+        result = await asyncio.to_thread(
+            phone_login_via_cdp, email, poll_otp=_poll_otp_sync,
+            password=password, proxy=None, headless=headless, os_input=True,
+            emit=_emit, screenshot_dir=shot_dir, after_login=_after_login)
+
+    if result.get("outcome") == "logged_in" and result.get("storage_state"):
+        from backend.browser.driver import write_storage_state_dict
+        path = write_storage_state_dict(customer_id, result["storage_state"])
+        fields = {"session_status": "active"}
+        if path:
+            fields["storage_state_path"] = path
+        await db.update_customer(customer_id, **fields)
+
+    rows = result.get("after_login") or []
+    promoted = 0
+    for r in rows:
+        if r["status"] == "refunded" and r.get("refund"):
+            # Promote only a proven full refund (code gate lives in detect()).
+            await db.update_order_refund(
+                r["id"], "refunded", r.get("total") or r["refund"], r["refund"])
+            promoted += 1
+        elif r["status"] == "partial" and r.get("refund"):
+            # A partial refund is real money but < Total: record the amount so
+            # the audit reflects it, but keep it `unconfirmed` (needs a human /
+            # a follow-up chat). Mirrors the legacy verify path (don't drop it).
+            await db.update_order_refund(
+                r["id"], "unconfirmed", r.get("total"), r["refund"])
+    _emit("cdp_detect_done",
+          {"customer_id": customer_id, "promoted": promoted,
+           "outcome": result.get("outcome")})
+    return {"customer_id": customer_id, "outcome": result.get("outcome"),
+            "promoted": promoted, "rows": rows}
 
 
 async def is_logged_in(page: Any) -> bool:
