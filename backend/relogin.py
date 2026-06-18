@@ -323,7 +323,7 @@ async def detect_customer_via_cdp(customer_id: int,
     pending = [o for o in orders
                if o.get("refund_status") in ("unconfirmed", "unchecked",
                                              "not_refunded")
-               and (o.get("receipt_url") or "").find("/orders/") >= 0]
+               and "/orders/" in (o.get("receipt_url") or "")]
 
     daisy_cfg = await db.get_setting("daisy")
     loop = asyncio.get_running_loop()
@@ -343,8 +343,9 @@ async def detect_customer_via_cdp(customer_id: int,
                          "refund": res.refund_amount or res.issued_banner_amount,
                          "card_block": res.card_block_seen,
                          "credits": res.credits_seen,
-                         "readable": bool(text and "just a moment"
-                                          not in text.lower())})
+                         "readable": bool(
+                             text and "just a moment" not in text.lower()
+                             and "verify you are human" not in text.lower())})
         return rows
 
     async with DaisyBridge(root=daisy_cfg.get("root")) as daisy:
@@ -375,14 +376,17 @@ async def detect_customer_via_cdp(customer_id: int,
     rows = result.get("after_login") or []
     promoted = 0
     for r in rows:
-        if r["status"] in ("refunded", "partial") and r.get("refund"):
-            # Promote only a proven refund. partial -> stays unconfirmed (needs
-            # a human), refunded -> refunded. The code gate lives in detect().
-            if r["status"] == "refunded":
-                await db.update_order_refund(
-                    r["id"], "refunded", r.get("total") or r["refund"],
-                    r["refund"])
-                promoted += 1
+        if r["status"] == "refunded" and r.get("refund"):
+            # Promote only a proven full refund (code gate lives in detect()).
+            await db.update_order_refund(
+                r["id"], "refunded", r.get("total") or r["refund"], r["refund"])
+            promoted += 1
+        elif r["status"] == "partial" and r.get("refund"):
+            # A partial refund is real money but < Total: record the amount so
+            # the audit reflects it, but keep it `unconfirmed` (needs a human /
+            # a follow-up chat). Mirrors the legacy verify path (don't drop it).
+            await db.update_order_refund(
+                r["id"], "unconfirmed", r.get("total"), r["refund"])
     _emit("cdp_detect_done",
           {"customer_id": customer_id, "promoted": promoted,
            "outcome": result.get("outcome")})

@@ -304,7 +304,7 @@ async def _cdp_detect(bucket, ids, headless):
         os_ = await db.list_orders(c["id"])
         if any(o.get("refund_status") in ("unconfirmed", "unchecked",
                                           "not_refunded")
-               and (o.get("receipt_url") or "").find("/orders/") >= 0
+               and "/orders/" in (o.get("receipt_url") or "")
                for o in os_):
             pending_cids.append(c)
     if not pending_cids:

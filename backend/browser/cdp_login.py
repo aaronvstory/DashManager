@@ -113,7 +113,7 @@ def _submit_password(sb: Any, password: str, emit_e) -> None:
             try:
                 sb.cdp.evaluate(
                     "document.querySelector('input[type=\"password\"]')"
-                    ".form.requestSubmit()")
+                    "?.form?.requestSubmit()")
             except Exception:
                 pass
         emit_e("login_password_submitted", {})
@@ -621,10 +621,13 @@ def read_receipt_via_cdp(sb: Any, receipt_url: str, *,
             body = sb.cdp.get_text("body") or ""
         except Exception:
             return ""
-    # If the nav bounced to the store menu (slow receipt load), retry once.
+    # If the nav bounced to the store menu (slow receipt load), retry once. The
+    # retry navigation can itself re-trigger Cloudflare, so re-clear before read.
     if "/store/" in (_cdp_url(sb) or "") or "Menu & Prices" in body:
         sb.cdp.open(receipt_url)
         time.sleep(settle_s + 2)
+        clear_captcha_ladder(sb, emit=emit, gui_captcha=True)
+        time.sleep(1.5)
         try:
             body = sb.cdp.get_text("body") or ""
         except Exception:
