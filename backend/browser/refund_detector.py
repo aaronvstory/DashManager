@@ -43,9 +43,12 @@ _CARD_BLOCK_RE = re.compile(
     r"change payment method|\bpayment\b[\s\S]{0,40}\bvisa\b|"
     r"\bvisa\b[\s\S]{0,20}\d{4}", re.IGNORECASE)
 # Money issued to DoorDash credits rather than the original card — must be
-# converted (chat) within ~3 days. "credits"/"credit balance"/"DoorDash credit".
+# converted (chat) within ~3 days. Match DoorDash-credit / credit-balance /
+# "issued $X ... credit" but NOT "credit card" (the negative lookahead excludes
+# "...to your credit card" promo/payment phrasing, which is not a credits refund).
 _CREDITS_RE = re.compile(
-    r"door ?dash credit|credit balance|issued .{0,20}credit|in credits?\b",
+    r"door ?dash credit(?!\s+card)|credit balance|in credits?\b|"
+    r"issued\s+(?:a\s+)?\$[\d,.]+\s+(?:door ?dash\s+)?credit(?!s?\s+card)",
     re.IGNORECASE)
 
 

@@ -294,6 +294,33 @@ def test_banner_without_original_payment_method_is_not_proof():
     assert r.status != RefundStatus.refunded
 
 
+def test_two_refund_lines_sum_to_full_refund():
+    # A partial-then-full refund renders TWO Refund rows; detect() uses the last
+    # (largest). Both >= Total individually here -> refunded, never stuck partial.
+    txt = ("Subtotal\n$50.95\nTotal\n$112.34\n"
+           "Refund\n-$57.95\nRefund\n-$112.34")
+    r = detect(txt, CFG)
+    assert r.status == RefundStatus.refunded
+    assert r.refund_amount == pytest.approx(112.34)
+
+
+def test_credit_card_phrase_is_not_credits():
+    # "issued ... to your original credit card" / promo "credit card" must NOT
+    # trip the credits signal (that's a card refund / marketing, not credits).
+    txt = ("We've issued $112.34 refund to your original credit card\n"
+           "Subtotal\n$50.95\nTotal\n$112.34")
+    r = detect(txt, CFG_FULL)
+    assert r.credits_seen is False
+
+
+def test_real_credits_still_detected():
+    txt = ("We've issued a $50.00 DoorDash credit to your account\n"
+           "Total\n$50.00")
+    r = detect(txt, CFG_FULL)
+    assert r.credits_seen is True
+    assert r.status == RefundStatus.not_refunded
+
+
 def test_remake_pending_claim_still_claimable():
     # A remade order that ALSO offers a self-claim screen -> pending_claim
     # (self-claim beats chatting); remake_seen still recorded.

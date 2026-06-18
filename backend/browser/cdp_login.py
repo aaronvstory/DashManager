@@ -569,18 +569,23 @@ def scrape_orders_via_cdp(sb: Any, *,
 # text the pure detect() parses correctly. Verified live 2026-06-18.
 _RECEIPT_BREAKDOWN_JS = r"""
 (() => {
+  // Dedup non-Refund labels (a "Total savings" footer can repeat "Total"), but
+  // emit EVERY "Refund" row — a partial-then-full refund renders two Refund
+  // lines and detect() needs the last/largest, so we must not drop the second.
   const labels = ['Subtotal','Delivery Fee','Service Fee','Estimated Tax',
-                  'Dasher Tip','Total','Refund'];
+                  'Dasher Tip','Total'];
+  const REFUND = 'Refund';
   const out = [];
   const seen = new Set();
   [...document.querySelectorAll('*')].forEach(e => {
     if (e.children.length !== 0) return;
     const t = (e.textContent || '').trim();
-    if (!labels.includes(t) || seen.has(t)) return;
+    const isRefund = (t === REFUND);
+    if (!isRefund && (!labels.includes(t) || seen.has(t))) return;
     const row = (e.parentElement && e.parentElement.parentElement)
               ? e.parentElement.parentElement.textContent : '';
     const m = row.match(/-?\$[0-9,]+\.[0-9]{2}/g);
-    if (m) { out.push(t); out.push(m[m.length - 1]); seen.add(t); }
+    if (m) { out.push(t); out.push(m[m.length - 1]); if (!isRefund) seen.add(t); }
   });
   return out.join('\n');
 })()
